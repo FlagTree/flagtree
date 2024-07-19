@@ -636,7 +636,6 @@ setup(
     packages=packages,
     package_dir=package_dir,
     entry_points=get_entry_points(),
-    install_requires=get_install_requires(),
     package_data=package_data,
     include_package_data=True,
     ext_modules=ext_modules,
