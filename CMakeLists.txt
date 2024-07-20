@@ -87,6 +87,10 @@ if(NOT WIN32)
   find_library(TERMINFO_LIBRARY tinfo)
 endif()
 
+if(TRITON_BUILD_UT)
+  include(AddTritonUnitTest)
+endif()
+
 # Compiler flags
 set(BACKEND_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${FLAGTREE_BACKEND}/include)
 if(FLAGTREE_BACKEND AND EXISTS "${BACKEND_INCLUDE_DIR}")
