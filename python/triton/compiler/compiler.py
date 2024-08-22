@@ -126,8 +126,9 @@ class ASTSource:
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, context):
-        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns)
+    def make_ir(self, options, codegen_fns, module_map, context):
+        return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
 
     def parse_options(self):
         return dict()
@@ -149,7 +150,7 @@ class IRSource:
     def hash(self):
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
-    def make_ir(self, options, codegen_fns, context):
+    def make_ir(self, options, codegen_fns, module_map, context):
         module = ir.parse_mlir_module(self.path, context)
         module.context = context
         return module
@@ -299,8 +300,9 @@ def compile(src, target=None, options=None):
     ir.load_dialects(context)
     backend.load_dialects(context)
     codegen_fns = backend.get_codegen_implementation()
+    module_map = backend.get_module_map()
     try:
-        module = src.make_ir(options, codegen_fns, context)
+        module = src.make_ir(options, codegen_fns, module_map, context)
     except Exception as e:
         filter_traceback(e)
         raise
