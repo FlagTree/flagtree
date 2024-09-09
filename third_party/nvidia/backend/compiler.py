@@ -187,6 +187,7 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_expression_restructing(pm)
         passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
+        passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
         return mod
 
