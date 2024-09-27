@@ -444,6 +444,10 @@ class CudaDriver(GPUDriver):
         warp_size = 32
         return GPUTarget("cuda", capability, warp_size)
 
+    def get_device_interface(self):
+        import torch
+        return torch.cuda
+
     @staticmethod
     def is_active():
         import torch
