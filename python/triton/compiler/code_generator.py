@@ -1270,7 +1270,7 @@ def kernel_suffix(signature, specialization):
         suffix += str(i)
         if i in specialization.equal_to_1:
             suffix += 'c'
-        if i in specialization.divisible_by_16:
+        if i in specialization.divisibility_16:
             suffix += 'd'
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
@@ -1293,6 +1293,8 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     from triton.runtime.driver import flagtree_backend_specialization
     new_attrs = flagtree_backend_specialization("generate_new_attrs_in_ast_to_ttir", attrs) or new_attrs
 
+    new_attrs = attrs.filter_out_constants()
+    fn_attrs = new_attrs.get_fn_attrs()
     all_constants = constants.copy()
     all_constants.update(new_constants)
     arg_types = [str_to_ty(v) for k, v in specialization.signature.items() if k not in specialization.constants]
@@ -1300,7 +1302,7 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
 
     prototype = language.function_type([], arg_types)
     generator = CodeGenerator(context, prototype, gscope=gscope, constants=all_constants, function_name=function_name,
-                              jit_fn=fn, attributes=new_attrs, is_kernel=True, file_name=file_name,
+                              jit_fn=fn, attributes=fn_attrs, is_kernel=True, file_name=file_name,
                               begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())
 
