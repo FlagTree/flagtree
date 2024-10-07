@@ -6,9 +6,9 @@ import time
 import inspect
 from typing import Dict
 
-from ..testing import do_bench, do_bench_cudagraph
 from .jit import KernelInterface
 from .errors import OutOfResources
+from .driver import driver
 
 
 class Autotuner(KernelInterface):
@@ -24,9 +24,10 @@ class Autotuner(KernelInterface):
         pre_hook=None,
         post_hook=None,
         prune_configs_by: Dict = None,
-        warmup=25,
-        rep=100,
+        warmup=None,
+        rep=None,
         use_cuda_graph=False,
+        do_bench=None,
     ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
@@ -273,7 +274,7 @@ class Config:
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
-             warmup=25, rep=100, use_cuda_graph=False):
+             warmup=None, rep=None, use_cuda_graph=False, do_bench=None):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -321,10 +322,12 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
         'args': a list of arguments passed to the kernel.
         'exception': the exception raised by the kernel in case of a compilation or runtime error.
     :type post_hook: lambda args, exception
-    :param warmup: Warmup time (in ms) to pass to benchmarking, defaults to 25.
+    :param warmup: warmup time (in ms) to pass to benchmarking (deprecated).
     :type warmup: int
-    :param rep: Repetition time (in ms) to pass to benchmarking, defaults to 100.
+    :param rep: repetition time (in ms) to pass to benchmarking (deprecated).
     :type rep: int
+    :param do_bench: a benchmark function to measure the time of each run.
+    :type do_bench: lambda fn, quantiles
     """
 
     def decorator(fn):
