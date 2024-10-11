@@ -281,6 +281,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRSCFToControlFlow
     MLIRIndexToLLVM
     MLIRGPUToROCDLTransforms
+    MLIRUBToLLVM
 
     # LLVM
     LLVMPasses
