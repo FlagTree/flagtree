@@ -26,6 +26,9 @@ third_party/xpu/backend/xpu3
 # Proton
 python/triton/profiler
 
+# Instrumentation
+python/triton/instrumentation
+
 # Python caches
 __pycache__/
 *.py[cod]
