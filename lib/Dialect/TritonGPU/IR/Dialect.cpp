@@ -723,10 +723,14 @@ SmallVector<unsigned> SliceEncodingAttr::getCTAsPerCGA() const {
 SmallVector<unsigned> SliceEncodingAttr::getWarpsPerCTA() const {
   auto parent = getParent();
   auto parentWarpsPerCTA = ::getWarpsPerCTA(parent);
+  assert(parentWarpsPerCTA.size() == 2 ||
+         parentWarpsPerCTA[getDim()] == 1 &&
+             "getWarpsPerCTA only implemented for 2D slice layout or the "
+             "slice dim must have 1 warp in the parent layout");
   SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
   warpsPerCTA.erase(warpsPerCTA.begin() + getDim());
-  int32_t nextDim = getDim() < warpsPerCTA.size() ? getDim() : getDim() - 1;
-  warpsPerCTA[nextDim] *= parentWarpsPerCTA[getDim()];
+  for (unsigned i = 0; i < warpsPerCTA.size(); i++)
+    warpsPerCTA[i] *= parentWarpsPerCTA[getDim()];
   return warpsPerCTA;
 }
 SmallVector<unsigned> SliceEncodingAttr::getWarpOrder() const {
@@ -735,10 +739,12 @@ SmallVector<unsigned> SliceEncodingAttr::getWarpOrder() const {
 SmallVector<unsigned> SliceEncodingAttr::getThreadsPerWarp() const {
   auto parent = getParent();
   auto parentThreadsPerWarp = ::getThreadsPerWarp(parent);
+  assert(parentThreadsPerWarp.size() == 2 &&
+         "getThreadsPerWarp only implemented for 2D slice layout");
   SmallVector<unsigned> threadsPerWarp = parentThreadsPerWarp;
   threadsPerWarp.erase(threadsPerWarp.begin() + getDim());
-  int32_t nextDim = getDim() < threadsPerWarp.size() ? getDim() : getDim() - 1;
-  threadsPerWarp[nextDim] *= parentThreadsPerWarp[getDim()];
+  for (unsigned i = 0; i < threadsPerWarp.size(); i++)
+    threadsPerWarp[i] *= parentThreadsPerWarp[getDim()];
   return threadsPerWarp;
 }
 SmallVector<unsigned> SliceEncodingAttr::getThreadOrder() const {
