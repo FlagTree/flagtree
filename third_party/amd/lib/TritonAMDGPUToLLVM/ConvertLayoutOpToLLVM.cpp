@@ -168,5 +168,7 @@ void populateConvertLayoutOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<ConvertLayoutOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
+  mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                                      patterns, benefit);
 }
 } // namespace mlir::triton::AMD
