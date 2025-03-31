@@ -169,9 +169,6 @@ Value linearize(OpBuilder &b, Location loc, ArrayRef<Value> multiDim,
 // operand and single result.
 bool isPureUnaryInlineAsm(Operation *op);
 
-// read the compute capability from the module attributes
-int getNVIDIAComputeCapability(Operation *module);
-
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
