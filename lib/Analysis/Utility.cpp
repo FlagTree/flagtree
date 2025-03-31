@@ -469,7 +469,6 @@ bool supportMFMA(triton::DotOp op) {
   auto bShape = bTy.getShape();
 
   auto rank = aShape.size();
-  assert(bShape.size() == rank);
   auto M = aShape[rank - 2];
   auto N = bShape[rank - 1];
   auto K = aShape[rank - 1];
@@ -522,11 +521,8 @@ bool supportWMMA(triton::DotOp op) {
   auto aShape = aTy.getShape();
   auto bShape = bTy.getShape();
 
-  auto rank = aShape.size();
-  assert(bShape.size() == rank);
-  assert(aShape[rank - 1] == bShape[rank - 2]);
-  if (!supportWMMAGranularity(aShape[rank - 2], bShape[rank - 1],
-                              aShape[rank - 1]))
+  assert(aShape[1] == bShape[0]);
+  if (!supportWMMAGranularity(aShape[0], bShape[1], aShape[1]))
     return false;
 
   return true;
