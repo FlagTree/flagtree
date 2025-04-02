@@ -244,7 +244,7 @@ class XPUBackend(BaseBackend):
             binfile = os.path.join(tmpdir, "kernel.bin")
             with open(objfile, "wb") as f:
                 f.write(mod)
-            cmd = ["bash", elfconv, objfile, binfile, clang_path]
+            cmd = [elfconv, objfile, binfile, clang_path]
             out = subprocess.run(cmd, check=True, capture_output=True)
             printf_buf_offset_res = re.search(rb"0x[0-9a-fA-F]+", out.stdout)
             if printf_buf_offset_res:
