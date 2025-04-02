@@ -68,7 +68,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerLLVMDIScope();
 
 #ifdef __AMD__
-  // TritonAMDGPUToLLVM passes
+  // TritonAMDGPUToLLVM passes: test
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();
   mlir::triton::registerDecomposeUnsupportedAMDConversions();
