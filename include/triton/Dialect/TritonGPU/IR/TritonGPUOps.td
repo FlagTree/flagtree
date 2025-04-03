@@ -3,14 +3,17 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
-include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
+include "mlir/Interfaces/ControlFlowInterfaces.td" // RegionBranchOpInterface
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"  // SameOperandsAndResultType
+include "mlir/Interfaces/SideEffectInterfaces.td"  // Pure
 include "mlir/Interfaces/ViewLikeInterface.td"
 
 //
@@ -84,16 +87,17 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
 ]> {
   let summary = "copy data from global memory to local memory asynchronously";
 
+  let hasVerifier = 1;
   let description = [{
     This operation copies data from global memory to local memory asynchronously.
     This is analogue to tt.load except the data are copied to local memory pointed
-    by by the memory descriptor instread of a distributed tensor. The rest of the
+    by by the memory descriptor instead of a distributed tensor. The rest of the
     operands are the same as tt.load.
   }];
 
   let arguments = (
     ins TT_PtrTensor:$src,
-    TT_MemDescType:$result,
+    TTG_MemDescType:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -142,11 +146,33 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 
     Explicitly deallocating a buffer is optional; see local_dealloc.
   }];
-  let arguments = (ins Optional<TT_Tensor>:$src);
+  let arguments = (
+    ins
+    Optional<TT_Tensor>:$src,
+    OptionalAttr<I32Attr>:$alignment
+  );
 
+  let builders = [
+    OpBuilder<(ins "Type":$result),
+              [{ build($_builder, $_state, result, Value(), IntegerAttr()); }]>,
+    OpBuilder<(ins "Type":$result, "Value":$src),
+              [{ build($_builder, $_state, result, src, IntegerAttr()); }]>,
+    OpBuilder<(ins "Type":$result, "Value":$src, "int32_t":$alignment),
+              [{ build($_builder, $_state, result, src, $_builder.getI32IntegerAttr(alignment)); }]>
+  ];
+
+  let extraClassDeclaration = [{
+    bool isSharedMemoryAlloc() {
+      return getType().getMemorySpace() &&
+             isa<SharedMemorySpaceAttr>(getType().getMemorySpace());
+    }
+    int32_t getAlignmentOrDefault();
+  }];
   let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 
-  let results = (outs TT_MemDescType:$result);
+  let results = (outs TTG_MemDescType:$result);
+  let hasFolder = 1;
+  let hasVerifier = 1;
 }
 
 // Deallocate shared memory
@@ -163,13 +189,13 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
 
     Because we assume a memdesc is dead at the first point that post-dominates
     its uses, ops that wait for an async operation on a memdesc to complete
-    (such as triton_nvidia_gpu.dot_wait) should also take the memdesc as an
+    (such as ttng.warp_group_dot_wait) should also take the memdesc as an
     operand.
   }];
 
-  let arguments = (ins TT_MemDescType:$src);
+  let arguments = (ins TTG_MemDescType:$src);
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
 
@@ -188,14 +214,39 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
     Then in Python syntax, the subview covers input[1][0:4][4:8].
   }];
   let arguments = (
-    ins TT_MemDescType:$src, Variadic<I32>:$offsets);
+    ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
 
-  let results = (outs TT_MemDescType:$result);
+  let results = (outs TTG_MemDescType:$result);
 
   let hasVerifier = 1;
+}
+
+def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
+                                                  TransposeOpInterface,
+                                                  InferTypeOpWithLayoutEquivalence,
+                                                  SameOperandsAndResultElementType]> {
+  let summary = "transpose the descriptor";
+
+  let description = [{
+    This operation returns a new descriptor
+    representing a transposed view of the buffer.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$order);
+
+  let arguments = (
+    ins TTG_MemDescType:$src,
+    DenseI32ArrayAttr:$order
+  );
+
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasFolder = 1;
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -204,7 +255,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffe
   let description = [{
     Load a tensor from the local memory descriptor into a distributed tensor.
   }];
-  let arguments = (ins TT_MemDescType:$src, Optional<TTG_AsyncToken> :$token);
+  let arguments = (ins TTG_MemDescType:$src, Optional<TTG_AsyncToken> :$token);
 
   let builders = [
       OpBuilder<(ins "Type":$retType, "Value":$src),
@@ -212,7 +263,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffe
       build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
       }]>];
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
 
   let results = (outs TT_Tensor:$result);
@@ -224,12 +275,176 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   let description = [{
     Store a distributed tensor into a buffer in local memory.
   }];
-  let arguments = (ins TT_Tensor:$src, TT_MemDescType:$dst);
+  let arguments = (ins TT_Tensor:$src, TTG_MemDescType:$dst);
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  let hasVerifier = 1;
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{
     $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
   }];
 }
 
-#endif
+def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
+  let summary = "Upcast fp4 (e2m1) to fp";
+
+  let hasVerifier = 1;
+
+  let description = [{
+    Upcast fp4 (e2m1) represented packed as i8s to fp.
+
+    The lower 4 bits of the i8s represent the first fp4 element, and the upper 4 bits
+    the second fp4 element.
+
+    The `axis` attribute specifies the axis along which the fp4 elements are packed.
+  }];
+
+  let builders = [
+      OpBuilder<(ins "TypedValue<RankedTensorType>":$src, "Type":$elemType, "int32_t":$axis)>
+    ];
+
+  let arguments = (ins RankedTensorOf<[I8]>:$src, I32Attr:$axis);
+  let results = (outs TT_FloatTensor:$result);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` type($src) `->` type($result)
+  }];
+}
+
+// Allocate global memory
+def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+  let summary = "allocate a global memory buffer";
+  let description = [{
+    This operation allocates a buffer in global memory that is private to the current program.
+  }];
+  let arguments = (
+    ins
+    I32Attr:$nbytes,
+    I32Attr:$alignment
+  );
+  let results = (outs TT_Ptr:$result);
+
+  let builders = [
+    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
+              [{ build($_builder, $_state, result,
+                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
+  ];
+
+  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
+}
+
+def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
+  RecursiveMemoryEffects, RecursivelySpeculatable, AsyncRegions,
+  DeclareOpInterfaceMethods<RegionBranchOpInterface>
+]> {
+  let summary = "asynchronously execute code on multiple warpgroups";
+  let description = [{
+    The `ttg.warp_specialize` op represents executing different code
+    simultaneously on different warp groups. A warp group is a group of
+    power-of-2 warps, which can be a different number of warps than in the
+    enclosing region.
+
+    The "default" region of the op represents the code executed by the currently
+    executing warp group. This region is allowed to implicitly capture. The op
+    contains a number of "partition" regions that are isolated from above. They
+    must be isolated because these regions represent different layout domains,
+    as the number of warps is different.
+
+    Semantically, execution of each region starts simultaneously for each warp
+    group, and all warp groups are joined at the end of the op.
+
+    Example:
+
+    ```mlir
+    %0 = ttg.warp_specialize(%a, %b)
+    default {
+      %out = some_operation(%a) // implicit capture of `%a`
+      ttg.warp_yield %out : i32
+    }
+    partition0(%arg0: i32, %arg1: i32) num_warps(8) {
+      some_async_dispatch(%arg0, %arg1)
+      ttg.warp_return
+    }
+    partition1(%arg0: i32, %arg1: i32) num_warps(1) {
+      some_async_dispatch(%arg0, %arg1)
+      ttg.warp_return
+    } : (i32, i32) -> i32
+    ```
+  }];
+
+  let arguments = (ins
+    Variadic<AnyType>:$explicitCaptures,
+    DenseI32ArrayAttr:$partitionNumWarps,
+    OptionalAttr<DenseI32ArrayAttr>:$warpGroupStartIds
+  );
+  let results = (outs Variadic<AnyType>:$defaultPassthrough);
+
+  let regions = (region
+    MinSizedRegion<1>:$defaultRegion,
+    SizedRegion<1>:$partitionOpHolder
+  );
+
+  let extraClassDeclaration = [{
+    RegionRange getPartitionRegions();
+
+    // Get the size and alignment of the capture list.
+    std::pair<uint64_t, uint64_t> getCaptureSizeAlign();
+    // Get the total number of extra warps required.
+    unsigned getTotalPartitionWarps();
+  }];
+
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
+  IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
+  Terminator, HasParent<"WarpSpecializeOp">
+]> {
+  let summary = "container op for `ttg.warp_specialize`";
+  let description = [{
+    Because MLIR requires entire operations be isolated from above, this op
+    contains the actual isolated from above regions of `ttg.warp_specialize`.
+  }];
+
+  let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
+}
+
+def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
+  Pure, Terminator, ReturnLike, HasParent<"WarpSpecializeOp">,
+  DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
+]> {
+  let summary = "yield from the default region of `ttg.warp_specialize`";
+  let description = [{
+    The `ttg.warp_yield` operation is the terminator for the "default" region of
+    a `ttg.warp_specialize` operation. The operands are passed transparently as
+    the SSA results of the `ttg.warp_specialize` operation.
+
+    Example:
+
+    ```mlir
+    ttg.warp_yield %a, %b : i32, tensor<32xbf16, #blocked>
+    ```
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$values);
+
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+  let hasVerifier = 1;
+}
+
+def TTG_WarpReturnOp : TTG_Op<"warp_return", [
+  Pure, Terminator, ReturnLike, HasParent<"WarpSpecializePartitionsOp">
+]> {
+  let summary = "implicit terminator from partition regions";
+  let description = [{
+    The `ttg.warp_return` operation is the implicit terminator that ends the
+    partition regions of a `ttg.warp_specialize` op. It has no operands as these
+    regions cannot return anything.
+
+    TODO: Support returning uniform values from partition regions.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
+
+#endif // TRITONGPU_OPS

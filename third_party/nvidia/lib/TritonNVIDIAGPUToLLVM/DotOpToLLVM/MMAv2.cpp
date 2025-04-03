@@ -1,11 +1,15 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getOrderForDotOperand;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
@@ -13,6 +17,7 @@ using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 Value loadC(Value tensor, Value llTensor,
             const LLVMTypeConverter *typeConverter, Location loc,
             ConversionPatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = tensor.getContext();
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
@@ -38,8 +43,9 @@ Value loadC(Value tensor, Value llTensor,
     for (int i = 0; i < fcSize; i += numCPackedElem) {
       Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
       for (int j = 0; j < numCPackedElem; ++j) {
-        pack = insert_element(
-            cPackTy, pack, extract_val(cElemTy, llTensor, i + j), i32_val(j));
+        pack = b.insert_element(cPackTy, pack,
+                                b.extract_val(cElemTy, llTensor, i + j),
+                                b.i32_val(j));
       }
       cPack.push_back(pack);
     }
@@ -56,21 +62,182 @@ Value loadC(Value tensor, Value llTensor,
 
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter, Value value, int batch, int n0, int n1,
-    RankedTensorType type) {
-
+    ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
+    int repK, RankedTensorType type) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
+  auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
   ValueTableV2 vals;
-  for (auto b = 0; b < batch; ++b)
-    for (auto i = 0; i < n0; ++i) {
-      for (auto j = 0; j < n1; j++) {
-        vals[{b, 2 * i, 2 * j}] = elems[offset++];
-        vals[{b, 2 * i, 2 * j + 1}] = elems[offset++];
-        vals[{b, 2 * i + 1, 2 * j}] = elems[offset++];
-        vals[{b, 2 * i + 1, 2 * j + 1}] = elems[offset++];
+  auto bitwidth = eltTy.getIntOrFloatBitWidth();
+  auto numElemsPerVec = 32 / bitwidth;
+  auto vecTy = vec_ty(eltTy, numElemsPerVec);
+
+  auto packVec = [&](std::array<int, 3> dstIdx) {
+    Value vec = b.undef(vecTy);
+    for (auto i = 0; i < numElemsPerVec; ++i) {
+      vec = b.insert_element(vec, b.bitcast(elems[offset + i], eltTy),
+                             b.i32_val(i));
+    }
+    vals[dstIdx] = b.bitcast(vec, i32_ty);
+    offset += numElemsPerVec;
+  };
+
+  auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
+  auto kWidth = dot.getKWidth();
+  auto largeK = bitwidth * kWidth > 32;
+  if (largeK) {
+    // For layouts with a large K dimension, the original register layout needs
+    // to be divided into multiple MMAs, where each MMA has contiguous 32 bits
+    // along the K dimension per thread.
+    // Using kWidth = 8 and bitwidth = 2 as an example,
+    // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
+    // K dimension.
+    llvm::SmallVector<unsigned> si;
+    auto kIters = kWidth / (32 / bitwidth);
+
+    if (dot.getOpIdx() == 0) {
+      // Original register layout:
+      //
+      //   [0, 1, 2, 3, 4, 5, 6, 7], [16, 17, 18, 19, 20, 21, 22, 23, 23]
+      //   [8, 9, 10, 11, 12, 13, 14, 15], [24, 25, 26, 27, 28, 29, 30, 31]
+      //
+      // Each element in the layout is a single bf16.
+      //
+      // To derive four independent MMA operations, a stride of 4 is applied to
+      // the original register layout:
+      //
+      //  1st MMA: [[0, 1], [8, 9], [16, 17], [24, 25]]
+      //  2nd MMA: [[2, 3], [10, 11], [18, 19], [26, 27]]
+      //  3rd MMA: [[4, 5], [12, 13], [20, 21], [28, 29]]
+      //  4th MMA: [[6, 7], [14, 15], [22, 23], [30, 31]]
+      if (kIters <= repK) {
+        for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+          for (size_t tile = 0; tile < 4; ++tile)
+            for (size_t e = 0; e < numElemsPerVec; ++e) {
+              si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+            }
+      } else {
+        // Suppose kWidth=4 and type=fp32, so numElemsPerVec=1.
+        // Each tile of the dot operand layout has a size of 16x32.
+        // However, if the triton tensor size is 16x16, elements along the k
+        // dimension are duplicated. Within each tile, each register
+        // contains 2x8 elements arranged as follows:
+        //
+        //       tile0/0           tile0/1
+        //   |<--kWidth=4-->|   |<--kWidth-->|
+        //   |<-mmaWidth=2->|
+        //   [0,  1,  2,  3]    [0,  1,  2,  3]
+        //   [4,  5,  6,  7]    [4,  5,  6,  7]
+        //
+        // tile0/1 replicates the elements in tile0/0 along the k dimension.
+        // For a tensor size of 32x32, the next tile on the m dimension is as
+        // follows:
+        //
+        //       tile1/0              tile1/1
+        //   |<--kWidth-->|       |<--kWidth-->|
+        //   [8,  9, 10, 11],     [8,  9, 10, 11]
+        //   [12, 13, 14, 15],    [12, 13, 14, 15]
+        //
+        // Within a single tile, we can perform two MMAs, and the
+        // resulting register layout for each MMA is as follows:
+        //
+        //   1st MMA: [0, 4, 1, 5]
+        //   2nd MMA: [2, 6, 3, 7]
+        //   3rd MMA: [8, 12, 9, 13]
+        //   4th MMA: [10, 14, 11, 15]
+        //
+        // Additionally, we should reorder the elements by moving the duplicated
+        // elements to the end.  In the example above, we convert the order from
+        // tile0/0, tile0/1, tile1/0, tile1/1 to tile0/0, tile1/0, tile0/1,
+        // tile1/1, so that only the first two tiles will be used in the
+        // computation.
+        size_t elemsPerTile = 2 * 2 * kWidth;
+        size_t elemsPerMma = 2 * 2 * numElemsPerVec;
+        size_t mmaWidth = kWidth / numElemsPerVec / 2;
+        size_t repMma = elemsPerTile / (mmaWidth * elemsPerMma);
+        for (size_t rep = 0; rep < repMma; ++rep)
+          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
+            for (size_t mmaKWidth = 0; mmaKWidth < mmaWidth; ++mmaKWidth)
+              for (size_t kTile = 0; kTile < 2; ++kTile)
+                for (size_t mTile = 0; mTile < 2; ++mTile)
+                  for (size_t e = 0; e < numElemsPerVec; ++e) {
+                    si.push_back(rep * mmaWidth * elemsPerMma +
+                                 mmaKWidth * 2 * numElemsPerVec +
+                                 tile * elemsPerTile + mTile * kWidth +
+                                 kTile * numElemsPerVec + e);
+                  }
+      }
+    } else {
+      // Original register layout:
+      //
+      //   [0, 1, 2, 3, 4, 5, 6, 7]^T, [8, 9, 10, 11, 12, 13, 14, 15]^T
+      //
+      // A stride of 4 is applied to derive four independent MMA operations:
+      //
+      //  1st MMA: [[0, 1], [8, 9]]
+      //  2nd MMA: [[2, 3], [10, 11]]
+      //  3rd MMA: [[4, 5], [12, 13]]
+      //  4th MMA: [[6, 7], [14, 15]]
+      if (kIters <= repK) {
+        for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+          for (size_t tile = 0; tile < 2; ++tile)
+            for (size_t e = 0; e < numElemsPerVec; ++e) {
+              si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+            }
+      } else {
+        // Suppose kWidth=4 and type=fp32.
+        // Original register layout:
+        //
+        //       tile0/0        tile0/1
+        //   [0, 1, 2, 3]^T, [0, 1, 2, 3]^T
+        //
+        // Similar to the opIdx=0 situation, we should reorder the elements by
+        // moving the duplicated elements to the end.
+        size_t elemsPerTile = 2 * kWidth;
+        size_t elemsPerMma = 2 * numElemsPerVec;
+        size_t mmaWidth = kWidth / numElemsPerVec / 2;
+        size_t repMma = elemsPerTile / (mmaWidth * elemsPerMma);
+        for (size_t rep = 0; rep < repMma; ++rep)
+          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
+            for (size_t mmaKWidth = 0; mmaKWidth < mmaWidth; ++mmaKWidth)
+              for (size_t kTile = 0; kTile < 2; ++kTile)
+                for (size_t e = 0; e < numElemsPerVec; ++e) {
+                  si.push_back(rep * mmaWidth * elemsPerMma +
+                               mmaKWidth * 2 * numElemsPerVec +
+                               tile * elemsPerTile + kTile * numElemsPerVec +
+                               e);
+                }
       }
     }
+
+    auto step = si.size();
+    SmallVector<Value> perm(step);
+    for (auto i = 0; i < elems.size() / step; ++i) {
+      for (auto j = 0; j < step; ++j) {
+        perm[j] = elems[i * step + si[j]];
+      }
+      std::copy(perm.begin(), perm.end(), elems.begin() + i * step);
+    }
+  }
+
+  if (dot.getOpIdx() == 0) {
+    for (auto b = 0; b < batch; ++b)
+      for (auto m = 0; m < repOuter; ++m)
+        for (auto k = 0; k < repK; ++k) {
+          packVec({b, 2 * m, 2 * k});
+          packVec({b, 2 * m + 1, 2 * k});
+          packVec({b, 2 * m, 2 * k + 1});
+          packVec({b, 2 * m + 1, 2 * k + 1});
+        }
+  } else {
+    for (auto b = 0; b < batch; ++b)
+      for (auto n = 0; n < repOuter; ++n)
+        for (auto k = 0; k < repK; ++k) {
+          packVec({b, n, 2 * k});
+          packVec({b, n, 2 * k + 1});
+        }
+  }
   return vals;
 }
 
@@ -81,9 +248,9 @@ enum class TensorCoreType : uint8_t {
   FP32_TF32_TF32_FP32,
   FP16_FP16_FP16_FP16,
   FP32_FP8E5M2_FP8E5M2_FP32,
-  FP32_FP8E5M2_FP8E4M3FNUZ_FP32,
-  FP32_FP8E4M3FNUZ_FP8E5M2_FP32,
-  FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32,
+  FP32_FP8E5M2_FP8E4M3FN_FP32,
+  FP32_FP8E4M3FN_FP8E5M2_FP32,
+  FP32_FP8E4M3FN_FP8E4M3FN_FP32,
   // integer tensor core instr
   INT32_INT1_INT1_INT32, // Not implemented
   INT32_INT4_INT4_INT32, // Not implemented
@@ -112,9 +279,9 @@ Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   case TensorCoreType::FP16_FP16_FP16_FP16:
     return fp16x2Pack2Ty;
   case TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32:
-  case TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32:
-  case TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32:
-  case TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32:
+  case TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32:
+  case TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32:
+  case TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32:
     return fp32x4Ty;
   case TensorCoreType::INT32_INT8_INT8_INT32:
     return i32x4Ty;
@@ -136,18 +303,18 @@ TensorCoreType getMmaType(triton::DotOp op) {
       return TensorCoreType::FP32_FP16_FP16_FP32;
     if (aTy.getElementType().isBF16() && bTy.getElementType().isBF16())
       return TensorCoreType::FP32_BF16_BF16_FP32;
-    if (aTy.getElementType().isFloat8E5M2() &&
-        bTy.getElementType().isFloat8E5M2())
+    if (llvm::isa<Float8E5M2Type>(aTy.getElementType()) &&
+        llvm::isa<Float8E5M2Type>(bTy.getElementType()))
       return TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32;
-    if (aTy.getElementType().isFloat8E5M2() &&
-        bTy.getElementType().isFloat8E4M3FNUZ())
-      return TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32;
-    if (aTy.getElementType().isFloat8E4M3FNUZ() &&
-        bTy.getElementType().isFloat8E5M2())
-      return TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32;
-    if (aTy.getElementType().isFloat8E4M3FNUZ() &&
-        bTy.getElementType().isFloat8E4M3FNUZ())
-      return TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32;
+    if (llvm::isa<Float8E5M2Type>(aTy.getElementType()) &&
+        llvm::isa<Float8E4M3FNType>(bTy.getElementType()))
+      return TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32;
+    if (llvm::isa<Float8E4M3FNType>(aTy.getElementType()) &&
+        llvm::isa<Float8E5M2Type>(bTy.getElementType()))
+      return TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32;
+    if (llvm::isa<Float8E4M3FNType>(aTy.getElementType()) &&
+        llvm::isa<Float8E4M3FNType>(bTy.getElementType()))
+      return TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32;
     if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
         op.getInputPrecision() == InputPrecision::TF32)
       return TensorCoreType::FP32_TF32_TF32_FP32;
@@ -193,11 +360,11 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
 
     {TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32"},
-    {TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32,
+    {TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e4m3.f32"},
-    {TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32,
+    {TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32"},
-    {TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32,
+    {TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"},
 };
 
@@ -306,6 +473,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value a, Value b, Value c, Value d, Value loadedA,
                          Value loadedB, Value loadedC, DotOp op,
                          DotOpAdaptor adaptor, bool isTuring) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = c.getContext();
   auto aTensorTy = cast<RankedTensorType>(a.getType());
   auto bTensorTy = cast<RankedTensorType>(b.getType());
@@ -317,23 +485,34 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-                  .getMMAv2Rep(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+  int kWidth = dotOpA.getKWidth();
+  auto repA =
+      cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+          .getRepForOperand(aShapePerCTA, bitwidth, kWidth, dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-                  .getMMAv2Rep(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
+  auto repB =
+      cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+          .getRepForOperand(bShapePerCTA, bitwidth, kWidth, dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
   int repM = repA[1], repN = repB[2], repK = repA[2];
   int repBatch = repA[0];
 
-  // shape / shape_per_cta
+  // We can reuse the same iteration order in
+  // getValuesFromDotOperandLayoutStruct as both a and b are K-major
+  assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
+                                                       aShapePerCTA.size(),
+                                                       /*kContig=*/true));
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
+
+  assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
+                                                       bShapePerCTA.size(),
+                                                       /*kContig=*/true));
   auto hb = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, loadedB, repBatch, std::max(repN / 2, 1),
-      repK, bTensorTy);
+      typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
+
   auto fc = unpackLLElements(loc, loadedC, rewriter);
   auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int numCPackedElem = 4 / numMmaRets;
@@ -342,6 +521,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   const auto &mmaInstructions =
       isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
+  if (mmaInstructions.find(mmaType) == mmaInstructions.end()) {
+    return emitError(loc, "Unsupported MMA instruction for the given mma type");
+  }
   auto rank = dTensorTy.getRank();
   auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
   auto batchOffset =
@@ -374,7 +556,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
       fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b] =
-          extract_val(elemTy, mmaOut, i);
+          tb.extract_val(elemTy, mmaOut, i);
     }
   };
 
@@ -394,8 +576,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     for (int j = 0; j < numCPackedElem; ++j) {
       results[i * numCPackedElem + j] =
           numCPackedElem > 1
-              ? bitcast(extract_element(fc[i], i32_val(j)), resElemTy)
-              : bitcast(fc[i], resElemTy);
+              ? tb.bitcast(tb.extract_element(fc[i], tb.i32_val(j)), resElemTy)
+              : tb.bitcast(fc[i], resElemTy);
     }
   }
   Value res = packLLElements(loc, typeConverter, results, rewriter, structTy);

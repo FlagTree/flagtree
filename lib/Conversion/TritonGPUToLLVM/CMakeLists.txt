@@ -1,29 +1,26 @@
-if (FLAGTREE_BACKEND)
-    set(NVGPUIR "")
-else()
-    set(NVGPUIR "NVGPUIR")
-endif()
-
 add_triton_library(TritonGPUToLLVM
-    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     DotOpToLLVM/FMA.cpp
-    TypeConverter.cpp
-    Utility.cpp
-    ElementwiseOpToLLVM.cpp
-    MemoryOpToLLVM.cpp
-    AssertOpToLLVM.cpp
-    ViewOpToLLVM.cpp
-    MakeRangeOpToLLVM.cpp
-    HistogramOpToLLVM.cpp
+    DotOpToLLVM/FMADotUtility.cpp
     AllocateSharedMemory.cpp
+    AllocateWarpGroups.cpp
+    AssertOpToLLVM.cpp
+    ControlFlowOpToLLVM.cpp
+    ConvertLayoutOpToLLVM.cpp
+    DecomposeUnsupportedConversions.cpp
+    ElementwiseOpToLLVM.cpp
+    FuncOpToLLVM.cpp
+    GatherOpToLLVM.cpp
+    GlobalScratchMemoryAllocation.cpp
+    HistogramOpToLLVM.cpp
+    MakeRangeOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
+    PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     ScanOpToLLVM.cpp
-    ConvertLayoutOpToLLVM.cpp
-    ControlFlowOpToLLVM.cpp
-    FuncOpToLLVM.cpp
     SPMDOpToLLVM.cpp
-    DecomposeUnsupportedConversions.cpp
-    PrintOpToLLVM.cpp
+    TypeConverter.cpp
+    Utility.cpp
+    ViewOpToLLVM.cpp
 
     DEPENDS
     TritonGPUConversionPassIncGen
@@ -40,5 +37,4 @@ add_triton_library(TritonGPUToLLVM
     TritonGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
-    ${NVGPUIR}
 )

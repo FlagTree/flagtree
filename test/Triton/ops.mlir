@@ -186,7 +186,7 @@ tt.func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
 // CHECK-LABEL: @print_no_arg
 tt.func @print_no_arg(%arg0: !tt.ptr<f32>) {
 // CHECK: tt.print "test"
-  tt.print "test" { hex = false }
+  tt.print "test" { hex = false, isSigned = array<i32: 0>}
   %0 = tt.load %arg0 : !tt.ptr<f32>
   tt.store %arg0, %0 : !tt.ptr<f32>
   tt.return
@@ -225,8 +225,14 @@ tt.func @inline_asm_scalar(%0: i32) {
 
 // CHECK-LABEL: reshape
 tt.func @reshape(%0: tensor<512xi32>) {
-  // CHECK: tt.reshape %{{.+}} {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
-  %1 = tt.reshape %0 {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} : tensor<512xi32> -> tensor<16x32xi32>
+  %1 = tt.reshape %0 : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} allow_reorder : tensor<512xi32> -> tensor<16x32xi32>
+  %2 = tt.reshape %0 allow_reorder : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} allow_reorder efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  %3 = tt.reshape %0 allow_reorder efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  %4 = tt.reshape %0 efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
   tt.return
 }
 
@@ -238,9 +244,30 @@ tt.func @histogram(%0: tensor<512xi32>) {
 }
 
 // CHECK-LABEL: experimental_descriptor_load
-tt.func @experimental_descriptor_load(%0: !tt.ptr<i8>) {
-  // CHECK: tt.experimental_descriptor_load %{{.+}}[%{{.+}}] : !tt.ptr<i8> -> tensor<128xf32>
+tt.func @experimental_descriptor_load(%0: !tt.tensordesc<tensor<128xf32>>) {
+  // CHECK: tt.experimental_descriptor_load %{{.+}}[%{{.+}}] : !tt.tensordesc<tensor<128xf32>> -> tensor<128xf32>
   %c0_i32 = arith.constant 0 : i32
-  %1 = tt.experimental_descriptor_load %0[%c0_i32] : !tt.ptr<i8> -> tensor<128xf32>
+  %1 = tt.experimental_descriptor_load %0[%c0_i32] : !tt.tensordesc<tensor<128xf32>> -> tensor<128xf32>
+  tt.return
+}
+
+// CHECK-LABEL: @gather_op
+tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x16xi32>) -> tensor<512x16xf32> {
+  // CHECK-NEXT: %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x16xi32>) -> tensor<512x16xf32>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x16xf32>, tensor<512x16xi32>) -> tensor<512x16xf32>
+  tt.return %0 : tensor<512x16xf32>
+}
+
+// CHECK-LABEL: @tma_gather
+tt.func @tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // CHECK-NEXT: %0 = tt.experimental_descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32) -> tensor<32x128xbf16>
+  %0 = tt.experimental_descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32) -> tensor<32x128xbf16>
+  tt.return
+}
+
+// CHECK-LABEL: @tma_scatter
+tt.func @tma_scatter(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32>, %arg2: i32, %arg3: tensor<32x128xbf16>) {
+  // CHECK-NEXT: tt.experimental_descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32, tensor<32x128xbf16>
+  tt.experimental_descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32>, i32, tensor<32x128xbf16>
   tt.return
 }

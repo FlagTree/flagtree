@@ -1,5 +1,5 @@
 #include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -172,8 +172,8 @@ private:
 
   void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
     propagateIfChanged(
-        lattice,
-        lattice->join(AxisInfo::getPessimisticValueState(lattice->getPoint())));
+        lattice, lattice->join(
+                     AxisInfo::getPessimisticValueState(lattice->getAnchor())));
   }
 
   void visitNonControlFlowArguments(
@@ -195,9 +195,10 @@ public:
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
   using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
 
-  void visitOperation(Operation *op,
-                      ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
-                      ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
+  LogicalResult
+  visitOperation(Operation *op,
+                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
+                 ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
@@ -231,13 +232,13 @@ public:
   }
 };
 
-template <typename OpTy>
-class ConstantOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+class ConstantOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<arith::ConstantOp> {
 public:
-  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+  using AxisInfoVisitorImpl::AxisInfoVisitorImpl;
 
   AxisInfo
-  getAxisInfo(OpTy op,
+  getAxisInfo(arith::ConstantOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     auto intAttr = dyn_cast<IntegerAttr>(op.getValue());
     auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
@@ -269,6 +270,28 @@ public:
   }
 };
 
+class PoisonOpAxisInfoVisitor final : public AxisInfoVisitorImpl<ub::PoisonOp> {
+public:
+  using AxisInfoVisitorImpl::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(ub::PoisonOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    constexpr int64_t largePowerOf2 = int64_t(1) << 32;
+    // Poison values are never accessed, thus assume optimistic values.
+    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
+      unsigned rank = shape.getRank();
+      return AxisInfo(
+          /*contiguity=*/AxisInfo::DimVectorT(rank, largePowerOf2),
+          /*divisibility=*/AxisInfo::DimVectorT(rank, largePowerOf2),
+          /*constancy=*/AxisInfo::DimVectorT(shape.getShape()));
+    }
+
+    return AxisInfo(/*contiguity=*/{1}, /*divisibility=*/{largePowerOf2},
+                    /*constancy=*/{1});
+  }
+};
+
 template <typename OpTy>
 class AddSubOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
 public:
@@ -277,6 +300,11 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
+    // Contiguity assumes an increasing sequence. So for SubIOp contiguous
+    // RHS doesn't produce a contiguous result.
+    if (isa<arith::SubIOp>(op))
+      return gcd(lhs.getContiguity(dim), rhs.getConstancy(dim));
+
     return std::max(gcd(lhs.getConstancy(dim), rhs.getContiguity(dim)),
                     gcd(lhs.getContiguity(dim), rhs.getConstancy(dim)));
   }
@@ -285,8 +313,7 @@ private:
                           int dim) override {
     // lhs = k * d_lhs = k * k' * gcd(d_lhs, d_rhs)
     // rhs = p * d_rhs = p * p' * gcd(d_lhs, d_rhs)
-    // lhs + rhs = k * d_lhs + p * d_rhs = (k * d_lhs + p * d_rhs) *
-    // gcd(d_lhs, d_rhs)
+    // lhs + rhs = k * d_lhs + p * d_rhs = (k * k' + p * p') * gcd(d_lhs, d_rhs)
     auto rhsDivisibility = rhs.getDivisibility(dim);
     if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
       //  %ptr = addptr %lhs, %rhs
@@ -318,8 +345,7 @@ private:
                                           const AxisInfo &rhs) override {
     if (lhs.getConstantValue().has_value() &&
         rhs.getConstantValue().has_value()) {
-      if constexpr (std::is_same_v<OpTy, arith::AddIOp> ||
-                    std::is_same_v<OpTy, LLVM::AddOp>) {
+      if constexpr (std::is_same_v<OpTy, arith::AddIOp>) {
         return {lhs.getConstantValue().value() +
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
@@ -883,16 +909,14 @@ private:
 
   int64_t getDivisibility(arith::ShLIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
-    auto shift = rhs.getConstantValue().has_value()
-                     ? rhs.getConstantValue().value()
-                     : rhs.getDivisibility(dim);
+    auto shift = rhs.getConstantValue().value_or(0);
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
     auto numBits = log2Int(lhsDivisibility);
-    return multiplyDivisor(lhsDivisibility, 1 << shift);
+    return multiplyDivisor(lhsDivisibility, 1ll << shift);
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
@@ -926,15 +950,15 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    auto shift = rhs.getConstantValue().has_value()
-                     ? rhs.getConstantValue().value()
-                     : rhs.getDivisibility(dim);
+    if (!rhs.getConstantValue().has_value())
+      return 1;
+    auto shift = rhs.getConstantValue().value();
     auto lhsDivisibility = lhs.getDivisibility(dim);
     if (lhs.getContiguity(dim) > 1 && shift) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    return std::max<int64_t>(1, lhsDivisibility / (1 << shift));
+    return std::max<int64_t>(1, lhsDivisibility / (int64_t(1) << shift));
   }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -1007,19 +1031,15 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<CastOpAxisInfoVisitor<arith::ExtSIOp>,
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
-                  CastOpAxisInfoVisitor<arith::IndexCastOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
-  // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
-  // when scf.for supports integer induction variables
   visitors.append<MakeRangeOpAxisInfoVisitor>();
-  visitors.append<ConstantOpAxisInfoVisitor<arith::ConstantOp>,
-                  ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();
+  visitors.append<PoisonOpAxisInfoVisitor>();
+  visitors.append<ConstantOpAxisInfoVisitor>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
                   AddSubOpAxisInfoVisitor<arith::AddIOp>,
-                  AddSubOpAxisInfoVisitor<arith::SubIOp>,
-                  AddSubOpAxisInfoVisitor<LLVM::AddOp>>();
+                  AddSubOpAxisInfoVisitor<arith::SubIOp>>();
   visitors.append<MulIOpAxisInfoVisitor>();
   visitors.append<DivOpAxisInfoVisitor<arith::DivSIOp>,
                   DivOpAxisInfoVisitor<arith::DivUIOp>>();
@@ -1042,7 +1062,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<LoadOpAxisInfoVisitor>();
 }
 
-void AxisInfoAnalysis::visitOperation(
+LogicalResult AxisInfoAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
   // TODO: For sure not the right way to do this
@@ -1051,8 +1071,10 @@ void AxisInfoAnalysis::visitOperation(
     if (op->getValue().getRank() == 0)
       setToEntryState((dataflow::Lattice<AxisInfo> *)op);
   AxisInfo curr = visitors.apply(op, operands);
-  if (curr.getRank() == 0)
-    return setAllToEntryStates(results);
+  if (curr.getRank() == 0) {
+    setAllToEntryStates(results);
+    return success();
+  }
   // override with hint
   auto newContiguity = curr.getContiguity();
   auto newDivisibility = curr.getDivisibility();
@@ -1074,12 +1096,16 @@ void AxisInfoAnalysis::visitOperation(
   // join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));
+  return success();
 }
 
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  auto lb = getLatticeElementFor(op, op.getLowerBound())->getValue();
-  auto step = getLatticeElementFor(op, op.getStep())->getValue();
+  ProgramPoint *programPoint = getProgramPointAfter(op);
+  const auto &lb =
+      getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
+  const auto &step =
+      getLatticeElementFor(programPoint, op.getStep())->getValue();
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
@@ -1130,16 +1156,18 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 
   if (blockArg && blockArg.getOwner()->isEntryBlock()) {
     Operation *op = blockArg.getOwner()->getParentOp();
-    if (auto fun = dyn_cast<FunctionOpInterface>(op))
+    if (auto fun = dyn_cast<FunctionOpInterface>(op)) {
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
-    // llvm codegen check alignment to generate vector load/store
-    // would be nice if this wasn't the case
-    else if (auto fun = dyn_cast<LLVM::LLVMFuncOp>(op))
-      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
-                                   &knownContiguity, &knownDivisibility,
-                                   &knownConstancy);
+    } else if (isa<RegionBranchOpInterface>(op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp
+      // Control flow operations are initialized with "unknown" state:
+      // the maximum possible divisibility, contiguity, and constancy.
+      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
+    }
   } else if (Operation *op = value.getDefiningOp()) {
     if (isa<RegionBranchOpInterface>(op)) {
       // scf::ForOp, scf::IfOp, scf::WhileOp
@@ -1190,46 +1218,70 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
-  auto layout = tensorTy.getEncoding();
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getContiguity(value, elemTy.getIntOrFloatBitWidth());
+}
 
-  // Here order should be ordered by contiguous first, so the first element
-  // should have the largest contiguous.
-  auto order = triton::gpu::getOrder(layout);
-  unsigned align = getPtrAlignment(ptr);
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
+                                               unsigned elementBitWidth) {
+  // FIXME: This is not as good as it could be, as we don't need to restrict
+  // the analysis to one dimension. We should determine contiguity on the
+  // flattenOuts() layout
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto order = linAttr.getOrder();
+  unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
-  auto uniqueContigPerThread =
-      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
+  auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
-  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
+  LDBG("getContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
-  auto *axisInfo = getAxisInfo(ptr);
+
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getAlignment(value, elemTy.getIntOrFloatBitWidth());
+}
+
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
+                                              unsigned elementBitWidth) {
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
-  auto layout = tensorTy.getEncoding();
-  auto order = triton::gpu::getOrder(layout);
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto order = linAttr.getOrder();
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
-  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+
+  auto elemNumBytes = std::max<unsigned>(elementBitWidth / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getPtrAlignment order[0] "
+  LDBG("getAlignment order[0] "
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
-       << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
+       << " maxContig = " << maxContig << " elemNumBits = " << elementBitWidth
        << " maxMultiple = " << maxMultiple << " alignment " << alignment);
   LLVM_DEBUG({
     std::string axisStr;
@@ -1247,7 +1299,9 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto maskOrder = linAttr.getOrder();
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);
@@ -1263,8 +1317,15 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
 void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
-  if (failed(solver->initializeAndRun(funcOp)))
+  WalkResult result = funcOp.walk([&](Operation *op) {
+    if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+        failed(solver->initializeAndRun(op)))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  if (result.wasInterrupted())
     return;
+
   auto *axisInfoMap = getFuncData(funcOp);
   auto updateAxisInfoMap = [&](Value value) {
     auto axisInfo = analysis->getLatticeElement(value)->getValue();

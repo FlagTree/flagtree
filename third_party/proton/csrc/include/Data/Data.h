@@ -12,34 +12,37 @@ namespace proton {
 
 enum class OutputFormat { Hatchet, Count };
 
-class Data : public InternalOpInterface {
+class Data : public ScopeInterface {
 public:
   Data(const std::string &path, ContextSource *contextSource = nullptr)
       : path(path), contextSource(contextSource) {}
   virtual ~Data() = default;
 
+  /// Add an op to the data.
+  /// If scopeId is already present, add an op under/inside it.
+  /// Otherwise obtain the current context and append opName to it if opName is
+  /// not empty.
+  virtual size_t addOp(size_t scopeId, const std::string &opName = {}) = 0;
+
   /// Add a single metric to the data.
-  /// [MT] The implementation must be thread-safe.
   virtual void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) = 0;
 
   /// Add multiple metrics to the data.
-  /// [MT] The implementation must be thread-safe.
-  virtual void addMetrics(size_t scopeId,
-                          const std::map<std::string, MetricValueType> &metrics,
-                          bool aggregable) = 0;
+  virtual void
+  addMetrics(size_t scopeId,
+             const std::map<std::string, MetricValueType> &metrics) = 0;
+
+  /// Clear all caching data.
+  virtual void clear() = 0;
 
   /// Dump the data to the given output format.
-  /// [MT] Thread-safe.
   void dump(OutputFormat outputFormat);
 
 protected:
   /// The actual implementation of the dump operation.
-  /// [MT] Thread-safe.
   virtual void doDump(std::ostream &os, OutputFormat outputFormat) const = 0;
 
-protected:
   mutable std::shared_mutex mutex;
-
   const std::string path{};
   ContextSource *contextSource{};
 };

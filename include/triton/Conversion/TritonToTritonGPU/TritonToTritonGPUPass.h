@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace mlir {
 
@@ -10,12 +11,6 @@ class ModuleOp;
 template <typename T> class OperationPass;
 
 namespace triton {
-
-constexpr static char AttrNumWarpsName[] = "triton_gpu.num-warps";
-constexpr static char AttrNumCTAsName[] = "triton_gpu.num-ctas";
-constexpr static char AttrTargetName[] = "triton_gpu.target";
-
-constexpr static char AttrNumThreadsPerWarp[] = "triton_gpu.threads-per-warp";
 
 // Create the pass with numWarps passed from cl::opt.
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass();

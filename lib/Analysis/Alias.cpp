@@ -21,34 +21,41 @@ AliasInfo AliasInfo::join(const AliasInfo &lhs, const AliasInfo &rhs) {
   return ret;
 }
 
-void SharedMemoryAliasAnalysis::visitOperation(
+LogicalResult SharedMemoryAliasAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AliasInfo> *> operands,
     ArrayRef<dataflow::Lattice<AliasInfo> *> results) {
   AliasInfo aliasInfo;
   bool pessimistic = true;
-  // These ops may allocate a new shared memory buffer.
   auto result = op->getResult(0);
+  // skip ops that return memdesc in a different memory space.
+  if (auto memdescTy = dyn_cast<triton::gpu::MemDescType>(result.getType())) {
+    if (!isa_and_nonnull<triton::gpu::SharedMemorySpaceAttr>(
+            memdescTy.getMemorySpace()))
+      return success();
+  }
 
   // Only LocalAllocOp creates a new buffer.
   if (isa<triton::gpu::LocalAllocOp>(op)) {
     aliasInfo.insert(result);
     pessimistic = false;
-  } else if (isa<triton::gpu::MemDescSubviewOp, triton::TransOp>(op)) {
-    // extract_slice %src
-    // trans %src
+  } else if (isa<triton::gpu::MemDescSubviewOp, triton::gpu::MemDescTransOp>(
+                 op)) {
     aliasInfo = AliasInfo(operands[0]->getValue());
     pessimistic = false;
   } else {
-    assert(!isa<triton::MemDescType>(result.getType()) &&
+    assert(!isa<triton::gpu::MemDescType>(result.getType()) &&
            "unknown operation creating memory descriptor");
   }
 
   if (pessimistic) {
-    return setAllToEntryStates(results);
+    setAllToEntryStates(results);
+    return success();
   }
   // Join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(aliasInfo));
+
+  return success();
 }
 
 AliasResult SharedMemoryAliasAnalysis::alias(Value lhs, Value rhs) {

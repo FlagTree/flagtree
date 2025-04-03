@@ -466,6 +466,14 @@ class MusaDriver(GPUDriver):
         except:
             return False
 
+    # TODO: implement
+    def get_active_torch_device(self):
+        return "musa"
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench
+
 
 if MusaDriver.is_active():
     import torch

@@ -409,3 +409,11 @@ class CudaDriver(GPUDriver):
     def is_active():
         import torch
         return torch.cuda.is_available() and (torch.version.hip is None)
+
+    # TODO: implement
+    def get_active_torch_device(self):
+        return "iluvatar"
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench

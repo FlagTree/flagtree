@@ -31,7 +31,11 @@ template <typename Int> Int ceil(Int m, Int n) { return (m + n - 1) / n; }
 
 /// Get the highest power of 2 divisor of an integer.
 template <typename T> T highestPowOf2Divisor(T n) {
-  if (n == 0) {
+  // When n is 0 or min, return the highest power of 2. The min case is handled
+  // separately to avoid underflow when T is a signed integer. Technically
+  // in that case the correct divisor is -n, but this value is outside the
+  // range of possible values, so we take the next best alternative.
+  if (n == 0 || n == std::numeric_limits<T>::min()) {
     return (static_cast<T>(1) << (sizeof(T) * 8 - 2));
   }
   return (n & (~(n - 1)));
@@ -144,7 +148,7 @@ template <typename T> bool isPermutationOfIota(ArrayRef<T> vals) {
   return isIota(sorted);
 }
 
-template <typename VecT> bool IsPermutationOfIota(const VecT &vec) {
+template <typename VecT> bool isPermutationOfIota(const VecT &vec) {
   return isPermutationOfIota(ArrayRef(vec));
 }
 
@@ -163,25 +167,10 @@ template <typename VecT> bool isConsecutive(const VecT &vec) {
   return isConsecutive(ArrayRef(vec));
 }
 
-// LLVM's STLExtras.h provides a bunch of functions that work over ranges, but
-// it's missing min/max_element until
-// https://github.com/llvm/llvm-project/commit/fab2bb8b makes it into Triton.
-// TODO(jlebar): Remove this once we have the LLVM helpers.
-template <typename R> auto min_element(R &&Range) {
-  return std::min_element(llvm::adl_begin(Range), llvm::adl_end(Range));
-}
-template <typename R, typename Compare>
-auto min_element(R &&Range, Compare &&C) {
-  return std::min_element(llvm::adl_begin(Range), llvm::adl_end(Range),
-                          std::forward<Compare>(C));
-}
-template <typename R> auto max_element(R &&Range) {
-  return std::max_element(llvm::adl_begin(Range), llvm::adl_end(Range));
-}
-template <typename R, typename T, typename Compare>
-auto max_element(R &&Range, Compare &&C) {
-  return std::max_element(llvm::adl_begin(Range), llvm::adl_end(Range),
-                          std::forward<Compare>(C));
+template <typename T> auto seq(T start, T end, T step) {
+  auto len = ceil<T>(end - start, step);
+  return llvm::map_range(llvm::seq<T>(0, len),
+                         [=](T i) { return start + i * step; });
 }
 
 } // namespace triton

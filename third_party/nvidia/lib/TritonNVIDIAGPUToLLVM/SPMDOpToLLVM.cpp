@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace {
 
@@ -24,7 +25,7 @@ struct GetNumProgramsOpConversion
 
     Location loc = op->getLoc();
     assert(op.getAxisAsInt() < 3);
-    std::string sreg = numCTAs == 1 ? "%nctaid." : "%nclusterid.";
+    std::string sreg = numCTAs == 1 ? "nctaid." : "nclusterid.";
     sreg.append(1, 'x' + op.getAxisAsInt()); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
 
     Value numPrograms = LLVM::NVIDIA::getSRegValue(rewriter, loc, sreg);
@@ -33,10 +34,25 @@ struct GetNumProgramsOpConversion
   }
 };
 
+struct GetCanonicalWarpIdConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::GetCanonicalWarpIdOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::GetCanonicalWarpIdOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::GetCanonicalWarpIdOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto warpIdOp = rewriter.create<triton::nvgpu::CanonicalWarpIdOp>(
+        op->getLoc(), rewriter.getI32Type());
+    rewriter.replaceOp(op, warpIdOp);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateSPMDOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
+  patterns.add<GetCanonicalWarpIdConversion>(typeConverter, benefit);
 }

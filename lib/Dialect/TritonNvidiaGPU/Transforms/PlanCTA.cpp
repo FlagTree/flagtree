@@ -57,8 +57,10 @@ Type replaceLayout(const Type &type, const Attribute &newLayout) {
   return curType;
 }
 
-Attribute replaceCTALayout(Attribute layout, llvm::ArrayRef<int64_t> shape,
-                           const ttg::CTALayoutAttr &newCTALayout) {
+ttg::DistributedEncodingTrait
+replaceCTALayout(ttg::DistributedEncodingTrait layout,
+                 llvm::ArrayRef<int64_t> shape,
+                 const ttg::CTALayoutAttr &newCTALayout) {
   if (auto blockedLayout = mlir::dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     return ttg::BlockedEncodingAttr::get(
         layout.getContext(), shape, blockedLayout.getSizePerThread(),
@@ -120,9 +122,9 @@ private:
 
   bool processBroadcast(triton::BroadcastOp broadcast, Attribute layout);
   bool processExpandDimsBackward(triton::ExpandDimsOp expandDims,
-                                 Attribute newResultLayout);
+                                 ttg::DistributedEncodingTrait newResultLayout);
   bool processExpandDimsForward(triton::ExpandDimsOp expandDims,
-                                Attribute newSrcLayout);
+                                ttg::DistributedEncodingTrait newSrcLayout);
 
   bool processConvertLayoutBackward(ttg::ConvertLayoutOp convertLayout,
                                     CastOp cast);
@@ -230,13 +232,23 @@ void CTAPlanner::setTiling(llvm::ArrayRef<unsigned> CTAsPerCGA) {
   assert(!tiled && "CTA tiling is already determinted");
   assert(clusterInfo && "ClusterInfo pointer is null");
   assert(CTAsPerCGA.size() <= 3 && "setTiling not implemented");
+  tiled = true;
+  unsigned numCTAs = 1;
+  for (unsigned cta : CTAsPerCGA)
+    numCTAs *= cta;
+  if (numCTAs == 2) {
+    // For 2 CTAs always use 2x1x1.
+    // TODO: can we always serialize the CTAs on X dimension?
+    clusterInfo->clusterDimX = 2;
+    return;
+  }
+
   if (CTAsPerCGA.size() > 0)
     clusterInfo->clusterDimX = CTAsPerCGA[0];
   if (CTAsPerCGA.size() > 1)
     clusterInfo->clusterDimY = CTAsPerCGA[1];
   if (CTAsPerCGA.size() > 2)
     clusterInfo->clusterDimZ = CTAsPerCGA[2];
-  tiled = true;
 }
 
 bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
@@ -312,8 +324,8 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
     auto srcLayout = srcTy.getEncoding();
 
     auto rank = srcShape.size();
-    auto order = ttg::getOrder(srcLayout);
-    auto sizePerThread = ttg::getSizePerThread(srcLayout);
+    auto order = ttg::getOrder(srcTy);
+    auto sizePerThread = ttg::getContigPerThread(srcTy);
     auto CTAOrder = ttg::getCTAOrder(srcLayout);
 
     llvm::SmallVector<unsigned> CTAsPerCGA(rank, 0);
@@ -351,7 +363,8 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
         ttg::CTALayoutAttr::get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
     if (!tiled)
       setTiling(CTALayout.getCTAsPerCGA());
-    auto newSrcLayout = replaceCTALayout(srcLayout, srcShape, CTALayout);
+    auto newSrcLayout = replaceCTALayout(
+        cast<ttg::DistributedEncodingTrait>(srcLayout), srcShape, CTALayout);
     auto newResultLayout =
         ttg::SliceEncodingAttr::get(context, axis, newSrcLayout);
     unsigned numOperands = reduce.getNumOperands();
@@ -383,8 +396,9 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
         CTALayout = ttg::getCTALayout(tensorTy.getEncoding());
         setTiling(CTALayout.getCTAsPerCGA());
       }
-      auto newLayout = replaceCTALayout(tensorTy.getEncoding(),
-                                        tensorTy.getShape(), CTALayout);
+      auto newLayout = replaceCTALayout(
+          cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding()),
+          tensorTy.getShape(), CTALayout);
       processElementwise(store, newLayout);
     }
   }
@@ -411,7 +425,8 @@ bool CTAPlanner::propagateBackward(CastOp cast) {
     Type outTy = output.getType();
     if (auto ptrTy = dyn_cast<triton::PointerType>(outTy))
       outTy = ptrTy.getPointeeType();
-    Attribute layout = mlir::cast<RankedTensorType>(outTy).getEncoding();
+    auto layout = mlir::cast<ttg::DistributedEncodingTrait>(
+        mlir::cast<RankedTensorType>(outTy).getEncoding());
     Operation *op = input.getDefiningOp();
     if (op == nullptr) {
       assert(isa<BlockArgument>(input) &&
@@ -616,8 +631,10 @@ bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
     if (auto ptrTy = dyn_cast<triton::PointerType>(type))
       type = ptrTy.getPointeeType();
     auto tensorTy = cast<RankedTensorType>(type);
-    auto newLayout = replaceCTALayout(tensorTy.getEncoding(),
-                                      tensorTy.getShape(), CTALayout);
+    auto oldLayout =
+        cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding());
+    auto newLayout =
+        replaceCTALayout(oldLayout, tensorTy.getShape(), CTALayout);
     newOperandLayouts.push_back(newLayout);
   }
 
@@ -627,8 +644,10 @@ bool CTAPlanner::processLoadStore(Operation *op, Attribute layout) {
     if (auto ptrTy = dyn_cast<triton::PointerType>(type))
       type = ptrTy.getPointeeType();
     auto tensorTy = cast<RankedTensorType>(type);
-    auto newLayout = replaceCTALayout(tensorTy.getEncoding(),
-                                      tensorTy.getShape(), CTALayout);
+    auto oldLayout =
+        cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding());
+    auto newLayout =
+        replaceCTALayout(oldLayout, tensorTy.getShape(), CTALayout);
     newResultLayouts.push_back(newLayout);
   }
 
@@ -656,7 +675,7 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
                 math::FloorOp, math::ExpM1Op, math::FmaOp, math::LogOp,
                 math::Log10Op, math::Log1pOp, math::Log2Op, math::PowFOp,
-                math::RsqrtOp, math::SqrtOp, math::RsqrtOp, math::TanhOp>(op))
+                math::SqrtOp, math::RsqrtOp, math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
                 triton::FpToFpOp, triton::AddPtrOp, triton::PreciseSqrtOp,
@@ -715,16 +734,18 @@ bool CTAPlanner::processBroadcast(triton::BroadcastOp broadcast,
   return true;
 }
 
-bool CTAPlanner::processExpandDimsBackward(triton::ExpandDimsOp expandDims,
-                                           Attribute newResultLayout) {
+bool CTAPlanner::processExpandDimsBackward(
+    triton::ExpandDimsOp expandDims,
+    ttg::DistributedEncodingTrait newResultLayout) {
   auto newSrcLayout = ttg::SliceEncodingAttr::get(
       newResultLayout.getContext(), expandDims.getAxis(), newResultLayout);
   insertCasts(expandDims.getOperation(), {newSrcLayout}, {newResultLayout});
   return true;
 }
 
-bool CTAPlanner::processExpandDimsForward(triton::ExpandDimsOp expandDims,
-                                          Attribute newSrcLayout) {
+bool CTAPlanner::processExpandDimsForward(
+    triton::ExpandDimsOp expandDims,
+    ttg::DistributedEncodingTrait newSrcLayout) {
   llvm::report_fatal_error("processExpandDimsForward not implemented yet");
   return true;
 }

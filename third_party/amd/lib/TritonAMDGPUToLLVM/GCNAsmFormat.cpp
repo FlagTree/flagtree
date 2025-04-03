@@ -5,8 +5,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <sstream> // unify to llvm::raw_string_ostream ?
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 
 GCNInstr::Operand *
 GCNBuilder::newOperand(mlir::Value value, StringRef constraint,
@@ -73,9 +72,8 @@ SmallVector<GCNBuilder::Operand *, 4> GCNBuilder::getAllArgs() const {
   return res;
 }
 
-mlir::Value GCNBuilder::launch(ConversionPatternRewriter &rewriter,
-                               Location loc, Type resTy, bool hasSideEffect,
-                               bool isAlignStack,
+mlir::Value GCNBuilder::launch(RewriterBase &rewriter, Location loc, Type resTy,
+                               bool hasSideEffect, bool isAlignStack,
                                ArrayRef<Attribute> attrs) const {
   auto *ctx = rewriter.getContext();
   auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
@@ -187,5 +185,4 @@ GCNInstrExecution::getArgList() const {
   return args;
 }
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton

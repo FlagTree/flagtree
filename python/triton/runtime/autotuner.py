@@ -4,11 +4,11 @@ import builtins
 import os
 import time
 import inspect
-from typing import Dict
+from typing import Dict, Tuple, List, Optional
 
-from ..testing import do_bench, do_bench_cudagraph
 from .jit import KernelInterface
-from .errors import OutOfResources
+from .errors import OutOfResources, PTXASError
+from .driver import driver
 
 
 class Autotuner(KernelInterface):
@@ -23,10 +23,11 @@ class Autotuner(KernelInterface):
         restore_value,
         pre_hook=None,
         post_hook=None,
-        prune_configs_by: Dict = None,
-        warmup=25,
-        rep=100,
+        prune_configs_by: Optional[Dict] = None,
+        warmup=None,
+        rep=None,
         use_cuda_graph=False,
+        do_bench=None,
     ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
@@ -35,44 +36,51 @@ class Autotuner(KernelInterface):
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
         """
         if not configs:
-            self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
+            self.configs = [
+                Config({}, num_warps=4, num_stages=3, num_ctas=1, num_buffers_warp_spec=0, num_consumer_groups=0,
+                       reg_dec_producer=0, reg_inc_consumer=0)
+            ]
         else:
             self.configs = configs
-        self.key_idx = [arg_names.index(k) for k in key]
-        self.cache = {}
+        self.keys = key
+        self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
 
         # Reset to zero or restore values
-        self.reset_idx = []
+        self.reset_to_zero = []
         if reset_to_zero is not None:
-            self.reset_idx = [arg_names.index(k) for k in reset_to_zero]
-        self.restore_idx = []
+            self.reset_to_zero = list(reset_to_zero)
+        self.restore_value = []
         if restore_value is not None:
-            self.restore_idx = [arg_names.index(k) for k in restore_value]
+            self.restore_value = list(restore_value)
 
         # Hook to reset or restore for required tensors
-        self.pre_hook = lambda args, reset_only=False: 0
-        self.post_hook = lambda args, exception: 0
+        self.pre_hook = lambda kwargs, reset_only=False: 0
+        self.post_hook = lambda kwargs, exception: 0
+        self.user_defined_pre_hook = False
+        self.user_defined_post_hook = False
         if pre_hook:
             self.pre_hook = pre_hook
-        elif (len(self.reset_idx) > 0 or len(self.restore_idx) > 0):
+            self.user_defined_pre_hook = True
+        elif (len(self.reset_to_zero) > 0 or len(self.restore_value) > 0):
 
-            def _pre_hook(args, reset_only=False):
-                for i in self.reset_idx:
-                    args[i].zero_()
+            def _pre_hook(kwargs, reset_only=False):
+                for name in self.reset_to_zero:
+                    kwargs[name].zero_()
                 if not reset_only:
-                    self.restore_copies = [args[i].clone() for i in self.restore_idx]
+                    self.restore_copies = {name: kwargs[name].clone() for name in self.restore_value}
 
             self.pre_hook = _pre_hook
 
         if post_hook:
             self.post_hook = post_hook
-        elif len(self.restore_idx) > 0:
+            self.user_defined_post_hook = True
+        elif len(self.restore_value) > 0:
 
-            def _post_hook(args, exception):
-                for i, j in enumerate(self.restore_idx):
-                    args[j].copy_(self.restore_copies[i])
-                self.restore_copies = []
+            def _post_hook(kwargs, exception):
+                for name in self.restore_value:
+                    kwargs[name].copy_(self.restore_copies[name])
+                self.restore_copies = {}
 
             self.post_hook = _post_hook
 
@@ -88,13 +96,47 @@ class Autotuner(KernelInterface):
         self.base_fn = fn
         while not inspect.isfunction(self.base_fn):
             self.base_fn = self.base_fn.fn
+
         self.num_warmups = warmup
         self.num_reps = rep
-        import torch
-        self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
+        self.use_cuda_graph = use_cuda_graph
+
+        # If we got explicitly called via the old interface, raise a warning
+        # and proceed with the old behavior.
+        if warmup is not None or rep is not None or use_cuda_graph:
+            import warnings
+            warnings.warn(("warmup, rep, and use_cuda_graph parameters are deprecated. See "
+                           "https://github.com/triton-lang/triton/pull/4496 for details."), DeprecationWarning,
+                          stacklevel=1)
+            if use_cuda_graph:
+                from ..testing import do_bench_cudagraph
+                self.do_bench = lambda kernel_call, quantiles: do_bench_cudagraph(
+                    kernel_call,
+                    rep=rep if rep is not None else 100,
+                    quantiles=quantiles,
+                )
+                return
+
+            import triton.testing
+            self.do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
+                kernel_call,
+                warmup=warmup if warmup is not None else 25,
+                rep=rep if rep is not None else 100,
+                quantiles=quantiles,
+            )
+            return
+
+        if do_bench is None:
+            self.do_bench = driver.active.get_benchmarker()
+        else:
+            self.do_bench = do_bench
 
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
+
+        verbose = os.environ.get("TRITON_PRINT_AUTOTUNING", None) == "1"
+        if verbose:
+            print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
 
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
@@ -109,7 +151,7 @@ class Autotuner(KernelInterface):
         def kernel_call():
             if config.pre_hook:
                 config.pre_hook(full_nargs)
-            self.pre_hook(args)
+            self.pre_hook(full_nargs)
             try:
                 self.fn.run(
                     *args,
@@ -117,34 +159,28 @@ class Autotuner(KernelInterface):
                 )
             except Exception as e:
                 try:
-                    self.post_hook(args, exception=e)
+                    self.post_hook(full_nargs, exception=e)
                 finally:
                     # Throw exception raised by `self.fn.run`
                     raise
 
-            self.post_hook(args, exception=None)
+            self.post_hook(full_nargs, exception=None)
 
         try:
-            if self.use_cuda_graph:
-                import torch
-                with torch.cuda.stream(torch.cuda.Stream()):
-                    bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
-                return bench_res
-            return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
-        except (OutOfResources, CompileTimeAssertionFailure):
-            return float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
+            return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+        except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
+            if verbose:
+                print(f"Autotuning failed with {e}")
+            return [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
-            _args = []
-            for name in self.arg_names:
-                if name in all_args:
-                    _args.append(all_args[name])
-            key = [_args[i] for i in self.key_idx]
-            for arg in _args:
+            _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
+            key = [_args[key] for key in self.keys if key in _args]
+            for _, arg in _args.items():
                 if hasattr(arg, "dtype"):
                     key.append(str(arg.dtype))
             key = tuple(key)
@@ -157,7 +193,8 @@ class Autotuner(KernelInterface):
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
-                self.pre_hook(args, reset_only=True)
+                full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
+                self.pre_hook(full_nargs, reset_only=True)
                 self.configs_timings = timings
             config = self.cache[key]
         else:
@@ -167,7 +204,8 @@ class Autotuner(KernelInterface):
             print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
                   f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
         if config.pre_hook is not None:
-            config.pre_hook({**self.nargs, **kwargs, **config.all_kwargs()})
+            full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
+            config.pre_hook(full_nargs)
         ret = self.fn.run(
             *args,
             **kwargs,
@@ -176,7 +214,7 @@ class Autotuner(KernelInterface):
         self.nargs = None
         return ret
 
-    def prune_configs(self, kwargs):
+    def prune_configs(self, kwargs: Dict) -> List[Config]:
         pruned_configs = self.configs
         if self.early_config_prune:
             pruned_configs = self.early_config_prune(self.configs, self.nargs, **kwargs)
@@ -184,6 +222,10 @@ class Autotuner(KernelInterface):
             top_k = self.configs_top_k
             if isinstance(top_k, float) and top_k <= 1.0:
                 top_k = int(len(self.configs) * top_k)
+            elif not isinstance(top_k, int):
+                # Slice index must be an integer
+                raise TypeError("Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
+
             if len(pruned_configs) > top_k:
                 est_timing = {
                     config: self.perf_model(
@@ -230,11 +272,16 @@ class Config:
                     function are args.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, maxnreg=None, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, num_buffers_warp_spec=0, num_consumer_groups=0,
+                 reg_dec_producer=0, reg_inc_consumer=0, maxnreg=None, pre_hook=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
         self.num_stages = num_stages
+        self.num_buffers_warp_spec = num_buffers_warp_spec
+        self.num_consumer_groups = num_consumer_groups
+        self.reg_dec_producer = reg_dec_producer
+        self.reg_inc_consumer = reg_inc_consumer
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
 
@@ -246,6 +293,10 @@ class Config:
                     ("num_warps", self.num_warps),
                     ("num_ctas", self.num_ctas),
                     ("num_stages", self.num_stages),
+                    ("num_buffers_warp_spec", self.num_buffers_warp_spec),
+                    ("num_consumer_groups", self.num_consumer_groups),
+                    ("reg_dec_producer", self.reg_dec_producer),
+                    ("reg_inc_consumer", self.reg_inc_consumer),
                     ("maxnreg", self.maxnreg),
                 ) if v is not None
             }
@@ -258,12 +309,16 @@ class Config:
         res.append(f"num_warps: {self.num_warps}")
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
+        res.append(f"num_buffers_warp_spec: {self.num_buffers_warp_spec}")
+        res.append(f"num_consumer_groups: {self.num_consumer_groups}")
+        res.append(f"reg_dec_producer: {self.reg_dec_producer}")
+        res.append(f"reg_inc_consumer: {self.reg_inc_consumer}")
         res.append(f"maxnreg: {self.maxnreg}")
         return ", ".join(res)
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
-             warmup=25, rep=100, use_cuda_graph=False):
+             warmup=None, rep=None, use_cuda_graph=False, do_bench=None):
     """
     Decorator for auto-tuning a :code:`triton.jit`'d function.
 
@@ -278,8 +333,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
                          # the value of x_size changes
         )
         @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE']
+        def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
+            ...
     :note: When all the configurations are evaluated, the kernel will run multiple times.
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
@@ -303,24 +358,26 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type restore_value: list[str]
     :param pre_hook: a function that will be called before the kernel is called.
         This overrides the default pre_hook used for 'reset_to_zero' and 'restore_value'.
-        'args': a list of arguments passed to the kernel.
+        'kwargs': a dict of all arguments passed to the kernel.
         'reset_only': a boolean indicating whether the pre_hook is called to reset the values only, without a corresponding post_hook.
     :type pre_hook: lambda args, reset_only
     :param post_hook: a function that will be called after the kernel is called.
         This overrides the default post_hook used for 'restore_value'.
-        'args': a list of arguments passed to the kernel.
+        'kwargs': a dict of all arguments passed to the kernel.
         'exception': the exception raised by the kernel in case of a compilation or runtime error.
     :type post_hook: lambda args, exception
-    :param warmup: Warmup time (in ms) to pass to benchmarking, defaults to 25.
+    :param warmup: warmup time (in ms) to pass to benchmarking (deprecated).
     :type warmup: int
-    :param rep: Repetition time (in ms) to pass to benchmarking, defaults to 100.
+    :param rep: repetition time (in ms) to pass to benchmarking (deprecated).
     :type rep: int
+    :param do_bench: a benchmark function to measure the time of each run.
+    :type do_bench: lambda fn, quantiles
     """
 
     def decorator(fn):
         return Autotuner(fn, fn.arg_names, configs, key, reset_to_zero, restore_value, pre_hook=pre_hook,
                          post_hook=post_hook, prune_configs_by=prune_configs_by, warmup=warmup, rep=rep,
-                         use_cuda_graph=use_cuda_graph)
+                         use_cuda_graph=use_cuda_graph, do_bench=do_bench)
 
     return decorator
 
@@ -341,18 +398,19 @@ class Heuristics(KernelInterface):
 def heuristics(values):
     """
     Decorator for specifying how the values of certain meta-parameters may be computed.
-    This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
+    This is useful for cases where auto-tuning is prohibitively expensive, or just not applicable.
 
     .. highlight:: python
     .. code-block:: python
 
-        @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
+        # smallest power-of-two >= x_size
+        @triton.heuristics(values={'BLOCK_SIZE': lambda args: triton.next_power_of_2(args['x_size'])})
         @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
+        def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
+            ...
     :param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
-    :type values: dict[str, Callable[[list[Any]], Any]]
+    :type values: dict[str, Callable[[dict[str, Any]], Any]]
     """
 
     def decorator(fn):

@@ -1,6 +1,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 
 #include "mlir/IR/DialectImplementation.h" // required by `Types.cpp.inc`
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
@@ -47,51 +48,6 @@ void PointerType::print(AsmPrinter &printer) const {
   } else {
     printer << "<" << getPointeeType() << ", " << getAddressSpace() << ">";
   }
-}
-
-static constexpr llvm::StringRef kMutableMemory = "mutable";
-
-Type MemDescType::parse(AsmParser &parser) {
-  if (parser.parseLess())
-    return Type();
-
-  SmallVector<int64_t> dimensions;
-  if (parser.parseDimensionList(dimensions, /*allowDynamic=*/false))
-    return Type();
-
-  // Parse the element type.
-  Type elementType;
-  if (parser.parseType(elementType))
-    return Type();
-
-  Attribute encoding;
-  if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseAttribute(encoding))
-      return Type();
-  }
-  bool mutableMemory = false;
-  if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseOptionalKeyword(kMutableMemory))
-      return Type();
-    mutableMemory = true;
-  }
-  if (parser.parseGreater())
-    return Type();
-
-  return MemDescType::get(parser.getContext(), dimensions, elementType,
-                          encoding, mutableMemory);
-}
-
-void MemDescType::print(AsmPrinter &printer) const {
-  printer << "<";
-  for (auto dim : getShape())
-    printer << dim << "x";
-  printer << getElementType();
-  if (getEncoding())
-    printer << ", " << getEncoding();
-  if (getMutableMemory())
-    printer << ", " << kMutableMemory;
-  printer << ">";
 }
 
 namespace mlir {
@@ -147,7 +103,22 @@ Type getPointerTypeSameShape(Type type) {
   }
 }
 
-Type getPointerType(Type type) { return PointerType::get(type, 1); }
+Type getPointerTypeToElement(Type type) {
+  Type elementType = getElementTypeOrSelf(type);
+  PointerType ptrType = PointerType::get(elementType, 1);
+  return ptrType;
+}
+
+// upstream Triton only uses address space 1 for Pointer Type
+Type getPointerType(Type type, int addressSpace) {
+  return PointerType::get(type, addressSpace);
+}
+
+int getAddressSpace(Type type) {
+  if (auto ptrType = dyn_cast<PointerType>(type))
+    return ptrType.getAddressSpace();
+  return 1;
+}
 
 bool isTensorPointerType(Type type) {
   if (auto ptrType = dyn_cast<PointerType>(type))

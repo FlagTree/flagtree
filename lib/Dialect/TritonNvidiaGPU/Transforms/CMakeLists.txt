@@ -1,7 +1,12 @@
 add_triton_library(TritonNvidiaGPUTransforms
   FenceInsertion.cpp
+  MMALowering.cpp
+  KeepAccInTMem.cpp
   PlanCTA.cpp
+  PromoteLHSToTMem.cpp
+  TensorMemoryAllocation.cpp
   TMALowering.cpp
+  Utility.cpp
 
   DEPENDS
   TritonNvidiaGPUTransformsIncGen

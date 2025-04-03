@@ -1,18 +1,16 @@
 # -*- Python -*-
+# ruff: noqa: F821
 
 import os
-import platform
-import re
-import subprocess
-import tempfile
 
 import lit.formats
 import lit.util
 from lit.llvm import llvm_config
-from lit.llvm.subst import FindTool, ToolSubst
+from lit.llvm.subst import ToolSubst
 
 # Configuration file for the 'lit' test runner
 
+# (config is an instance of TestingConfig created when discovering tests)
 # name: The name of this test suite
 config.name = 'TRITON'
 
@@ -26,9 +24,9 @@ config.test_source_root = os.path.dirname(__file__)
 
 # test_exec_root: The root path where tests should be run.
 config.test_exec_root = os.path.join(config.triton_obj_root, 'test')
-
 config.substitutions.append(('%PATH%', config.environment['PATH']))
-config.substitutions.append(('%shlibext', config.llvm_shlib_ext))
+config.substitutions.append(("%shlibdir", config.llvm_shlib_dir))
+config.substitutions.append(("%shlibext", config.llvm_shlib_ext))
 
 llvm_config.with_system_environment(['HOME', 'INCLUDE', 'LIB', 'TMP', 'TEMP'])
 

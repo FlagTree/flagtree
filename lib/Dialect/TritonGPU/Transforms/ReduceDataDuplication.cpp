@@ -36,29 +36,15 @@ public:
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
       auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcEncoding = srcType.getEncoding();
-      if (isa<triton::gpu::SharedEncodingAttr>(srcEncoding))
+      if (isa<triton::gpu::SharedEncodingTrait>(srcEncoding))
         return;
       auto dstDotOp =
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
-      if (auto srcMmaEncoding =
-              dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMmaEncoding.getVersionMajor() != 2 ||
-            (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
-             dstDotOp.getParent() == srcMmaEncoding))
-          return;
-      }
-      if (auto srcMfmaEncoding =
-              dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
-            srcMfmaEncoding.getIsTransposed() &&
-            dstDotOp.getParent() == srcMfmaEncoding)
-          return;
-      }
-      auto srcOrder = triton::gpu::getOrder(srcEncoding);
+      if (!cvtNeedsSharedMemory(srcType, dstType))
+        return;
+      auto srcOrder = triton::gpu::getOrder(srcType);
       auto rank = srcOrder.size();
       SmallVector<unsigned> sharedOrder;
       if (rank == 3) {
@@ -70,12 +56,14 @@ public:
       } else {
         sharedOrder = srcOrder;
       }
-      auto tmpType = triton::MemDescType::get(
+      auto sharedMemorySpace =
+          triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
+      auto tmpType = triton::gpu::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
-          triton::gpu::SharedEncodingAttr::get(
+          triton::gpu::SwizzledSharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
-              triton::gpu::getCTALayout(srcEncoding),
-              srcType.getElementType()));
+              triton::gpu::getCTALayout(srcEncoding), srcType.getElementType()),
+          sharedMemorySpace);
       auto tmp = builder.create<triton::gpu::LocalAllocOp>(
           cvtOp.getLoc(), tmpType, cvtOp.getSrc());
       auto newConvert = builder.create<triton::gpu::LocalLoadOp>(cvtOp.getLoc(),

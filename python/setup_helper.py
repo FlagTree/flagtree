@@ -29,7 +29,7 @@ class FlagTreeBackend:
 flagtree_backend_info = {
     "triton_shared":
     FlagTreeBackend(name="triton_shared", url="https://github.com/microsoft/triton-shared.git",
-                    tag="380b87122c88af131530903a702d5318ec59bb33"),
+                    tag="7f3836156f27df0debc5a5fcdea9bfa30ba7bbaa"),
     "cambricon":
     FlagTreeBackend(name="cambricon", url="https://github.com/Cambricon/triton-linalg.git",
                     tag="00f51c2e48a943922f86f03d58e29f514def646d"),

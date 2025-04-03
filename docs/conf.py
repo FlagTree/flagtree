@@ -93,12 +93,15 @@ Triton MLIR Dialects and Ops
 
 def setup(app):
     """Customize function args retrieving to get args under decorator."""
-    import os
+    import subprocess
 
     import sphinx
 
     app.connect("autodoc-process-signature", process_sig)
-    os.system("pip install -e ../python")
+    max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
+    print(f"Installing Triton Python package using {max_jobs} threads")
+    subprocess.run("pip install -e ../python", shell=True, env=os.environ.copy())
+
     setup_generated_mlir_docs()
 
     def forward_jit_fn(func):
@@ -142,7 +145,7 @@ extensions = [
 autosummary_generate = True
 
 # versioning config
-smv_tag_whitelist = r'^(v3.0.0)$'
+smv_tag_whitelist = r'^(v3.2.0)$'
 smv_branch_whitelist = r'^main$'
 smv_remote_whitelist = None
 smv_released_pattern = r'^tags/.*$'
@@ -156,9 +159,6 @@ sphinx_gallery_conf = {
     'examples_dirs': '../python/tutorials/',
     'gallery_dirs': 'getting-started/tutorials',
     'filename_pattern': '',
-    # TODO: Re-enable the grouped-gemm tutorial.  It currently hits this
-    # assertion:
-    # https://github.com/triton-lang/triton/blob/main/lib/Dialect/TritonNvidiaGPU/Transforms/FenceInsertion.cpp#L127
     'ignore_pattern': r'(__init__\.py|11.*.py)',
     'within_subsection_order': FileNameSortKey,
     'reference_url': {

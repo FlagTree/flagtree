@@ -21,8 +21,6 @@ namespace ttng = ::mlir::triton::nvidia_gpu;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
-using ::mlir::triton::gpu::SharedEncodingAttr;
-
 namespace {
 
 struct FenceInsertionPass
@@ -44,7 +42,7 @@ public:
       return;
     ModuleOp mod = getOperation();
     mod.walk([&](Operation *op) {
-      if (!isa<tt::DotOp, ttng::DotAsyncOp>(op))
+      if (!isa<ttng::WarpGroupDotOp>(op))
         return WalkResult::advance();
       OpBuilder builder(op);
       auto a = op->getOperand(0);
@@ -79,7 +77,7 @@ private:
     static DenseSet<std::pair<Operation *, unsigned>> trace;
     auto op = operand.getDefiningOp();
     // avoid redundant insertion
-    if (op && isa<tt::DotOp, ttng::DotAsyncOp>(op))
+    if (op && isa<mlir::triton::DotOpInterface>(op))
       return false;
     // reach convertlayout
     if (op && isa<ttg::LocalAllocOp>(op) &&

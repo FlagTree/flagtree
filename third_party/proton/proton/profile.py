@@ -1,5 +1,7 @@
 import functools
 import triton
+import os
+import pathlib
 
 from triton._C.libproton import proton as libproton
 from .hook import register_triton_hook, unregister_triton_hook
@@ -17,6 +19,28 @@ def _select_backend() -> str:
         return "roctracer"
     else:
         raise ValueError("No backend is available for the current target.")
+
+
+def _get_backend_default_path(backend: str) -> str:
+    lib_path = ""
+    if backend == "cupti":
+        # First try to get the path from the environment variable that overrides the default path
+        lib_path = os.getenv("TRITON_CUPTI_LIB_PATH", None)
+        if lib_path is None:
+            # Get the default path for the cupti backend,
+            # which is the most compatible with the current CUPTI header file triton is compiled with
+            lib_path = str(pathlib.Path(__file__).parent.parent.absolute() / "backends" / "nvidia" / "lib" / "cupti")
+    return lib_path
+
+
+def _check_env(backend: str) -> None:
+    if backend == "roctracer":
+        hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
+        for env in hip_device_envs:
+            if os.getenv(env, None) is not None:
+                raise ValueError(
+                    f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
+                )
 
 
 def start(
@@ -42,7 +66,7 @@ def start(
         name (str, optional): The name (with path) of the profiling session.
                               If not provided, the default name is "~/proton.hatchet".
         backend (str, optional): The backend to use for profiling.
-                                 Available options are ["cupti"].
+                                 Available options are [None, "cupti", "cupti_pcsampling", "roctracer"].
                                  Defaults to None, which automatically selects the backend matching the current active runtime.
         context (str, optional): The context to use for profiling.
                                  Available options are ["shadow", "python"].
@@ -66,42 +90,52 @@ def start(
     if backend is None:
         backend = _select_backend()
 
+    _check_env(backend)
+
+    backend_path = _get_backend_default_path(backend)
+
     set_profiling_on()
     if hook and hook == "triton":
         register_triton_hook()
-    return libproton.start(name, context, data, backend)
+    return libproton.start(name, context, data, backend, backend_path)
 
 
-def activate(session: Optional[int] = 0) -> None:
+def activate(session: Optional[int] = None) -> None:
     """
     Activate the specified session.
     The profiling session will be active and data will be recorded.
 
     Args:
-        session (int): The session ID of the profiling session. Defaults to 0 (the first session started.)
+        session (int): The session ID of the profiling session. Defaults to None (all sessions)
 
     Returns:
         None
     """
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be activated when running from the command line.")
-    libproton.activate(session)
+    if session is None:
+        libproton.activate_all()
+    else:
+        libproton.activate(session)
 
 
-def deactivate(session: Optional[int] = 0) -> None:
+def deactivate(session: Optional[int] = None) -> None:
     """
     Stop the specified session.
     The profiling session's data will still be in the memory, but no more data will be recorded.
 
     Args:
-        session (int): The session ID of the profiling session. Defaults to 0 (the first session started.)
+        session (int): The session ID of the profiling session. Defaults to None (all sessions)
 
     Returns:
         None
     """
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
-    libproton.deactivate(session)
+    if session is None:
+        libproton.deactivate_all()
+    else:
+        libproton.deactivate(session)
 
 
 def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> None:

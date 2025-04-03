@@ -224,3 +224,55 @@ def test_iv_dependent_matmul(type, device):
         BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K, type=type,  #
         num_stages=num_stages)
     torch.testing.assert_close(torch_output, triton_output, rtol=1e-2, atol=1e-2)
+
+
+def test_reverse_range(device):
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr):
+        x0 = tl.arange(0, 512)
+        tmp0 = tl.load(in_ptr + (512 - x0))
+        tl.store(out_ptr + x0, tmp0)
+
+    data = torch.randn((516, ), dtype=torch.float32, device=device)
+    res = torch.empty((512, ), dtype=torch.float32, device=device)
+    kernel[(1, )](data, res)
+    ref = torch.flip(data[1:513], [0])
+    assert (res == ref).all()
+
+
+@triton.jit
+def _triton_cummax_helper_fn(arg0_0, arg0_1, arg1_0, arg1_1):
+    tmp0 = arg0_0 > arg1_0
+    tmp1 = arg0_0 == arg1_0
+    tmp2 = arg0_1 > arg1_1
+    tmp3 = tmp1 & tmp2
+    tmp4 = tmp0 | tmp3
+    tmp5 = tl.where(tmp4, arg0_0, arg1_0)
+    tmp6 = tl.where(tmp4, arg0_1, arg1_1)
+    return tmp5, tmp6
+
+
+def test_inductor_cummax_bool(device):
+
+    @triton.jit
+    def triton_(in_ptr0, out_ptr0, out_ptr1, XBLOCK: tl.constexpr):
+        offset = tl.arange(0, XBLOCK)
+        tmp0 = tl.load(in_ptr0 + offset).to(tl.int1)
+        tmp1 = tmp0.to(tl.int1)
+        tmp3 = offset.to(tl.int64)
+        tmp5, tmp6, = tl.associative_scan((
+            tmp1,
+            tmp3,
+        ), 0, _triton_cummax_helper_fn)
+        tl.store(out_ptr0 + offset, tmp5)
+        tl.store(out_ptr1 + offset, tmp6)
+
+    a = torch.randn((64, ), device=device) > 0
+    values = torch.empty((64, ), dtype=torch.bool, device=device)
+    indices = torch.empty((64, ), dtype=torch.int64, device=device)
+    ref = torch.cummax(a, dim=0)
+
+    triton_[(1, )](a, values, indices, 64)
+    torch.testing.assert_close(ref.values, values)
+    torch.testing.assert_close(ref.indices, indices)

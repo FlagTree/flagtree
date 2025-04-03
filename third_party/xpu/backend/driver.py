@@ -396,3 +396,11 @@ class XPUDriver(GPUDriver):
         arch = int(os.environ.get('TRITON_XPU_ARCH', '3'))
         warp_size = 1  # we don't have warp
         return GPUTarget("xpu", arch, warp_size)
+
+    # TODO: implement
+    def get_active_torch_device(self):
+        return "xpu"
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench

@@ -2,6 +2,7 @@ import triton
 import triton.language as tl
 
 import torch
+import math
 
 
 @triton.jit
@@ -27,9 +28,9 @@ def add_kernel(
     tl.store(out_ptr + offsets, output, mask=mask)
 
 
-def test_module_walk():
+def test_module_walk(device):
     """
-    Test the MLIR bindings exposed for the out-ot-tree walk.
+    Test the MLIR bindings exposed for the out-of-tree walk.
     """
 
     def walk_fn(op):
@@ -52,30 +53,52 @@ def test_module_walk():
 
     kernel = add_kernel
     args = [
-        torch.empty((32, 32), device="cuda"),  # in_ptr0
-        torch.empty((32, 32), device="cuda"),  # in_ptr1
+        torch.empty((32, 32), device=device),  # in_ptr0
+        torch.empty((32, 32), device=device),  # in_ptr1
         1024,  # n_elements
-        torch.empty((32, 32), device="cuda"),  # out_ptr
+        torch.empty((32, 32), device=device),  # out_ptr
         16,  # BLOCK_SIZE
     ]
+    target = triton.runtime.driver.active.get_current_target()
+    backend = triton.compiler.compiler.make_backend(target)
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
-        signature={i: kernel._type_of(kernel._key_of(arg))
-                   for i, arg in enumerate(args)
-                   if i not in kernel.constexprs},
-        constants={i: arg
-                   for i, arg in enumerate(args)
-                   if not isinstance(arg, torch.Tensor)},
-        attrs=kernel._get_config(*args, ),
+        signature={kernel.arg_names[i]: triton.runtime.jit.mangle_type(arg)
+                   for i, arg in enumerate(args)},
+        constexprs={kernel.arg_names[i]: arg
+                    for i, arg in enumerate(args)
+                    if not isinstance(arg, torch.Tensor)},
     )
 
     context = triton._C.libtriton.ir.context()
-    target = triton.runtime.driver.active.get_current_target()
-    backend = triton.compiler.compiler.make_backend(target)
     options = backend.parse_options(dict())
     codegen_fns = dict()
+    module_map = backend.get_module_map()
     triton._C.libtriton.ir.load_dialects(context)
     backend.load_dialects(context)
 
-    ttir_module = src.make_ir(options, codegen_fns, context)
+    ttir_module = src.make_ir(options, codegen_fns, module_map, context)
     ttir_module.walk(walk_fn)
+
+
+def test_python_func_in_visit_call(device):
+
+    @triton.jit
+    def test_py_call_const_kernel(
+        in_ptr0,
+        out_ptr,
+        n_elements,
+        BLOCK_SIZE: "tl.constexpr",
+    ):
+        log2e: tl.constexpr = math.log2(math.e)
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(in_ptr0 + offsets, mask=mask)
+        output = x * log2e
+        tl.store(out_ptr + offsets, output, mask=mask)
+
+    x = torch.randn(4, device=device)
+    out = torch.zeros_like(x)
+    test_py_call_const_kernel[(4, )](x, out, 4, 4)

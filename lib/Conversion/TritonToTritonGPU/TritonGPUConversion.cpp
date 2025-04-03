@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <numeric>
 
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -56,20 +57,19 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // This will create newArg, and map(origArg, newArg)
   addArgumentMaterialization([&](OpBuilder &builder,
                                  RankedTensorType tensorType, ValueRange inputs,
-                                 Location loc) -> std::optional<Value> {
+                                 Location loc) -> Value {
     llvm_unreachable("Argument rematerialization should not happen in Triton "
                      "-> TritonGPU conversion");
-    return std::nullopt;
+    return {};
   });
 
   // If the origValue still has live user(s), use this to
   // convert origValue to newValue
   addSourceMaterialization([&](OpBuilder &builder, RankedTensorType tensorType,
-                               ValueRange inputs,
-                               Location loc) -> std::optional<Value> {
+                               ValueRange inputs, Location loc) -> Value {
     llvm_unreachable("Source rematerialization should not happen in Triton -> "
                      "TritonGPU Conversion");
-    return std::nullopt;
+    return {};
   });
 
   // This will be called when (desiredType != newOperandType)
@@ -79,7 +79,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
                                ValueRange inputs, Location loc) {
     auto cast =
         builder.create<triton::gpu::ConvertLayoutOp>(loc, tensorType, inputs);
-    return std::optional<Value>(cast.getResult());
+    return cast.getResult();
   });
 }
 
@@ -98,16 +98,17 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
                              triton::TritonDialect, cf::ControlFlowDialect,
-                             scf::SCFDialect>([&](Operation *op) {
-    bool hasLegalRegions = true;
-    for (auto &region : op->getRegions()) {
-      hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
-    }
-    if (hasLegalRegions && typeConverter.isLegal(op)) {
-      return true;
-    }
-    return false;
-  });
+                             scf::SCFDialect, ub::UBDialect>(
+      [&](Operation *op) {
+        bool hasLegalRegions = true;
+        for (auto &region : op->getRegions()) {
+          hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
+        }
+        if (hasLegalRegions && typeConverter.isLegal(op)) {
+          return true;
+        }
+        return false;
+      });
 
   // We have requirements for the data layouts
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {

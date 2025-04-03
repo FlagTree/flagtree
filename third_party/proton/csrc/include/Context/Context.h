@@ -5,6 +5,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,7 +32,20 @@ class ContextSource {
 public:
   ContextSource() = default;
   virtual ~ContextSource() = default;
-  virtual std::vector<Context> getContexts() = 0;
+
+  std::vector<Context> getContexts() {
+    auto contexts = getContextsImpl();
+    if (state.has_value()) {
+      contexts.push_back(state.value());
+    }
+    return contexts;
+  }
+
+  void setState(std::optional<Context> state) { ContextSource::state = state; }
+
+protected:
+  virtual std::vector<Context> getContextsImpl() = 0;
+  static thread_local std::optional<Context> state;
 };
 
 /// A scope is a context with a unique identifier.
@@ -88,8 +102,8 @@ public:
     if (isOpInProgress()) {
       return;
     }
-    setOpInProgress(true);
     startOp(scope);
+    setOpInProgress(true);
   }
   void exitOp(const Scope &scope) {
     if (!isOpInProgress()) {
@@ -106,11 +120,7 @@ protected:
   virtual void setOpInProgress(bool value) = 0;
 };
 
-/// Internal op interface is used for objects that do not internally generate
-/// new ops. For example, the TreeData object and the TraceData object do not
-/// generate new ops. In contrast, the CuptiProfiler object may contribute to
-/// new ops not trackable by the user.
-class InternalOpInterface : public OpInterface {
+class ThreadLocalOpInterface : public OpInterface {
 public:
   using OpInterface::OpInterface;
 
@@ -124,7 +134,7 @@ protected:
 
 private:
   inline static const int MAX_CACHE_OBJECTS = 10;
-  static thread_local std::map<InternalOpInterface *, bool> opInProgress;
+  static thread_local std::map<ThreadLocalOpInterface *, bool> opInProgress;
 };
 
 } // namespace proton

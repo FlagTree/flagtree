@@ -208,16 +208,6 @@ tt.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32
     tt.return %0, %1, %2 : tensor<8xf32>, tensor<8xf32>, tensor<8xf32>
 }
 
-// CHECK-LABEL: @test_combine_broadcast_constant_pattern
-tt.func @test_combine_broadcast_constant_pattern(%cst : f32) -> tensor<8x2xf32> {
-    // CHECK: %[[cst:.*]] = arith.constant dense<1.000000e+00> : tensor<8x2xf32>
-    %const = arith.constant dense<1.0> : tensor<8xf32>
-    %bst_out = tt.broadcast %const : tensor<8xf32> -> tensor<8x2xf32>
-
-    // CHECK-NEXT: tt.return %[[cst]] : tensor<8x2xf32>
-    tt.return %bst_out : tensor<8x2xf32>
-}
-
 // CHECK-LABEL: @test_canonicalize_masked_load_pattern
 tt.func @test_canonicalize_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf32>) {
     %true_mask = arith.constant dense<true> : tensor<8xi1>
@@ -289,22 +279,44 @@ tt.func @test_canonicalize_expand_dims(%arg0: tensor<f32>, %arg1: tensor<1xf32>)
     tt.return %ed, %bc2 : tensor<1x8xf32>, tensor<8x8xf32>
 }
 
-
 // CHECK-LABEL: @test_canonicalize_view
-tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>) {
-    %view0 = tt.reshape %arg0 {allow_reorder = true} : tensor<8xf32> -> tensor<2x4xf32>
-    // CHECK: %{{.*}} = tt.reshape %arg0 {allow_reorder = true} : tensor<8xf32> -> tensor<4x2xf32>
-    %view1 = tt.reshape %view0 {allow_reorder = true} : tensor<2x4xf32> -> tensor<4x2xf32>
+tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>) {
+    %view0 = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<2x4xf32>
+    // CHECK: %{{.*}} = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<4x2xf32>
+    %view1 = tt.reshape %view0 allow_reorder : tensor<2x4xf32> -> tensor<4x2xf32>
 
     %splat = tt.splat %arg1 : tensor<f32> -> tensor<8xf32>
     // CHECK: %{{.*}} = tt.splat %arg1 : tensor<f32> -> tensor<2x2x2xf32>
-    %view2 = tt.reshape %splat {allow_reorder = true} : tensor<8xf32> -> tensor<2x2x2xf32>
+    %view2 = tt.reshape %splat allow_reorder : tensor<8xf32> -> tensor<2x2x2xf32>
 
-    %view3 = tt.reshape %arg0 {allow_reorder = true} : tensor<8xf32> -> tensor<8xf32>
+    %view3 = tt.reshape %arg0 : tensor<8xf32> -> tensor<8xf32>
     // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<8xf32>
     %add = arith.addf %view3, %arg0 : tensor<8xf32>
 
-    tt.return %view1, %view2, %add : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>
+    // CHECK: %{{.*}} = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<2x2x2xf32>
+    %reshape = tt.reshape %view0 : tensor<2x4xf32> -> tensor<2x2x2xf32>
+
+    tt.return %view1, %view2, %add, %reshape : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>
+}
+
+// CHECK-LABEL: @test_canonicalize_reshape
+tt.func @test_canonicalize_reshape(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>) {
+    %reshape0 = tt.reshape %arg0 : tensor<8xf32> -> tensor<2x4xf32>
+    // CHECK: %{{.*}} = tt.reshape %arg0 : tensor<8xf32> -> tensor<4x2xf32>
+    %reshape1 = tt.reshape %reshape0 : tensor<2x4xf32> -> tensor<4x2xf32>
+
+    %splat = tt.splat %arg1 : tensor<f32> -> tensor<8xf32>
+    // CHECK: %{{.*}} = tt.splat %arg1 : tensor<f32> -> tensor<2x2x2xf32>
+    %reshape2 = tt.reshape %splat : tensor<8xf32> -> tensor<2x2x2xf32>
+
+    %reshape3 = tt.reshape %arg0 : tensor<8xf32> -> tensor<8xf32>
+    // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<8xf32>
+    %add = arith.addf %reshape3, %arg0 : tensor<8xf32>
+
+    // CHECK: %{{.*}} = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<2x2x2xf32>
+    %view = tt.reshape %reshape0 allow_reorder : tensor<2x4xf32> -> tensor<2x2x2xf32>
+
+    tt.return %reshape1, %reshape2, %add, %view : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>
 }
 
 // CHECK-LABEL: @test_canonicalize_broadcast
@@ -329,7 +341,7 @@ tt.func @test_fold_views() -> (tensor<16x8xf32>, tensor<16x128xf32>, tensor<1x1x
     %a = arith.constant dense<1.0> : tensor<1x128xf32>
 
     // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<16x8xf32>
-    %b = tt.reshape %a {allow_reorder = true} : tensor<1x128xf32> -> tensor<16x8xf32>
+    %b = tt.reshape %a allow_reorder : tensor<1x128xf32> -> tensor<16x8xf32>
 
     // CHECK-DAG: %{{.*}} = arith.constant dense<1.{{.*}}> : tensor<16x128xf32>
     %c = tt.broadcast %a : tensor<1x128xf32> -> tensor<16x128xf32>
@@ -354,4 +366,27 @@ tt.func @test_nested_transpose(%arg0: tensor<2x4x8xf32>) -> (tensor<8x2x4xf32>) 
     // CHECK: %[[res:.*]] = tt.trans %arg0 {order = array<i32: 2, 0, 1>}
     // CHECK: tt.return %[[res]]
     tt.return %b : tensor<8x2x4xf32>
+}
+
+// CHECK-LABEL: test_reshape_reduce
+tt.func @test_reshape_reduce(%0: tensor<32x4x2xi32>) -> (i32, tensor<16xi32>) {
+  // CHECK: tt.reshape %{{.+}} allow_reorder : tensor<32x4x2xi32> -> tensor<256xi32>
+  %1 = tt.reshape %0 : tensor<32x4x2xi32> -> tensor<256xi32>
+  %2 = "tt.reduce" (%1) ({
+    ^bb0(%arg7: i32, %arg8: i32):
+      %add = arith.addi %arg7, %arg8 : i32
+      tt.reduce.return %add : i32
+    }) {axis = 0 : i32} : (tensor<256xi32>) -> i32
+  %3 = tt.histogram %1 : tensor<256xi32> -> tensor<16xi32>
+  tt.return %2, %3 : i32, tensor<16xi32>
+}
+
+// CHECK-LABEL: test_rank_reduce_desc_load
+tt.func @test_rank_reduce_desc_load(%0: !tt.tensordesc<tensor<1x128x64xf16>>) -> (tensor<128x64xf16>) {
+  %c0 = arith.constant 0 : i32
+  // CHECK: %[[R:.+]] = tt.experimental_descriptor_load {{.*}} : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<128x64xf16>
+  // CHECK: tt.return %[[R]]
+  %l = tt.experimental_descriptor_load %0[%c0, %c0, %c0] : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<1x128x64xf16>
+  %r = tt.reshape %l : tensor<1x128x64xf16> -> tensor<128x64xf16>
+  tt.return %r :  tensor<128x64xf16>
 }

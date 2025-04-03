@@ -4,11 +4,7 @@ from ..runtime.jit import jit
 from . import core
 from . import math
 
-# constexpr utilities (triton metaprogramming sucks)
-
-
-def _unwrap_if_constexpr(o):
-    return o.value if isinstance(o, core.constexpr) else o
+# constexpr utilities
 
 
 def _log2(i: core.constexpr):
@@ -39,7 +35,7 @@ def cdiv(x, div):
     :param x: the input number
     :type x: Block
     :param div: the divisor
-    :param div: Block
+    :type div: Block
     """
     return (x + div - 1) // div
 
@@ -63,22 +59,21 @@ def softmax(x, ieee_rounding=False):
 
 @core._tensor_member_fn
 @jit
-def ravel(x):
+def ravel(x, can_reorder=False):
     """
     Returns a contiguous flattened view of :code:`x`.
 
     :param x: the input tensor
     :type x: Block
     """
-    return core.reshape(x, [x.numel], can_reorder=True)
+    return core.reshape(x, [x.numel], can_reorder=can_reorder)
 
 
 @jit
 def swizzle2d(i, j, size_i, size_j, size_g):
     """
-    Transforms indices of a row-major :code:`size_i * size_j` matrix into those
-    of one where the indices are col-major for each group of :code:`size_g`
-    rows.
+    Transforms the indices of a row-major `size_i * size_j` matrix into
+    the indices of a column-major matrix for each group of `size_g` rows.
 
     For example, for :code:`size_i = size_j = 4` and :code:`size_g = 2`, it will
     transform ::
@@ -106,9 +101,11 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     off_i = group_id * size_g
     # last group may have fewer rows
     size_g = core.minimum(size_i - off_i, size_g)
+    # linear index with respect to the first element in this group
+    ij = ij % size_gj
     # new row and column indices
-    new_i = off_i + (ij % size_g)
-    new_j = (ij % size_gj) // size_g
+    new_i = off_i + ij % size_g
+    new_j = ij // size_g
     return new_i, new_j
 
 
@@ -128,7 +125,10 @@ def zeros(shape, dtype):
 @jit
 def zeros_like(input):
     """
-    Creates a tensor of zeros with the same shape and type as a given tensor.
+    Returns a tensor of zeros with the same shape and type as a given tensor.
+
+    :param input: input tensor
+    :type input: Tensor
     """
     return zeros(input.shape, input.dtype)
 
@@ -259,11 +259,30 @@ def _sum_combine(a, b):
 # sum
 
 
+def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
+    dtype = core._unwrap_if_constexpr(dtype)
+    if dtype is not None:
+        return dtype
+
+    # For integer bitwidths less than 32, pick int32 with the same sign to
+    # avoid overflow.
+    out_dtype = None
+    if in_dtype.is_int_signed():
+        out_dtype = core.int32 if in_dtype.int_bitwidth < 32 else None
+    elif in_dtype.is_int_unsigned():
+        out_dtype = core.uint32 if in_dtype.int_bitwidth < 32 else None
+    return out_dtype
+
+
 @core._tensor_member_fn
 @jit
-@core._add_reduction_docstr("sum")
-def sum(input, axis=None, keep_dims=False):
-    input = core._promote_bfloat16_to_float32(input)
+@core._add_reduction_docstr("sum", dtype_arg="dtype")
+def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
+    # Pick a default dtype for the reduction if one was not specified.
+    out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
+
+    if out_dtype is not None:
+        input = input.to(out_dtype)
     return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
 
 
@@ -276,15 +295,11 @@ def _xor_combine(a, b):
 
 
 @core._tensor_member_fn
-@core.builtin
+@jit
 @core._add_reduction_docstr("xor sum")
-def xor_sum(input, axis=None, keep_dims=False, _builder=None, _generator=None):
-    scalar_ty = input.type.scalar
-    if not scalar_ty.is_int():
-        raise ValueError("xor_sum only supported for integers")
-
-    input = core._promote_bfloat16_to_float32(input, _builder=_builder)
-    return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims, _builder=_builder, _generator=_generator)
+def xor_sum(input, axis=None, keep_dims=False):
+    core.static_assert(input.type.scalar.is_int(), "xor_sum only supported for integers")
+    return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims)
 
 
 # cumsum
@@ -326,8 +341,8 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     y = core.reshape(x, shape)
     # slice left/right with 'stride' 2**(n_dims - i - 1)
     mask = core.arange(0, 2)[None, :, None]
-    left = core.broadcast_to(sum(y * (1 - mask), 1)[:, None, :], shape)
-    right = core.broadcast_to(sum(y * mask, 1)[:, None, :], shape)
+    left = core.broadcast_to(sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)
+    right = core.broadcast_to(sum(y * mask, 1)[:, None, :], shape).to(y.dtype)
     left = core.reshape(left, x.shape)
     right = core.reshape(right, x.shape)
     # actual compare-and-swap
@@ -335,7 +350,7 @@ def _compare_and_swap(x, flip, i: core.constexpr, n_dims: core.constexpr):
     ileft = left.to(idtype, bitcast=True)
     iright = right.to(idtype, bitcast=True)
     ix = x.to(idtype, bitcast=True)
-    ret = ix ^ core.where((left > right) ^ flip, ileft ^ iright, zeros_like(ix))
+    ret = ix ^ core.where((left > right) != flip, ileft ^ iright, zeros_like(ix))
     return ret.to(x.dtype, bitcast=True)
 
 
@@ -367,6 +382,16 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
 @core._tensor_member_fn
 @jit
 def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    """
+    Sorts a tensor along a specified dimension.
+
+    :param x: The input tensor to be sorted.
+    :type x: Tensor
+    :param dim: The dimension along which to sort the tensor. If None, the tensor is sorted along the last dimension. Currently, only sorting along the last dimension is supported.
+    :type dim: int, optional
+    :param descending: If set to True, the tensor is sorted in descending order. If set to False, the tensor is sorted in ascending order.
+    :type descending: bool, optional
+    """
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
@@ -381,8 +406,8 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
 
 
 def _get_flip_dim(dim, shape):
-    dim = _unwrap_if_constexpr(dim)
-    shape = _unwrap_if_constexpr(shape)
+    dim = core._unwrap_if_constexpr(dim)
+    shape = core._unwrap_if_constexpr(shape)
     if dim is None:
         dim = len(shape) - 1
     assert dim == len(shape) - 1, "Currently only support flipping the last dimension"
@@ -402,11 +427,13 @@ def flip(x, dim=None):
     """
     core.static_assert(_is_power_of_two(x.shape[_get_flip_dim(dim, x.shape)]))
     core.static_assert(_is_power_of_two(x.numel))
-    # # reshape the tensor to have all dimensions be 2.
-    # # TODO: We shouldn't have to change the dimensions not sorted.
+    # reshape the tensor to have all dimensions be 2.
+    # TODO: We shouldn't have to change the dimensions not sorted.
     steps: core.constexpr = _log2(x.numel)
     start: core.constexpr = _log2(x.numel) - _log2(x.shape[_get_flip_dim(dim, x.shape)])
-    y = core.reshape(x, [2] * steps)
+
+    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    y = core.reshape(x.to(idtype, bitcast=True), [2] * steps)
     y = core.expand_dims(y, start)
     flip = (core.arange(0, 2)[:, None] == 1 - core.arange(0, 2))
     for i in core.static_range(start, steps):
@@ -414,23 +441,24 @@ def flip(x, dim=None):
         for j in core.static_range(0, steps + 1):
             if j != i and j != i + 1:
                 flip2 = core.expand_dims(flip2, j)
-        y = sum(y * flip2, i + 1, keep_dims=True)
-    x = core.reshape(y, x.shape)
+        y = sum(y * flip2, i + 1, keep_dims=True, dtype=y.dtype)
+    x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
 
 @jit
 def interleave(a, b):
     """
-    Interleaves the values of two tensors along their last dimension.
+    Interleaves the values of two tensors along their last dimension. The two tensors must have the same shape.
+    Equivalent to `tl.join(a, b).reshape(a.shape[:-1] + [2 * a.shape[-1]])`
 
-    The two tensors must have the same shape.
-
-    Equivalent to `tl.join(a, b).reshape(a.shape[-1:] + [2 * a.shape[-1]])`
+    :param a: The first input tensor.
+    :type a: Tensor
+    :param b: The second input tensor.
+    :type b: Tensor
     """
     c = core.join(a, b)
 
-    assert isinstance(c.shape, list)
     if len(c.shape) == 1:
         # We must have interleaved two scalars.
         return c

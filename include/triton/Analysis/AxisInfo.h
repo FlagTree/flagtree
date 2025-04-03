@@ -27,11 +27,12 @@ public:
 public:
   AxisInfo() : AxisInfo({}, {}, {}) {}
 
-  AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy)
+  AxisInfo(ArrayRef<int64_t> contiguity, ArrayRef<int64_t> divisibility,
+           ArrayRef<int64_t> constancy)
       : AxisInfo(contiguity, divisibility, constancy, std::nullopt) {}
 
-  AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy,
-           std::optional<int64_t> constantValue)
+  AxisInfo(ArrayRef<int64_t> contiguity, ArrayRef<int64_t> divisibility,
+           ArrayRef<int64_t> constancy, std::optional<int64_t> constantValue)
       : contiguity(contiguity), divisibility(divisibility),
         constancy(constancy), constantValue(constantValue) {
     assert(divisibility.size() == contiguity.size());
@@ -180,8 +181,8 @@ public:
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
       initialize(funcOp);
       funcOp.walk([&](CallOpInterface callOp) {
-        auto callee =
-            dyn_cast<FunctionOpInterface>(callOp.resolveCallable(&symbolTable));
+        auto callee = dyn_cast<FunctionOpInterface>(
+            callOp.resolveCallableInTable(&symbolTable));
         update(callOp, callee);
       });
     }
@@ -201,8 +202,22 @@ public:
     return &(it->second);
   }
 
-  unsigned getPtrContiguity(Value ptr);
-  unsigned getPtrAlignment(Value ptr);
+  unsigned getContiguity(Value value);
+  unsigned getAlignment(Value value);
+
+  // Overloads of the above methods but have separated elementBitWidth to
+  // calculate the contiguity. These are useful for computing axis info when
+  // lowering to hardware intrinsics that require a scalar/warp-uniform base ptr
+  // with separate per lane offsets like AMD buffer operations.
+  //
+  // As a concrete example, instead of a single tensor<128x64x!tt.ptr<f16>>
+  // value, now we have two separate values: !tt.ptr<f16> for the base pointer
+  // and tensor<128x64xi32> for the offset. For such cases, we want to compute
+  // the contiguity on the offsets but use the pointee element type bit width
+  // instead of the offset element type bit width for alignment
+  unsigned getContiguity(Value offsetsValue, unsigned elementBitWidth);
+  unsigned getAlignment(Value offsetsValue, unsigned elementBitWidth);
+
   unsigned getMaskAlignment(Value mask);
 
 private:

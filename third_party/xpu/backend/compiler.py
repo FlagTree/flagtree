@@ -10,7 +10,8 @@ import os
 
 from dataclasses import dataclass
 import functools
-from typing import Any, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional
+from types import ModuleType
 import hashlib
 from pathlib import Path
 
@@ -289,6 +290,10 @@ class XPUBackend(BaseBackend):
     def get_codegen_implementation(self):
         codegen_fns = dict()
         return codegen_fns
+
+    # TODO: implement
+    def get_module_map(self) -> Dict[str, ModuleType]:
+        return {}
 
     def load_dialects(self, context):
         xpu.load_dialects(context)

@@ -4,28 +4,22 @@
 #include <limits>
 #include <numeric>
 
-#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/Liveness.h"
-#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Alias.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
-using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
-using ::mlir::triton::gpu::BlockedEncodingAttr;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getContigPerThread;
-using ::mlir::triton::gpu::getOrder;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::getSizePerThread;
-using ::mlir::triton::gpu::getUniqueContigPerThread;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
-using ::mlir::triton::gpu::SliceEncodingAttr;
+#define DEBUG_TYPE "allocation-shared-memory"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 
@@ -36,61 +30,32 @@ namespace triton {
 
 // Bitwidth of pointers
 constexpr int kPtrBitWidth = 64;
+// Max shmem LDS/STS instruction in bits
+constexpr int kMaxShmemVecBitLength = 128;
 
-static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
-getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
-  auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout);
-  auto srcDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(srcLayout);
-  auto dstMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout);
-  auto dstDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(dstLayout);
-
-  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere()) &&
-         "mma -> mma layout conversion is only supported on Ampere");
-
-  // mma or dot layout does not have an order, so the order depends on the
-  // layout of the other operand.
-  auto inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
-                                              : getOrder(srcLayout);
-  auto outOrd = (dstMmaLayout || dstDotLayout) ? getOrder(srcLayout)
-                                               : getOrder(dstLayout);
-
-  return {inOrd, outOrd};
-}
-
-SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
+static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
+                                               RankedTensorType dstTy) {
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
+  if (!cvtNeedsSharedMemory(srcTy, dstTy)) {
+    return {};
+  }
+
   if (shouldUseDistSmem(srcLayout, dstLayout)) {
     // TODO: padding to avoid bank conflicts
-    return convertType<unsigned, int64_t>(getShapePerCTA(srcTy));
+    return convertType<unsigned, int64_t>(gpu::getShapePerCTA(srcTy));
   }
 
-  if (isMfmaToDotShortcut(srcTy, dstTy))
-    return {};
+  assert(srcLayout && dstLayout && "Unexpected layout in getRepShapeForCvt()");
 
-  // MmaToDotShortcut and MmaToMmaShortcut doesn't use shared mem
-  if (auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
-    if (mlir::isa<DotOperandEncodingAttr>(dstLayout)) {
-      if (isMmaToDotShortcut(srcTy, dstTy)) {
-        return {};
-      }
-    } else if (auto dstMmaLayout =
-                   mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout)) {
-      if (isMmaToMmaShortcut(srcTy, dstTy)) {
-        return {};
-      }
-    }
-  }
+  auto srcShapePerCTA = gpu::getShapePerCTA(srcTy);
+  auto dstShapePerCTA = gpu::getShapePerCTA(dstTy);
+  auto srcShapePerCTATile = gpu::getShapePerCTATile(srcTy);
+  auto dstShapePerCTATile = gpu::getShapePerCTATile(dstTy);
 
-  assert(srcLayout && dstLayout && "Unexpected layout in getRepShape()");
-
-  auto srcShapePerCTA = getShapePerCTA(srcTy);
-  auto dstShapePerCTA = getShapePerCTA(dstTy);
-  auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
-  auto dstShapePerCTATile = getShapePerCTATile(dstLayout, dstTy.getShape());
+  assert(srcTy.getRank() == dstTy.getRank() &&
+         "src and dst must have the same rank");
 
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> repShape(rank);
@@ -102,83 +67,164 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op) {
   return repShape;
 }
 
-SmallVector<unsigned>
-getScratchConfigForCvtLayout(triton::gpu::ConvertLayoutOp op, unsigned &inVec,
-                             unsigned &outVec) {
-  auto repShape = getRepShapeForCvtLayout(op);
-  if (repShape.empty())
-    return repShape;
-  auto rank = repShape.size();
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
-  Attribute srcLayout = srcTy.getEncoding();
-  Attribute dstLayout = dstTy.getEncoding();
-
-  assert(!isMfmaToDotShortcut(srcTy, dstTy));
-
-  auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
-  unsigned srcContigPerThread =
-      getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
-  unsigned dstContigPerThread =
-      getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  unsigned innerDim = rank - 1;
-  inVec = outOrd[0] != innerDim  ? 1
-          : inOrd[0] != innerDim ? 1
-                                 : srcContigPerThread;
-  outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
-
-  // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
-  // codegen.
-  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
-    if (mma.getVersionMajor() == 1) {
-      inVec = srcContigPerThread;
-    } else if (mlir::isa<BlockedEncodingAttr>(dstLayout)) {
-      // when storing from mma layout and loading in blocked layout vectorizing
-      // the load back gives better performance even if there is a
-      // transposition.
-      outVec = dstContigPerThread;
-    }
-  }
-
-  if (rank <= 1)
-    return repShape;
-  // pad the last dimension
-  unsigned paddedDim = rank - 1;
-  if (auto dstBlockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(dstLayout)) {
-    paddedDim = dstBlockedLayout.getOrder()[0];
-  }
-  unsigned pad = std::max(inVec, outVec);
-  repShape[paddedDim] += pad;
-  return repShape;
-}
-
-// TODO: extend beyond scalars
-SmallVector<unsigned> getScratchConfigForAtomicRMW(triton::AtomicRMWOp op) {
+// Both `atomic_cas` and `atomic_rmw need a single scratch element if returning
+// a scalar value because Triton's block-based programming model ensures that
+// all threads in each block see the same return value, even those threads that
+// do not participate in the atomic operation
+static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   SmallVector<unsigned> smemShape;
-  if (isa<RankedTensorType>(op.getPtr().getType())) {
-    // do nothing or just assert because shared memory is not used in tensor up
-    // to now
-  } else {
-    // need only bytes for scalar
-    // always vec = 1 and elemsPerThread = 1 for scalar?
+  if (atomicNeedsSharedMemory(result)) {
     smemShape.push_back(1);
   }
   return smemShape;
 }
 
-SmallVector<unsigned> getScratchConfigForAtomicCAS(triton::AtomicCASOp op) {
-  return SmallVector<unsigned>{1};
+std::pair<unsigned, unsigned>
+getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy) {
+  Attribute srcLayout = srcTy.getEncoding();
+  Attribute dstLayout = dstTy.getEncoding();
+
+  auto srcLinAttr = gpu::toLinearEncoding(srcLayout, srcTy.getShape());
+  auto dstLinAttr = gpu::toLinearEncoding(dstLayout, dstTy.getShape());
+  auto inOrd = srcLinAttr.getOrder();
+  auto outOrd = dstLinAttr.getOrder();
+
+  unsigned rank = srcTy.getRank();
+
+  unsigned srcContigPerThread = srcLinAttr.getContigPerThread()[inOrd[0]];
+  unsigned dstContigPerThread = dstLinAttr.getContigPerThread()[outOrd[0]];
+  // TODO: Fix the legacy issue that outOrd[0] == 0 always means
+  //       that we cannot do vectorization.
+  unsigned innerDim = rank - 1;
+  unsigned inVec = outOrd[0] != innerDim  ? 1
+                   : inOrd[0] != innerDim ? 1
+                                          : srcContigPerThread;
+  unsigned outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
+
+  if (isa<gpu::NvidiaMmaEncodingAttr>(srcLayout) &&
+      isa<gpu::BlockedEncodingAttr>(dstLayout)) {
+    // when storing from mma layout and loading in blocked layout vectorizing
+    // the load back gives better performance even if there is a
+    // transposition.
+    outVec = dstContigPerThread;
+  }
+  return {inVec, outVec};
+}
+
+ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
+                                     RankedTensorType dstTy) {
+  // Initialize vector sizes and stride
+  auto repShape = getRepShapeForCvt(srcTy, dstTy);
+  if (repShape.empty())
+    return ScratchConfig({}, {});
+  ScratchConfig scratchConfig(repShape, repShape);
+  auto rank = repShape.size();
+  Attribute srcLayout = srcTy.getEncoding();
+  Attribute dstLayout = dstTy.getEncoding();
+
+  assert(cvtNeedsSharedMemory(srcTy, dstTy));
+  auto outOrd = gpu::toLinearEncoding(dstLayout, dstTy.getShape()).getOrder();
+  scratchConfig.order = outOrd;
+
+  std::tie(scratchConfig.inVec, scratchConfig.outVec) =
+      getScratchCvtInOutVecLengths(srcTy, dstTy);
+  // We can't write a longer vector than the shape of shared memory.
+  // This shape might be smaller than the tensor shape in case we decided to
+  // do the conversion in multiple iterations.
+  unsigned contiguousShapeDim = scratchConfig.repShape[scratchConfig.order[0]];
+  scratchConfig.inVec = std::min(scratchConfig.inVec, contiguousShapeDim);
+  scratchConfig.outVec = std::min(scratchConfig.outVec, contiguousShapeDim);
+  // Clamp the vector length to kMaxShmemVecBitLength / element bitwidth as this
+  // is the max vectorisation
+  auto inBitWidth = isa<PointerType>(srcTy.getElementType())
+                        ? kPtrBitWidth
+                        : srcTy.getElementTypeBitWidth();
+  auto outBitWidth = isa<PointerType>(dstTy.getElementType())
+                         ? kPtrBitWidth
+                         : dstTy.getElementTypeBitWidth();
+  scratchConfig.inVec =
+      std::min(scratchConfig.inVec, kMaxShmemVecBitLength / inBitWidth);
+  scratchConfig.outVec =
+      std::min(scratchConfig.outVec, kMaxShmemVecBitLength / outBitWidth);
+
+  // No padding is required if the tensor is 1-D, or if all dimensions except
+  // the first accessed dimension have a size of 1.
+  if (rank <= 1 || product(repShape) == repShape[outOrd[0]])
+    return scratchConfig;
+
+  auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
+  scratchConfig.paddedRepShape[outOrd[0]] += paddedSize;
+  return scratchConfig;
+}
+
+unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
+  if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+    ReduceOpHelper helper(reduceOp);
+    return helper.getScratchSizeInBytes();
+  }
+  if (auto scanOp = dyn_cast<ScanOp>(op)) {
+    ScanLoweringHelper helper(scanOp);
+    return helper.getScratchSizeInBytes();
+  }
+  if (auto gatherOp = dyn_cast<GatherOp>(op)) {
+    GatherLoweringHelper helper(gatherOp);
+    return helper.getScratchSizeInBytes();
+  }
+  if (auto histogram = dyn_cast<HistogramOp>(op)) {
+    auto dstTy = histogram.getType();
+    int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    return std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
+           std::max<int>(8, dstTy.getElementTypeBitWidth()) / 8;
+  }
+  if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
+    auto srcTy = cvtLayout.getSrc().getType();
+    auto dstTy = cvtLayout.getType();
+    auto srcEncoding = srcTy.getEncoding();
+    auto dstEncoding = dstTy.getEncoding();
+    if (mlir::isa<gpu::SharedEncodingTrait>(srcEncoding) ||
+        mlir::isa<gpu::SharedEncodingTrait>(dstEncoding)) {
+      // Conversions from/to shared memory do not need scratch memory.
+      return 0;
+    }
+    // ConvertLayoutOp with both input/output non-shared_layout
+    // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
+    //       also possible to realize it with other approaches in restricted
+    //       conditions, such as warp-shuffle
+    auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
+    auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
+    return isa<PointerType>(srcTy.getElementType())
+               ? elems * kPtrBitWidth / 8
+               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
+  }
+  if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
+    auto value = op->getOperand(0);
+    // only scalar requires scratch memory
+    // make it explicit for readability
+    if (dyn_cast<RankedTensorType>(value.getType())) {
+      return 0;
+    }
+    auto smemShape = getRepShapeForAtomic(op->getResult(0));
+    auto elems = getNumScratchElements(smemShape);
+    auto elemTy = cast<PointerType>(value.getType()).getPointeeType();
+    assert(!isa<PointerType>(elemTy) && "unexpected pointer type");
+    return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
+  }
+  if (isa<ExperimentalTensormapCreateOp>(op)) {
+    constexpr int32_t kTMASize = 128;
+    return kTMASize;
+  }
+  return 0;
 }
 
 class AllocationAnalysis {
 public:
   AllocationAnalysis(Operation *operation,
                      Allocation::FuncAllocMapT *funcAllocMap,
-                     Allocation *allocation)
+                     Allocation *allocation,
+                     AllocationAnalysisScratchSizeFn scratchSizeGetter)
       : operation(operation), funcAllocMap(funcAllocMap),
-        allocation(allocation) {
+        allocation(allocation), scratchSizeGetter(scratchSizeGetter) {
     run();
   }
 
@@ -199,36 +245,30 @@ private:
 
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
-    // Values returned from scf.yield will not be allocated even though they
-    // have the shared encoding.
-    // For example: %a = scf.if -> yield
-    // %a must be allocated elsewhere by other operations.
-    // FIXME(Keren): extract and insert are always alias for now
-    if (!maybeSharedAllocationOp(op))
+    auto alloc = dyn_cast<gpu::LocalAllocOp>(op);
+    if (!alloc || !alloc.isSharedMemoryAlloc())
       return;
+    // Bytes could be a different value once we support padding or other
+    // allocation policies.
+    auto allocType = alloc.getType();
+    auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
+    auto bytes =
+        product<int64_t>(shapePerCTA) * allocType.getElementTypeBitWidth() / 8;
 
-    // XXX(Keren): Why this hard-coded alignment?
-    size_t kAlignment = 8;
-    for (Value result : op->getResults()) {
-      if (auto alloc = result.getDefiningOp<triton::gpu::LocalAllocOp>()) {
-        // Bytes could be a different value once we support padding or other
-        // allocation policies.
-        auto allocType = alloc.getType();
-        auto shapePerCTA = triton::gpu::getShapePerCTA(allocType);
-        auto bytes = product<int64_t>(shapePerCTA) *
-                     allocType.getElementTypeBitWidth() / 8;
-
-        // XXX(Keren): magic numbers 256 and 1024
-        // benzh@maybe alignment should be passed in.
-        // Software swizzling calculates phase based on offset, while hardware
-        // swizzling do that based on physical address. Thus only by setting the
-        // alignment to 1024 can ensure the correctness. 
-        if (bytes > 256)
-          kAlignment = 1024;
-        allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
-                                                             kAlignment);
-      }
+    auto alignment = alloc.getAlignmentOrDefault();
+    LLVM_DEBUG({
+      llvm::dbgs() << "check localAlloc in getExplicitValueSize: ";
+      alloc.dump();
+    });
+    int sharingGroup = -1;
+    if (alloc->hasAttr("allocation.shareGroup")) {
+      sharingGroup =
+          mlir::cast<IntegerAttr>(alloc->getAttr("allocation.shareGroup"))
+              .getInt();
+      LDBG("with shareGroup of " << sharingGroup);
     }
+    allocation->addBuffer<BufferT::BufferKind::Explicit>(
+        alloc, bytes, alignment, 0, sharingGroup);
   }
 
   template <BufferT::BufferKind T>
@@ -246,95 +286,37 @@ private:
 
   /// Initializes temporary shared memory for a given operation.
   void getScratchValueSize(Operation *op) {
-    const size_t scratchAlignment = 128;
-    if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
-      ReduceOpHelper helper(reduceOp);
-      unsigned bytes = helper.getScratchSizeInBytes();
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
-    } else if (auto scanOp = dyn_cast<triton::ScanOp>(op)) {
-      ScanLoweringHelper helper(scanOp);
-      unsigned bytes = helper.getScratchSizeInBytes();
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
-    } else if (auto histogram = dyn_cast<triton::HistogramOp>(op)) {
-      auto dstTy = histogram.getType();
-      int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
-          op->getParentOfType<ModuleOp>());
-      auto bytes = std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
-                   std::max<int>(8, dstTy.getElementTypeBitWidth()) / 8;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
-    } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtLayout.getSrc().getType();
-      auto dstTy = cvtLayout.getType();
-      auto srcEncoding = srcTy.getEncoding();
-      auto dstEncoding = dstTy.getEncoding();
-      if (mlir::isa<SharedEncodingAttr>(srcEncoding) ||
-          mlir::isa<SharedEncodingAttr>(dstEncoding)) {
-        // Conversions from/to shared memory do not need scratch memory.
-        return;
-      }
-      // ConvertLayoutOp with both input/output non-shared_layout
-      // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
-      //       also possible to realize it with other approaches in restricted
-      //       conditions, such as warp-shuffle
-      unsigned inVec = 0;
-      unsigned outVec = 0;
-      auto smemShape = getScratchConfigForCvtLayout(cvtLayout, inVec, outVec);
-      unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                       std::multiplies{});
-      auto bytes =
-          isa<triton::PointerType>(srcTy.getElementType())
-              ? elems * kPtrBitWidth / 8
-              : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
-    } else if (auto atomicRMWOp = dyn_cast<triton::AtomicRMWOp>(op)) {
-      auto value = op->getOperand(0);
-      // only scalar requires scratch memory
-      // make it explicit for readability
-      if (dyn_cast<RankedTensorType>(value.getType())) {
-        // nothing to do
-      } else {
-        auto smemShape = getScratchConfigForAtomicRMW(atomicRMWOp);
-        unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                         std::multiplies{});
-        auto elemTy =
-            cast<triton::PointerType>(value.getType()).getPointeeType();
-        auto bytes =
-            isa<triton::PointerType>(elemTy)
-                ? elems * kPtrBitWidth / 8
-                : elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
-        maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                            scratchAlignment);
-      }
-    } else if (auto atomicCASOp = dyn_cast<triton::AtomicCASOp>(op)) {
-      // only scalar requires scratch memory
-      // make it explicit for readability
-      auto value = op->getOperand(0);
-      if (dyn_cast<RankedTensorType>(value.getType())) {
-        // nothing to do
-      } else {
-        auto smemShape = getScratchConfigForAtomicCAS(atomicCASOp);
-        unsigned elems = std::accumulate(smemShape.begin(), smemShape.end(), 1,
-                                         std::multiplies{});
-        auto elemTy =
-            cast<triton::PointerType>(value.getType()).getPointeeType();
-        auto bytes = isa<triton::PointerType>(elemTy)
-                         ? elems * kPtrBitWidth / 8
-                         : elems * elemTy.getIntOrFloatBitWidth() / 8;
-        maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                            scratchAlignment);
-      }
-    } else if (auto callOp = dyn_cast<CallOpInterface>(op)) {
+    constexpr size_t scratchAlignment = 128;
+    if (auto callOp = dyn_cast<CallOpInterface>(op)) {
       auto callable = callOp.resolveCallable();
       auto funcOp = dyn_cast<FunctionOpInterface>(callable);
       auto *funcAlloc = &(*funcAllocMap)[funcOp];
       auto bytes = funcAlloc->getSharedMemorySize();
       maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, bytes,
                                                           scratchAlignment);
+      return;
     }
+    if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
+      // `ttg.warp_specialize` needs memory to pass its explicit captures. Pack
+      // the captures like a struct.
+      auto [captureSize, captureAlign] = ws.getCaptureSizeAlign();
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, captureSize,
+                                                          captureAlign);
+      return;
+    }
+    if (auto func = dyn_cast<FunctionOpInterface>(op)) {
+      unsigned numWarpIndices = 0;
+      // Warp specialization communicates states over shared memory to each
+      // warp. Add space for an i8 for each warpgroup warp.
+      func.walk([&](gpu::WarpSpecializeOp op) {
+        numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
+      });
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices);
+      return;
+    }
+    unsigned bytes = scratchSizeGetter(op);
+    maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
+                                                        scratchAlignment);
   }
 
   void getValueAlias(Value value, SharedMemoryAliasAnalysis &analysis) {
@@ -357,14 +339,26 @@ private:
       getExplicitValueSize(op);
       getScratchValueSize(op);
     });
+    LDBG("getValuesAndSizes --");
+    for (auto valueBufferIter : allocation->valueBuffer) {
+      auto *buffer = valueBufferIter.second;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "-- buffer " << buffer->id << " " << buffer->size << " "
+                 << buffer->offset << " " << buffer->sharingGroup << "\n");
+    }
     // Get the alias values
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     SharedMemoryAliasAnalysis *aliasAnalysis =
         solver->load<SharedMemoryAliasAnalysis>();
-    if (failed(solver->initializeAndRun(operation))) {
-      // TODO: return error instead of bailing out..
-      llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
-    }
+    // Run the analysis rooted at every isolated from above operation, including
+    // the top-level function but also any nested regions.
+    operation->walk([&](Operation *op) {
+      if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+          failed(solver->initializeAndRun(op))) {
+        // TODO: return error instead of bailing out..
+        llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
+      }
+    });
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
       for (auto operand : op->getOperands()) {
         getValueAlias(operand, *aliasAnalysis);
@@ -378,11 +372,16 @@ private:
   /// Computes the liveness range of the allocated value.
   /// Each buffer is allocated only once.
   void resolveExplicitBufferLiveness(
-      function_ref<Interval<size_t>(Value value)> getLiveness) {
+      function_ref<Interval<size_t>(Value value, BufferT *buffer)>
+          getLiveness) {
     for (auto valueBufferIter : allocation->valueBuffer) {
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
-      bufferRange[buffer] = getLiveness(value);
+      bufferRange[buffer] = getLiveness(value, buffer);
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
+        value.dump();
+      });
     }
   }
 
@@ -390,11 +389,10 @@ private:
   /// values because each allocated buffer could be an alias of others, if block
   /// arguments are involved.
   void resolveAliasBufferLiveness(
-      function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto aliasBufferIter : allocation->aliasBuffer) {
-      auto value = aliasBufferIter.first;
-      auto buffers = aliasBufferIter.second;
-      auto range = getLiveness(value);
+      function_ref<Interval<size_t>(Value value, BufferT *buffer)>
+          getLiveness) {
+    for (const auto &[value, buffers] : allocation->aliasBuffer) {
+      auto range = getLiveness(value, buffers.front());
       for (auto *buffer : buffers) {
         auto minId = range.start();
         auto maxId = range.end();
@@ -415,13 +413,37 @@ private:
       const DenseMap<Operation *, size_t> &operationId) {
     // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
-      for (auto opScratchIter : container) {
+      for (auto [op, buffer] : container) {
+        // Buffers owned by the function are assumed live for the whole
+        // function. This memory is used for warp specialization codegen.
+        // FIXME: Spooky-action-at-a-distance. Find a better way to model this.
+        if (op == operation) {
+          bufferRange.insert(
+              {buffer, Interval(size_t(), std::numeric_limits<size_t>::max())});
+          continue;
+        }
+
         // Any scratch memory's live range is the current operation's live
         // range.
-        auto *op = opScratchIter.first;
-        auto *buffer = opScratchIter.second;
-        bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                             operationId.lookup(op) + 1)});
+        // Extend live range when asyncTaskId is not empty (i.e when we have
+        // warp spec).
+        if (getAsyncTaskIds(op).empty()) {
+          bufferRange.insert(
+              {buffer, Interval(operationId.at(op), operationId.at(op) + 1)});
+        } else {
+          for (auto tId : getAsyncTaskIds(op))
+            buffer->regionIds.insert(tId);
+          // For warp-specialized code, we can assume each region has its own
+          // copy of a scratch buffer, i.e each region is for a single taskId.
+          // In that case, we don't need to extend the liveness of scratch
+          // buffers.
+          bufferRange.insert({buffer, Interval(operationId.lookup(op),
+                                               operationId.lookup(op) + 1)});
+        }
+        LLVM_DEBUG({
+          llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
+          op->dump();
+        });
       }
     };
     processScratchMemory(allocation->opScratch);
@@ -452,19 +474,38 @@ private:
 
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
-    auto getValueLivenessRange = [&](Value value) {
+    auto getValueLivenessRange = [&](Value value, BufferT *buffer) {
       auto liveOperations = liveness.resolveLiveness(value);
-      auto minId = std::numeric_limits<size_t>::max();
-      auto maxId = std::numeric_limits<size_t>::min();
+      // Update regions for buffer.
       std::for_each(liveOperations.begin(), liveOperations.end(),
                     [&](Operation *liveOp) {
-                      if (operationId[liveOp] < minId) {
-                        minId = operationId[liveOp];
-                      }
-                      if ((operationId[liveOp] + 1) > maxId) {
-                        maxId = operationId[liveOp] + 1;
+                      for (auto rId : getAsyncTaskIds(liveOp)) {
+                        buffer->regionIds.insert(rId);
                       }
                     });
+      auto minId = std::numeric_limits<size_t>::max();
+      auto maxId = std::numeric_limits<size_t>::min();
+      std::for_each(
+          liveOperations.begin(), liveOperations.end(), [&](Operation *liveOp) {
+            if (buffer->regionIds.size() > 1 || buffer->sharingGroup >= 0) {
+              // For a buffer that is associated with warp
+              // specialization, due to producer-consumer channel, it
+              // should have at least two regions, and it will be live
+              // throughout. For a buffer that is local to a consumer:
+              // we need to make sure not to overlap with local
+              // buffers from another consumer. This will be handled
+              // when building the interference graph.
+              minId = 0;
+              maxId = operationId.size();
+              return;
+            }
+            if (operationId[liveOp] < minId) {
+              minId = operationId[liveOp];
+            }
+            if ((operationId[liveOp] + 1) > maxId) {
+              maxId = operationId[liveOp] + 1;
+            }
+          });
       return Interval(minId, maxId);
     };
 
@@ -473,16 +514,102 @@ private:
     resolveScratchBufferLiveness(operationId);
   }
 
+  void dumpBuffers() {
+    LDBG("Dump bufferRange: id size offset sharingGroup ---------");
+    for (auto bufferIter : bufferRange) {
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- " << bufferIter.first->id << " "
+                     << bufferIter.first->size << " "
+                     << bufferIter.first->offset << " "
+                     << bufferIter.first->sharingGroup << " regions [";
+        for (auto tId : bufferIter.first->regionIds) {
+          llvm::dbgs() << tId << " ";
+        }
+        llvm::dbgs() << "] interval " << bufferIter.second.start() << " "
+                     << bufferIter.second.end() << "\n";
+      });
+    }
+  }
+
+  void dumpAllocationSize() const {
+    LDBG("Dump shared memory allocation size -----------");
+    auto liveBuffers = allocation->getLiveBuffers();
+    auto analyzedSize = 0;
+    for (auto [op, bufferIds] : liveBuffers) {
+      auto size = 0;
+      for (auto bufferId : bufferIds) {
+        auto bufferSize = allocation->getAllocatedSize(bufferId);
+        size += bufferSize;
+      }
+      analyzedSize = std::max(analyzedSize, size);
+    }
+    llvm::dbgs() << "Allocated: " << allocation->sharedMemorySize
+                 << ", analyzed: " << analyzedSize << "\n";
+  }
+
+  void dumpInterferenceGraph(const GraphT &interference) const {
+    LDBG("\n");
+    LDBG("Dump interference graph: \n");
+    for (auto edges : interference) {
+      llvm::dbgs() << "-- from " << edges.first->id << " to ";
+      for (auto node : edges.second) {
+        llvm::dbgs() << node->id << "; ";
+      }
+      llvm::dbgs() << "\n";
+    }
+  }
+
   /// Computes the shared memory offsets for all related values.
   /// Paper: Algorithms for Compile-Time Memory Optimization
   /// (https://dl.acm.org/doi/pdf/10.5555/314500.315082)
   void computeOffsets() {
     SmallVector<BufferT *> buffers;
+    // Handle sharingGroup here. For allocations with the same sharingGroup
+    // get the union of the live range, and union of the regionIds. Put
+    // the
+    // largest buffer in buffers.
+    DenseMap<int, SmallVector<BufferT *>> toGroup;
     for (auto bufferIter : bufferRange) {
+      if (bufferIter.first->sharingGroup >= 0)
+        toGroup[bufferIter.first->sharingGroup].push_back(bufferIter.first);
+    }
+    DenseMap<int, BufferT *> sharingIdToRep;
+    for (auto &kv : toGroup) {
+      size_t bigSize = 0;
+      BufferT *rep = nullptr;
+      for (auto *buf : kv.second) {
+        if (buf->size > bigSize) {
+          rep = buf;
+          bigSize = buf->size;
+        }
+      }
+      // FIXME: update live range and regionIds.
+      sharingIdToRep[kv.first] = rep;
+    }
+    for (auto bufferIter : bufferRange) {
+      if (sharingIdToRep.find(bufferIter.first->sharingGroup) !=
+          sharingIdToRep.end()) {
+        if (bufferIter.first !=
+            sharingIdToRep[bufferIter.first->sharingGroup]) {
+          LDBG("-- ignore shared buffer " << bufferIter.first->size << " "
+                                          << bufferIter.first->offset << " "
+                                          << bufferIter.first->sharingGroup);
+          continue;
+        }
+      }
       buffers.emplace_back(bufferIter.first);
     }
 
+    // Sort buffers by size in descending order to reduce the fragmentation
+    // on big buffers caused by smaller buffers. Big buffers have a higher
+    // chance to overlap with multiple other buffers, and allocating them first
+    // (by calculateStarts) ensures a higher chance that they will occupy a
+    // standalone smem slot.
+    llvm::stable_sort(
+        buffers, [&](BufferT *A, BufferT *B) { return A->size > B->size; });
+
     calculateStarts(buffers);
+    dumpBuffers();
 
     // NOTE: The original paper doesn't consider interference between
     // the bumped ranges. Buffers that previously do not interfere with
@@ -497,6 +624,20 @@ private:
       allocate(buffers, interference);
       buildInterferenceGraph(buffers, interference);
     } while (!interference.empty());
+
+    LLVM_DEBUG(dumpAllocationSize());
+    // Update allocation for sharingGroup.
+    for (auto &kv : toGroup) {
+      auto *rep = sharingIdToRep[kv.first];
+      for (auto *buf : kv.second) {
+        if (buf != rep) {
+          buf->setOffsetAligned(rep->offset);
+          LDBG("-- set sharing buffer's offset "
+               << buf->size << " " << buf->offset << " " << buf->sharingGroup);
+        }
+      }
+    }
+    dumpBuffers();
   }
 
   /// Computes the initial shared memory offsets.
@@ -531,7 +672,7 @@ private:
           std::find_if(xBuffers.begin(), xBuffers.end(), [&](auto *buffer) {
             auto xRange = bufferRange[buffer];
             bool res = xRange.intersects(range);
-            for (auto val : tripleMap)
+            for (const auto &val : tripleMap)
               res = res &&
                     !val.second.intersects(xRange); // only one buffer intersect
             return res;
@@ -557,6 +698,7 @@ private:
         xBuffers.erase(bufferIt);
       }
     }
+    LLVM_DEBUG(dumpBuffers());
   }
 
   /// Builds a graph of all shared memory values. Edges are created between
@@ -564,6 +706,21 @@ private:
   void buildInterferenceGraph(const SmallVector<BufferT *> &buffers,
                               GraphT &interference) {
     // Reset interference graph
+    auto inDifferentRegion = [&](BufferT *A, BufferT *B) {
+      auto tA = A->regionIds;
+      auto tB = B->regionIds;
+      if (tA.empty() && tB.empty())
+        return false;
+      if (tA.empty() || tB.empty())
+        return true;
+      for (auto t1 : tA) {
+        for (auto t2 : tB) {
+          if (t1 != t2)
+            return true;
+        }
+      }
+      return false;
+    };
     interference.clear();
     for (auto x : buffers) {
       for (auto y : buffers) {
@@ -577,12 +734,31 @@ private:
         Interval ySizeRange = {yStart, yStart + ySize};
         auto xOpRange = bufferRange.lookup(x);
         auto yOpRange = bufferRange.lookup(y);
+
+        // Buffers interfere if their allocation offsets overlap and they are
+        // live at the same time.
         if (xOpRange.intersects(yOpRange) &&
             xSizeRange.intersects(ySizeRange)) {
           interference[x].insert(y);
         }
+
+        // Buffers also interfere if their allocation offsets overlap and they
+        // exist within regions that may execute simultaneously with respect to
+        // each other.
+        auto wsx = x->owner->getParentWithTrait<OpTrait::AsyncRegions>();
+        auto wsy = y->owner->getParentWithTrait<OpTrait::AsyncRegions>();
+        if (wsx && wsy && wsx == wsy &&
+            x->owner->getParentRegion() != y->owner->getParentRegion() &&
+            xSizeRange.intersects(ySizeRange)) {
+          interference[x].insert(y);
+        }
+        // if x and y belong to different regions (ignore producer region).
+        if (inDifferentRegion(x, y) && xSizeRange.intersects(ySizeRange))
+          interference[x].insert(y);
       }
     }
+
+    LLVM_DEBUG(dumpInterferenceGraph(interference));
   }
 
   /// Finalizes shared memory offsets considering interference.
@@ -610,6 +786,9 @@ private:
       }
       auto it = std::find(available.begin(), available.end(), true);
       colors[x] = std::distance(available.begin(), it);
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- color " << x->id << " " << colors[x] << "\n";
+      });
     }
     // Finalize allocation
     // color0: [0, 7), [0, 8), [0, 15) -> [0, 7), [0, 8), [0, 15)
@@ -627,6 +806,7 @@ private:
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }
+    LLVM_DEBUG(dumpBuffers());
   }
 
 private:
@@ -634,12 +814,39 @@ private:
   Allocation::FuncAllocMapT *funcAllocMap;
   Allocation *allocation;
   BufferRangeMapT bufferRange;
+  AllocationAnalysisScratchSizeFn scratchSizeGetter;
 };
 
 } // namespace triton
 
-void Allocation::run(FuncAllocMapT &funcAllocMap) {
-  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+void Allocation::run(
+    FuncAllocMapT &funcAllocMap,
+    triton::AllocationAnalysisScratchSizeFn scratchSizeGetter) {
+  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this,
+                             scratchSizeGetter);
+}
+
+std::map<Operation *, SmallVector<Allocation::BufferId>>
+Allocation::getLiveBuffers() {
+  std::map<Operation *, SmallVector<BufferId>> liveBuffers;
+
+  Operation *rootOperation = getOperation();
+  Liveness liveness(rootOperation);
+  auto analyzeOperation = [&](Operation *op) -> void {
+    auto scratchBuffer = getBufferId(op);
+    if (scratchBuffer != InvalidBufferId)
+      liveBuffers[op].push_back(scratchBuffer);
+    for (auto result : op->getOpResults()) {
+      auto bufferId = getBufferId(result);
+      if (bufferId == Allocation::InvalidBufferId)
+        continue;
+      auto liveOperations = liveness.resolveLiveness(result);
+      for (auto depOp : liveOperations)
+        liveBuffers[depOp].push_back(bufferId);
+    }
+  };
+  rootOperation->walk(analyzeOperation);
+  return liveBuffers;
 }
 
 } // namespace mlir

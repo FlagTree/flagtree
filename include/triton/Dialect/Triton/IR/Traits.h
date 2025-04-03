@@ -3,9 +3,9 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Support/LogicalResult.h"
-
-#include <iostream>
+#include "triton/Dialect/Triton/IR/Types.h"
 
 namespace mlir {
 namespace OpTrait {
@@ -28,7 +28,7 @@ LogicalResult verifyTensorLayouts(Operation *op);
 
 LogicalResult verifySameOperandsEncoding(Operation *op,
                                          bool allowTensorPointerType = false);
-
+LogicalResult verifyEquivalentType(Type typeA, Type typeB);
 LogicalResult
 verifySameOperandsAndResultEncoding(Operation *op,
                                     bool allowTensorPointerType = false);
@@ -113,6 +113,11 @@ public:
         op, /*allowTensorPointerType=*/true);
   }
 };
+
+// This trait indicates that regions in the op may execute concurrently with
+// each other.
+template <typename ConcreteType>
+struct AsyncRegions : public TraitBase<ConcreteType, AsyncRegions> {};
 
 } // namespace OpTrait
 } // namespace mlir

@@ -6,6 +6,7 @@ add_triton_library(TritonNvidiaGPUIR
   DEPENDS
   TritonNvidiaGPUTableGen
   TritonNvidiaGPUAttrDefsIncGen
+  TritonNvidiaGPUOpInterfacesIncGen
 
   LINK_LIBS PUBLIC
   TritonIR

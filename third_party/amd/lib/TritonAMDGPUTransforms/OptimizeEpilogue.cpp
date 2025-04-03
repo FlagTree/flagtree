@@ -47,8 +47,8 @@ bool isOneOperandElementwiseOp(Operation *op) {
                 math::CountLeadingZerosOp, math::CountTrailingZerosOp,
                 math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
                 math::ExpM1Op, math::FloorOp, math::LogOp, math::Log10Op,
-                math::Log1pOp, math::Log2Op, math::RsqrtOp, math::SqrtOp,
-                math::RsqrtOp, math::TanhOp>(op))
+                math::Log1pOp, math::Log2Op, math::SqrtOp, math::RsqrtOp,
+                math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
                 triton::FpToFpOp>(op))
@@ -100,6 +100,8 @@ public:
     llvm::SmallVector<mlir::Operation *> chainedOps;
     while (true) {
       auto chainedOp = val.getDefiningOp();
+      if (!chainedOp)
+        return mlir::failure();
       if (llvm::isa<triton::gpu::ConvertLayoutOp>(chainedOp))
         break;
       if (!chainedOp->hasOneUse())
@@ -110,7 +112,7 @@ public:
       chainedOps.push_back(chainedOp);
     }
 
-    auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(val.getDefiningOp());
+    auto cvtOp = val.getDefiningOp<triton::gpu::ConvertLayoutOp>();
     if (!cvtOp)
       return mlir::failure();
 
@@ -177,7 +179,7 @@ public:
 
     patterns.add<BypassEpilogueSMEM>(context);
 
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
   }
