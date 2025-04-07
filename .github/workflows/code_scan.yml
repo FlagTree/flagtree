@@ -1,10 +1,7 @@
 name: code-scan
 
 on:
-  push:
-    branches: [ "disable" ]
-  pull_request:
-    branches: [ "disable" ]
+  workflow_call:
 
 jobs:
   scan-code-and-report:
