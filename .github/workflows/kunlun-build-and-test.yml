@@ -14,6 +14,7 @@ concurrency:
 jobs:
   kunlun-build-and-test:
     runs-on: kunlun
+    if: ${{ github.repository == 'FlagTree/flagtree' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

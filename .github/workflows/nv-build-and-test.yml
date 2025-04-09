@@ -15,6 +15,7 @@ concurrency:
 jobs:
   nv-build-and-test:
     runs-on: nv-jiuding
+    if: ${{ github.repository == 'FlagTree/flagtree' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
