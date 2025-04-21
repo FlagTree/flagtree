@@ -336,9 +336,9 @@ cache.store(
 
 # xpu(kunlunxin)
 cache.store(
-    file="XTDK-llvm18-ubuntu2004_x86_64",
+    file="XTDK-llvm19-ubuntu2004_x86_64",
     condition=("xpu" == flagtree_backend),
-    url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm18-ubuntu2004_x86_64.tar",
+    url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar",
     pre_hock=lambda: check_env('LLVM_BUILD_DIR'),
     post_hock=set_llvm_env,
 )
