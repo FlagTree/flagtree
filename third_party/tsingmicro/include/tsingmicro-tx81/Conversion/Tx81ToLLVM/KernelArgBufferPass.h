@@ -1,0 +1,31 @@
+//===- KernelArgBufferPass.h ----------------------------------*- C++ -*---===//
+//
+// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
+// All rights reserved.
+//
+//===----------------------------------------------------------------------===//
+//
+// This pass transforms kernel function signatures by converting multiple
+// arguments into a single void* buffer containing all the arguments.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MLIR_KERNEL_ARG_BUFFER_PASS_H
+#define MLIR_KERNEL_ARG_BUFFER_PASS_H
+
+#include "mlir/Pass/Pass.h"
+#include <memory>
+
+namespace mlir {
+class ModuleOp;
+class Pass;
+
+/// Creates a pass that transforms kernel functions by replacing multiple arguments
+/// with a single void* buffer argument.
+std::unique_ptr<Pass> createKernelArgBufferPass();
+
+#define GEN_PASS_DECL_KERNELARGBUFFERPASS
+#include "KernelArgBufferPass.h.inc"
+} // namespace mlir
+
+#endif // MLIR_KERNEL_ARG_BUFFER_PASS_H
