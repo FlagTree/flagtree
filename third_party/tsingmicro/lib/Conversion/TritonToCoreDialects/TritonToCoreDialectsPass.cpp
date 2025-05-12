@@ -5,13 +5,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
 #include "triton-shared/Conversion/StructuredToMemref/StructuredToMemref.h"
 #include "triton-shared/Conversion/TritonArithToLinalg/TritonArithToLinalg.h"
 #include "triton-shared/Conversion/TritonToCoreDialects/TritonToCoreDialects.h"
 #include "triton-shared/Conversion/TritonToStructured/TritonToStructured.h"
 #include "triton-shared/Dialect/TritonStructured/IR/TritonStructuredDialect.h"
 #include "triton-shared/Dialect/TritonTilingExt/IR/TritonTilingExtDialect.h"
-#include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"

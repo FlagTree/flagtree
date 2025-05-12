@@ -963,7 +963,8 @@ struct LinalgFillOpConversion : public OpConversionPattern<linalg::FillOp> {
     Type elemType = tensorType.getElementType();
 
     // Convert the tensor type to the LLVM pointer type
-    auto llvmPtrType = dyn_cast<LLVM::LLVMPointerType>(typeConverter->convertType(tensorType));
+    auto llvmPtrType =
+        dyn_cast<LLVM::LLVMPointerType>(typeConverter->convertType(tensorType));
     if (!llvmPtrType) {
       return rewriter.notifyMatchFailure(
           op, "failed to convert tensor type to LLVM pointer type");

@@ -41,7 +41,8 @@ private:
   bool isKernelFunction(func::FuncOp func);
 
   // Creates a new function with a single void* argument
-  func::FuncOp createBufferizedFunction(OpBuilder &builder, func::FuncOp originalFunc);
+  func::FuncOp createBufferizedFunction(OpBuilder &builder,
+                                        func::FuncOp originalFunc);
 
   // Rewrites the function body to use the argument buffer
   void rewriteFunctionBody(func::FuncOp originalFunc, func::FuncOp newFunc);
@@ -54,17 +55,18 @@ bool KernelArgBufferPass::isKernelFunction(func::FuncOp func) {
   return func.getName().contains("_kernel");
 }
 
-func::FuncOp KernelArgBufferPass::createBufferizedFunction(OpBuilder &builder,
-                                                         func::FuncOp originalFunc) {
+func::FuncOp
+KernelArgBufferPass::createBufferizedFunction(OpBuilder &builder,
+                                              func::FuncOp originalFunc) {
   // Create a new function type with a single void* argument
   auto voidPtrType = LLVM::LLVMPointerType::get(builder.getContext());
-  auto newFuncType = FunctionType::get(originalFunc.getContext(),
-                                       {voidPtrType},
-                                       originalFunc.getFunctionType().getResults());
+  auto newFuncType =
+      FunctionType::get(originalFunc.getContext(), {voidPtrType},
+                        originalFunc.getFunctionType().getResults());
 
   // Create the new function with the same name but new type
-  auto newFunc = func::FuncOp::create(originalFunc.getLoc(), originalFunc.getName(),
-                               newFuncType);
+  auto newFunc = func::FuncOp::create(originalFunc.getLoc(),
+                                      originalFunc.getName(), newFuncType);
 
   // Copy over all attributes except those related to the function type
   for (const auto &attr : originalFunc->getAttrs()) {
@@ -78,7 +80,7 @@ func::FuncOp KernelArgBufferPass::createBufferizedFunction(OpBuilder &builder,
 }
 
 void KernelArgBufferPass::rewriteFunctionBody(func::FuncOp originalFunc,
-                                            func::FuncOp newFunc) {
+                                              func::FuncOp newFunc) {
   if (originalFunc.empty())
     return;
 

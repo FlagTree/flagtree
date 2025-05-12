@@ -70,15 +70,13 @@ public:
     // Used for converting memref<*> back to tt.ptr type, these ops will then be
     // handled when we convert addptr op later.
     addSourceMaterialization([&](OpBuilder &builder, Type resultType,
-                                 ValueRange inputs,
-                                 Location loc) -> Value {
+                                 ValueRange inputs, Location loc) -> Value {
       return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
           .getResult(0);
     });
 
     addArgumentMaterialization([&](OpBuilder &builder, Type resultType,
-                                   ValueRange inputs,
-                                   Location loc) -> Value {
+                                   ValueRange inputs, Location loc) -> Value {
       return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
           .getResult(0);
     });
@@ -117,8 +115,7 @@ public:
     // Canonicalization will simplify this sequence by removing the inital
     // reinterpret_cast.
     addTargetMaterialization([&](OpBuilder &builder, MemRefType memrefType,
-                                 ValueRange inputs,
-                                 Location loc) -> Value {
+                                 ValueRange inputs, Location loc) -> Value {
       auto reinterpretCast =
           inputs[0].getDefiningOp<memref::ReinterpretCastOp>();
       return builder.create<memref::ReinterpretCastOp>(
@@ -201,8 +198,8 @@ buildCastAndOffsetOps(OpBuilder &builder, TypeRange resultTypes, Value input,
   return SmallVector<Value>{cast, zero};
 }
 
-static Value buildCastOp(OpBuilder &builder, Type resultType,
-                         ValueRange inputs, Location loc) {
+static Value buildCastOp(OpBuilder &builder, Type resultType, ValueRange inputs,
+                         Location loc) {
   assert(isa<triton::PointerType>(resultType));
   assert(inputs.size() && isa<MemRefType>(inputs[0].getType()) &&
          isa<IndexType>(inputs[1].getType()));
@@ -238,7 +235,8 @@ public:
         patterns, typeConverter);
 
     target.addDynamicallyLegalOp<func::CallOp>([&](func::CallOp op) {
-      return typeConverter.isLegal(op.getResultTypes()) && typeConverter.isLegal(op.getOperandTypes());
+      return typeConverter.isLegal(op.getResultTypes()) &&
+             typeConverter.isLegal(op.getOperandTypes());
     });
 
     populateFunctionOpInterfaceTypeConversionPattern<func::CallOp>(
@@ -336,7 +334,7 @@ public:
 
     // Compute the target materialization, given a value with the pointer type,
     // convert that value to a pair of {memref, index} type.
-#if 0  // FIXME: Incompatible MILR interface
+#if 0 // FIXME: Incompatible MILR interface
     converter.addTargetMaterialization(buildCastAndOffsetOps);
 #endif
 

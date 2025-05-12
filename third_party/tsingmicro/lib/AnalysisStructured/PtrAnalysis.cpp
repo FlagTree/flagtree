@@ -303,8 +303,8 @@ LogicalResult PtrState::mulState(const PtrState &lhsState,
   }
 
   if (lhsState.scalar && rhsState.scalar) {
-    scalar = builder.create<arith::MulIOp>(
-        loc, lhsState.scalar, rhsState.scalar);
+    scalar =
+        builder.create<arith::MulIOp>(loc, lhsState.scalar, rhsState.scalar);
   }
 
   for (uint64_t i = 0; i < lhs->sizes.size(); i++) {

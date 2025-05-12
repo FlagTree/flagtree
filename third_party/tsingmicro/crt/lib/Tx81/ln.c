@@ -14,7 +14,13 @@
 void __Ln(uint64_t *src, uint64_t *dst, uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
   TsmTranscendental *cmd = TsmNewTranscendental();
-  TsmTranscendentalInstr inst = {I_CGRA, {0,}, {0,}};
+  TsmTranscendentalInstr inst = {I_CGRA,
+                                 {
+                                     0,
+                                 },
+                                 {
+                                     0,
+                                 }};
 
   cmd->Ln(&inst, (uint64_t)src, (uint64_t)dst, elem_count, (Data_Format)fmt);
 

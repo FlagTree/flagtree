@@ -50,11 +50,9 @@ constexpr unsigned nextPowerOf2(int n) {
   return (n <= 1) ? 1 : (isPowerOf2(n) ? n : (2 * nextPowerOf2((n + 1) / 2)));
 }
 
-template <typename T, int Dim, bool IsPowerOf2>
-struct Vector1D;
+template <typename T, int Dim, bool IsPowerOf2> struct Vector1D;
 
-template <typename T, int Dim>
-struct Vector1D<T, Dim, /*IsPowerOf2=*/true> {
+template <typename T, int Dim> struct Vector1D<T, Dim, /*IsPowerOf2=*/true> {
   Vector1D() {
     static_assert(detail::nextPowerOf2(sizeof(T[Dim])) == sizeof(T[Dim]),
                   "size error");
@@ -68,8 +66,7 @@ private:
 
 // 1-D vector, padded to the next power of 2 allocation.
 // Specialization occurs to avoid zero size arrays (which fail in -Werror).
-template <typename T, int Dim>
-struct Vector1D<T, Dim, /*IsPowerOf2=*/false> {
+template <typename T, int Dim> struct Vector1D<T, Dim, /*IsPowerOf2=*/false> {
   Vector1D() {
     static_assert(nextPowerOf2(sizeof(T[Dim])) > sizeof(T[Dim]), "size error");
     static_assert(nextPowerOf2(sizeof(T[Dim])) < 2 * sizeof(T[Dim]),
@@ -86,8 +83,7 @@ private:
 } // namespace mlir
 
 // N-D vectors recurse down to 1-D.
-template <typename T, int Dim, int... Dims>
-struct Vector {
+template <typename T, int Dim, int... Dims> struct Vector {
   inline Vector<T, Dims...> &operator[](unsigned i) { return vector[i]; }
   inline const Vector<T, Dims...> &operator[](unsigned i) const {
     return vector[i];
@@ -105,17 +101,14 @@ struct Vector<T, Dim>
                                     mlir::detail::isPowerOf2(sizeof(T[Dim]))> {
 };
 
-template <int D1, typename T>
-using Vector1D = Vector<T, D1>;
-template <int D1, int D2, typename T>
-using Vector2D = Vector<T, D1, D2>;
+template <int D1, typename T> using Vector1D = Vector<T, D1>;
+template <int D1, int D2, typename T> using Vector2D = Vector<T, D1, D2>;
 template <int D1, int D2, int D3, typename T>
 using Vector3D = Vector<T, D1, D2, D3>;
 template <int D1, int D2, int D3, int D4, typename T>
 using Vector4D = Vector<T, D1, D2, D3, D4>;
 
-template <int N>
-void dropFront(int64_t arr[N], int64_t *res) {
+template <int N> void dropFront(int64_t arr[N], int64_t *res) {
   for (unsigned i = 1; i < N; ++i)
     *(res + i - 1) = arr[i];
 }
@@ -123,12 +116,10 @@ void dropFront(int64_t arr[N], int64_t *res) {
 //===----------------------------------------------------------------------===//
 // Codegen-compatible structures for StridedMemRef type.
 //===----------------------------------------------------------------------===//
-template <typename T, int Rank>
-class StridedMemrefIterator;
+template <typename T, int Rank> class StridedMemrefIterator;
 
 /// StridedMemRef descriptor type with static rank.
-template <typename T, int N>
-struct StridedMemRefType {
+template <typename T, int N> struct StridedMemRefType {
   T *basePtr;
   T *data;
   int64_t offset;
@@ -165,8 +156,7 @@ struct StridedMemRefType {
 };
 
 /// StridedMemRef descriptor type specialized for rank 1.
-template <typename T>
-struct StridedMemRefType<T, 1> {
+template <typename T> struct StridedMemRefType<T, 1> {
   T *basePtr;
   T *data;
   int64_t offset;
@@ -188,8 +178,7 @@ struct StridedMemRefType<T, 1> {
 };
 
 /// StridedMemRef descriptor type specialized for rank 0.
-template <typename T>
-struct StridedMemRefType<T, 0> {
+template <typename T> struct StridedMemRefType<T, 0> {
   T *basePtr;
   T *data;
   int64_t offset;
@@ -207,8 +196,7 @@ struct StridedMemRefType<T, 0> {
 };
 
 /// Iterate over all elements in a strided memref.
-template <typename T, int Rank>
-class StridedMemrefIterator {
+template <typename T, int Rank> class StridedMemrefIterator {
 public:
   using iterator_category = std::forward_iterator_tag;
   using value_type = T;
@@ -261,8 +249,7 @@ private:
 };
 
 /// Iterate over all elements in a 0-ranked strided memref.
-template <typename T>
-class StridedMemrefIterator<T, 0> {
+template <typename T> class StridedMemrefIterator<T, 0> {
 public:
   using iterator_category = std::forward_iterator_tag;
   using value_type = T;
@@ -307,8 +294,7 @@ private:
 // Codegen-compatible structure for UnrankedMemRef type.
 //===----------------------------------------------------------------------===//
 // Unranked MemRef
-template <typename T>
-struct UnrankedMemRefType {
+template <typename T> struct UnrankedMemRefType {
   int64_t rank;
   void *descriptor;
 };
@@ -316,12 +302,10 @@ struct UnrankedMemRefType {
 //===----------------------------------------------------------------------===//
 // DynamicMemRefType type.
 //===----------------------------------------------------------------------===//
-template <typename T>
-class DynamicMemRefIterator;
+template <typename T> class DynamicMemRefIterator;
 
 // A reference to one of the StridedMemRef types.
-template <typename T>
-class DynamicMemRefType {
+template <typename T> class DynamicMemRefType {
 public:
   int64_t rank;
   T *basePtr;
@@ -388,8 +372,7 @@ public:
 };
 
 /// Iterate over all elements in a dynamic memref.
-template <typename T>
-class DynamicMemRefIterator {
+template <typename T> class DynamicMemRefIterator {
 public:
   using iterator_category = std::forward_iterator_tag;
   using value_type = T;

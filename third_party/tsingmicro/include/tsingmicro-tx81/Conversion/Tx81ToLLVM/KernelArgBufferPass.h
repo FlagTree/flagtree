@@ -20,8 +20,8 @@ namespace mlir {
 class ModuleOp;
 class Pass;
 
-/// Creates a pass that transforms kernel functions by replacing multiple arguments
-/// with a single void* buffer argument.
+/// Creates a pass that transforms kernel functions by replacing multiple
+/// arguments with a single void* buffer argument.
 std::unique_ptr<Pass> createKernelArgBufferPass();
 
 #define GEN_PASS_DECL_KERNELARGBUFFERPASS

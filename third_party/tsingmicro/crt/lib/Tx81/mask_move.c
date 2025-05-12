@@ -12,9 +12,15 @@
 #include "tx81.h"
 
 void __MaskMove(uint64_t *src, uint64_t *target, uint32_t elem_count,
-  uint64_t * mask, int32_t fmt) {
+                uint64_t *mask, int32_t fmt) {
   TsmMaskDataMove *move = TsmNewMaskDataMove();
-  TsmMaskDataMoveInstr inst = {I_CGRA, {0,}, {0,}};
+  TsmMaskDataMoveInstr inst = {I_CGRA,
+                               {
+                                   0,
+                               },
+                               {
+                                   0,
+                               }};
 
   move->MaskMove(&inst, (uint64_t)src, (uint64_t)mask, (uint64_t)target,
                  elem_count, (Data_Format)fmt);

@@ -144,7 +144,7 @@ public:
 
     // Compute the target materialization, given a value with the pointer type,
     // convert that value to a tuple type.
-#if 0  // FIXME: Incompatible MILR interface
+#if 0 // FIXME: Incompatible MILR interface
     converter.addTargetMaterialization(
         [](OpBuilder &builder, TypeRange resultTypes, Value input,
            Location loc) -> std::optional<SmallVector<Value>> {
@@ -209,7 +209,7 @@ public:
     // The return values for this op will be used as the init-args for scf.for.
     // At the end of pointer analysis, we will use the PtrState to create the
     // correct offsets, strides, and remove these ops.
-  #if 0  // FIXME: Incompatible MILR interface
+#if 0 // FIXME: Incompatible MILR interface
     converter.addTargetMaterialization([](OpBuilder &builder,
                                           TypeRange resultTypes, Value input,
                                           Location loc) {

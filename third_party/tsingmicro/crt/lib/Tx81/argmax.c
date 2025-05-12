@@ -14,9 +14,16 @@
 void __ArgMax(uint64_t *src, uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
   TsmPeripheral *cmd = TsmNewPeripheral();
-  TsmPeripheralInstr inst = {I_CGRA, {0,}, {0,}};;
+  TsmPeripheralInstr inst = {I_CGRA,
+                             {
+                                 0,
+                             },
+                             {
+                                 0,
+                             }};
+  ;
 
-  cmd->ArgMax(&inst, (uint64_t) src, elem_count, (Data_Format) fmt);
+  cmd->ArgMax(&inst, (uint64_t)src, elem_count, (Data_Format)fmt);
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);

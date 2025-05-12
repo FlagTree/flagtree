@@ -18,14 +18,16 @@ from triton.backends.driver import GPUDriver
 from triton.backends.compiler import GPUTarget
 
 dirname = os.path.dirname(os.path.realpath(__file__))
-include_dirs = [os.path.join(dirname, "include"),
-                os.path.join(sysconfig.get_path('platlib'), "pybind11", "include"),
-                os.path.join(sysconfig.get_path('platlib'), "torch", "include"),
-                os.path.join(sysconfig.get_path('platlib'), "torch", "include", "torch", "csrc", "api", "include"),
-                os.path.join(sysconfig.get_path('platlib'), "numpy", "_core", "include")]
-library_dirs = [os.path.join(dirname, "lib"),
-                  os.path.join(sysconfig.get_path('platlib'), "torch", "lib")]
+include_dirs = [
+    os.path.join(dirname, "include"),
+    os.path.join(sysconfig.get_path('platlib'), "pybind11", "include"),
+    os.path.join(sysconfig.get_path('platlib'), "torch", "include"),
+    os.path.join(sysconfig.get_path('platlib'), "torch", "include", "torch", "csrc", "api", "include"),
+    os.path.join(sysconfig.get_path('platlib'), "numpy", "_core", "include")
+]
+library_dirs = [os.path.join(dirname, "lib"), os.path.join(sysconfig.get_path('platlib'), "torch", "lib")]
 libraries = ['tx8_runtime', 'torch', 'torch_cpu', 'torch_python', 'c10']
+
 
 # Path configuration for cross compilation
 def _get_llvm_bin_path(bin_name: str) -> str:
@@ -34,17 +36,20 @@ def _get_llvm_bin_path(bin_name: str) -> str:
         raise Exception("LLVM_BINARY_DIR is not set.")
     return os.path.join(path, bin_name)
 
+
 def _get_libc_root() -> str:
     path = os.getenv("LIB_C_ROOT", "")
     if path == "":
         raise Exception("LIB_C_ROOT is not set.")
     return path
 
+
 def _get_vendor_runtime_path() -> str:
     path = os.getenv("LIB_VENDOR_RUNTIME_PATH", "")
     if path == "":
         raise Exception("LIB_VENDOR_RUNTIME_PATH is not set.")
     return path
+
 
 def _dump_ir_if_needed(files):
     path = os.getenv("ZTC_DUMP_PATH", "")
@@ -54,6 +59,7 @@ def _dump_ir_if_needed(files):
     os.makedirs(path, exist_ok=True)
     for f in files:
         shutil.copy(f, os.path.join(path, os.path.basename(f)))
+
 
 # Build a native ELF on the platform running this python script
 def compile_native(src, name):
@@ -77,6 +83,7 @@ def compile_native(src, name):
     spec.loader.exec_module(mod)
     return mod
 
+
 # Build a accelerator controller ELF
 def compile_accelerator(src, name, ext):
     name = "npu_" + name
@@ -95,55 +102,39 @@ def compile_accelerator(src, name, ext):
             _dump_ir_if_needed([src_path])
             clang_path = _get_llvm_bin_path("clang")
             # Compile
-            subprocess.check_call([clang_path, src_path,
-                "-O2",
-                "-c",
-                "-fPIC",
-                f"-I{libc_inc}",
-                "--target=riscv64-unknown-elf",
-                "-march=rv64imafdc",
-                "-o",
-                dst_path])
+            subprocess.check_call([
+                clang_path, src_path, "-O2", "-c", "-fPIC", f"-I{libc_inc}", "--target=riscv64-unknown-elf",
+                "-march=rv64imafdc", "-o", dst_path
+            ])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # FIXME: Hardcoded path
             #dst_path = os.path.join(tmpdir, f"{name}.so")
             dst_path = "/tmp/kernel.so"
             libc_lib = os.path.join(_get_libc_root(), "riscv64-unknown-elf", "lib", "rv64imafdc", "lp64d")
-            libcrt_lib = os.path.join(_get_libc_root(), "lib", "gcc", "riscv64-unknown-elf", "15.0.0", "rv64imafdc", "lp64d")
+            libcrt_lib = os.path.join(_get_libc_root(), "lib", "gcc", "riscv64-unknown-elf", "15.0.0", "rv64imafdc",
+                                      "lp64d")
             libvr_path = _get_vendor_runtime_path()
             clang_path = _get_llvm_bin_path("clang")
             # Link wrapper, kernel with Tx81 crt and intrinsics(libkcorert.a)
-            subprocess.check_call([clang_path,
-                "-nostdlib",
-                 # FIXME: Hardcoded path
-                "/tmp/wrapper.o",
-                "/tmp/kernel.o",
-                "-O2",
-                "--target=riscv64-unknown-elf",
-                "-march=rv64imafdc",
-                "-fPIC",
+            subprocess.check_call([
+                clang_path, "-nostdlib",
+                # FIXME: Hardcoded path
+                "/tmp/wrapper.o", "/tmp/kernel.o", "-O2", "--target=riscv64-unknown-elf", "-march=rv64imafdc", "-fPIC",
                 # "-shared",  # ELF toolchain doesn't support -shared
-                f"-L{libvr_path}",
-                f"-L{libc_lib}",
-                f"-L{libcrt_lib}",
+                f"-L{libvr_path}", f"-L{libc_lib}", f"-L{libcrt_lib}",
                 # Allow libkcorert symbol overwrite libc symbols, libkcorert
                 # should be specified before libc
-                "-Wl,--allow-multiple-definition",
-                "-lvr",       # Wrapper API of Tx81 intrinsic
+                "-Wl,--allow-multiple-definition", "-lvr",  # Wrapper API of Tx81 intrinsic
                 "-lkcorert",  # Tx81 intrinsic API
-                "-lc",
-                "-lm",
-                "-lgcc",
-                "-T",
-                f"{libvr_path}/gcc_tx8_smarth.ld",
-                "-o",
-                dst_path])
+                "-lc", "-lm", "-lgcc", "-T", f"{libvr_path}/gcc_tx8_smarth.ld", "-o", dst_path
+            ])
 
             _dump_ir_if_needed([dst_path])
             with open(dst_path, 'rb') as f:
                 so = f.read()
             return so
+
 
 # -------------------- Launcher ----------------------------
 def _ty_to_cpp(ty):
@@ -167,26 +158,29 @@ def _ty_to_cpp(ty):
         "fp64": "double",
     }[ty]
 
+
 def _extracted_type(ty):
     if ty[0] == '*':
         return "PyObject*"
     return _ty_to_cpp(ty)
 
+
 def _format_of(ty):
     return {
-      "PyObject*": "O",
-      "float": "f",
-      "double": "d",
-      "long": "l",
-      "int8_t": "b",
-      "int16_t": "h",
-      "int32_t": "i",
-      "int64_t": "l",
-      "uint8_t": "B",
-      "uint16_t": "H",
-      "uint32_t": "I",
-      "uint64_t": "K",
+        "PyObject*": "O",
+        "float": "f",
+        "double": "d",
+        "long": "l",
+        "int8_t": "b",
+        "int16_t": "h",
+        "int32_t": "i",
+        "int64_t": "l",
+        "uint8_t": "B",
+        "uint16_t": "H",
+        "uint32_t": "I",
+        "uint64_t": "K",
     }[ty]
+
 
 # This function makes a single kernel invoker which wraps all the input args into
 # a single input buffer.
@@ -328,6 +322,7 @@ void __kernel_entry(void *args) {{
 }}
 """
 
+
 def make_launcher(constants, signature, kernel_name):
     # Basic declarations
     arg_decls = ', '.join(f"{_ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
@@ -336,7 +331,10 @@ def make_launcher(constants, signature, kernel_name):
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     # Parameters to pass to the kernel function
-    kernel_parameters = ', '.join(f"static_cast<{_ty_to_cpp(ty)}>(arg{i})" if ty[0] != "*" else f"tx81_ptr{i}, &ptr_arg{i}" for i, ty in signature.items() if i not in constants)
+    kernel_parameters = ', '.join(
+        f"static_cast<{_ty_to_cpp(ty)}>(arg{i})" if ty[0] != "*" else f"tx81_ptr{i}, &ptr_arg{i}"
+        for i, ty in signature.items()
+        if i not in constants)
     kernel_parameters += ', ' if kernel_parameters else ''
 
     return f"""
@@ -917,6 +915,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 }}
 """
 
+
 class CrossUtils(object):
 
     def __new__(cls):
@@ -930,6 +929,7 @@ class CrossUtils(object):
         # NOTE: The triton compiler.py framework requires these 2 interface.
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
+
 
 # Launch cross compiled runtime program on controller
 class CrossLauncher(object):
@@ -951,7 +951,6 @@ class CrossLauncher(object):
         launcher_src = make_launcher(constants, signature, src.fn.__name__)
         mod = compile_native(launcher_src, "__triton_launcher")
         self.launch = mod.launch
-
 
     def __call__(self, *args, **kwargs):
         # args: 0: gridX, 1: gridY, 2: gridZ,

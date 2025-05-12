@@ -5,8 +5,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
 #include "magic-kernel/Conversion/LinalgToMK/LinalgToMK.h"
+#include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
 
 #define DEBUG_TYPE "linalg-to-mk"
 
@@ -15,7 +15,6 @@ using namespace mk;
 
 #define GEN_PASS_CLASSES
 #include "magic-kernel/Conversion/LinalgToMK/Passes.h.inc"
-
 
 namespace {
 
@@ -49,8 +48,7 @@ public:
 } // namespace
 
 void mlir::triton::populateLinalgToMKCanonicalizationPatterns(
-    RewritePatternSet &patterns) {
-}
+    RewritePatternSet &patterns) {}
 
 void mlir::triton::populateLinalgToMKConversionPatterns(
     RewritePatternSet &patterns) {

@@ -12,9 +12,9 @@
 #ifndef ZTC_CONVERSION_LINALG_TO_MK_H
 #define ZTC_CONVERSION_LINALG_TO_MK_H
 
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir {
@@ -23,8 +23,7 @@ namespace triton {
 #define GEN_PASS_DECL
 #include "magic-kernel/Conversion/LinalgToMK/Passes.h.inc"
 
-void populateLinalgToMKCanonicalizationPatterns(
-    RewritePatternSet &patterns);
+void populateLinalgToMKCanonicalizationPatterns(RewritePatternSet &patterns);
 
 void populateLinalgToMKConversionPatterns(RewritePatternSet &patterns);
 

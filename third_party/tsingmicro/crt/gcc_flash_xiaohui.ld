@@ -238,7 +238,7 @@ SECTIONS
   __bss_end__ = .;
   __end = . ;
   end = . ;
- } > REGION_BSS 
+ } > REGION_BSS
  ._user_heap (NOLOAD): {
   . = ALIGN(0x8) ;
   *(.stack*)

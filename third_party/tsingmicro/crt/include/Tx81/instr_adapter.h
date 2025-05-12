@@ -1,23 +1,24 @@
 #ifndef INSTR_ADAPTER_H
 #define INSTR_ADAPTER_H
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
-//#include "common_base.h"
-#include "instr_def.h"
+// #include "common_base.h"
 #include "instr_adapter_plat.h"
+#include "instr_def.h"
 
 #ifndef USING_RISCV
 #define __CHECK_INSTR__
 #endif
-//#define __PLAT_FREERTOS__
-// #define RECORD_INSTR_INVALID
+// #define __PLAT_FREERTOS__
+//  #define RECORD_INSTR_INVALID
 #define SPM_LOWER_BOUND 0
 #define SPM_UPPER_BOUND 0x2EFFFF
 #define DDR_LOWER_BOUND 0x280000000
-#define IS_WITHIN_SPM_BOUND(value) (((value) >= SPM_LOWER_BOUND) && ((value) <= SPM_UPPER_BOUND))
+#define IS_WITHIN_SPM_BOUND(value)                                             \
+  (((value) >= SPM_LOWER_BOUND) && ((value) <= SPM_UPPER_BOUND))
 #define IS_WITHIN_DDR_BOUND(value) ((value) >= DDR_LOWER_BOUND)
 // 设置 times (0-7 位)
 #define TIMES_INVALID_OFFET 0
@@ -27,11 +28,11 @@
 #define FIRST_INVALID_BARRIER 36
 
 typedef struct InstrInvalidInfo {
-    volatile uint64_t ne_error_info;
-    volatile uint64_t ct_error_info;
-    volatile uint64_t td_error_info;
-    volatile uint64_t rdma_error_info;
-    volatile uint64_t wdma_error_info;
+  volatile uint64_t ne_error_info;
+  volatile uint64_t ct_error_info;
+  volatile uint64_t td_error_info;
+  volatile uint64_t rdma_error_info;
+  volatile uint64_t wdma_error_info;
 } InstrInvalidInfo;
 
 /*
@@ -52,7 +53,6 @@ uint32_t __execute_rdma(TsmRdmaInstr *instr);
 uint32_t __execute_wdma(TsmWdmaInstr *instr);
 void __execute_sc(SC_Param *instr);
 uint64_t TsmExecute(void *instr);
-
 
 /*=================================debug=================================*/
 void set_device_ddr_base(uint64_t base);

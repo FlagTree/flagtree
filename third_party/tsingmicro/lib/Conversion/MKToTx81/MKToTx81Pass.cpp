@@ -49,8 +49,9 @@ public:
     ConversionTarget target(getContext());
 
     // Register illegal ops for Dialect Conversion
-    target.addIllegalDialect< linalg::LinalgDialect,
-        bufferization::BufferizationDialect, mk::MagicKernelDialect>();
+    target.addIllegalDialect<linalg::LinalgDialect,
+                             bufferization::BufferizationDialect,
+                             mk::MagicKernelDialect>();
 
     target.addLegalDialect<func::FuncDialect, arith::ArithDialect,
                            math::MathDialect, affine::AffineDialect,

@@ -5,16 +5,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/Debug.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "magic-kernel/Conversion/LinalgToMK/LinalgToMK.h"
 #include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/Support/Debug.h"
 #include <memory>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/Transforms/Passes.h>
@@ -37,8 +37,8 @@ class LinalgToMKPass : public triton::impl::LinalgToMKBase<LinalgToMKPass> {
 
 public:
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<linalg::LinalgDialect,
-                    arith::ArithDialect, mk::MagicKernelDialect>();
+    registry.insert<linalg::LinalgDialect, arith::ArithDialect,
+                    mk::MagicKernelDialect>();
   }
 
   void runOnOperation() override {
@@ -47,13 +47,12 @@ public:
     ConversionTarget target(getContext());
 
     // TODO: Enable this when all conversion pattern has been implemented.
-    //target.addIllegalDialect<linalg::LinalgDialect>();
+    // target.addIllegalDialect<linalg::LinalgDialect>();
 
-    target.addLegalDialect<
-        func::FuncDialect, arith::ArithDialect, math::MathDialect,
-        affine::AffineDialect, scf::SCFDialect,
-        cf::ControlFlowDialect, tensor::TensorDialect,
-        mk::MagicKernelDialect>();
+    target.addLegalDialect<func::FuncDialect, arith::ArithDialect,
+                           math::MathDialect, affine::AffineDialect,
+                           scf::SCFDialect, cf::ControlFlowDialect,
+                           tensor::TensorDialect, mk::MagicKernelDialect>();
 
     target.addLegalOp<ModuleOp>();
 
@@ -66,7 +65,6 @@ public:
 
 } // namespace
 
-std::unique_ptr<OperationPass<ModuleOp>>
-triton::createLinalgToMKPass() {
+std::unique_ptr<OperationPass<ModuleOp>> triton::createLinalgToMKPass() {
   return std::make_unique<LinalgToMKPass>();
 }

@@ -13,7 +13,13 @@
 void __TF32_FP32(uint64_t *src, uint64_t *dst, uint32_t elem_count) {
   // Create command buffer.
   TsmConvert *cmd = TsmNewConvert();
-  TsmConvertInstr inst = {I_CGRA, {0,}, {0,}};
+  TsmConvertInstr inst = {I_CGRA,
+                          {
+                              0,
+                          },
+                          {
+                              0,
+                          }};
 
   cmd->TF32_FP32(&inst, (uint64_t)src, (uint64_t)dst, elem_count);
 
