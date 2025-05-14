@@ -436,7 +436,7 @@ typedef struct TsmDevice {
 class TsmTensorData {
 public:
   TsmTensorData() : host_addr(0), device_addr(0), length(0) {}
-  ~TsmTensorData(){};
+  ~TsmTensorData() {};
 
   TsmHostPtr host_addr;
   TsmDevicePtr device_addr;

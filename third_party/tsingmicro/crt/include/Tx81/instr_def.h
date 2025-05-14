@@ -312,7 +312,7 @@ typedef struct Ncc_CT_GR_Ctl_Regs {
                      // :stochastic round
   uint8_t
       src0_format; // 当CGRATensor_PeriOp_V_V_bit2fp指令，此字段用作dst_format
-  uint8_t opcode; // 详见CGRATensor指令OPcode.v
+  uint8_t opcode;  // 详见CGRATensor指令OPcode.v
 } Ncc_CT_GR_Ctl_Regs;
 
 typedef struct Ncc_CT_GR_Param_Regs {
@@ -320,18 +320,18 @@ typedef struct Ncc_CT_GR_Param_Regs {
   uint32_t src1;
   uint32_t dst0;
   uint32_t dst1;
-  uint32_t dst2;     // spm地址
-  uint64_t src0_tfr; // nhwc
-  uint64_t dst_tfr;  // nhwc
-  uint64_t pdr; // TOP BOTTOM,LEFT,RIGHT(分别是上下左右pad的行/列数)
-  uint64_t swr; // kernel的 Kx(x方向的大小),Ky,Sx(x方向的步进),Sy
-  uint64_t elem_count; // vector运算的元素个数
+  uint32_t dst2;            // spm地址
+  uint64_t src0_tfr;        // nhwc
+  uint64_t dst_tfr;         // nhwc
+  uint64_t pdr;             // TOP BOTTOM,LEFT,RIGHT(分别是上下左右pad的行/列数)
+  uint64_t swr;             // kernel的 Kx(x方向的大小),Ky,Sx(x方向的步进),Sy
+  uint64_t elem_count;      // vector运算的元素个数
   uint64_t unit_elem_count; // vector运算中的短向量的元素个数(最大为64)
   uint64_t int8_scale_val0; // 双线性插值x方向缩放系数(input_w/output_w)
   uint64_t int8_scale_val1; // 双线性插值y方向缩放系数(input_h/output_h)
   uint64_t int8_quant;      // abandon
   uint32_t int8_bn_bias;    // abandon
-  uint32_t full_elem_count;      // 若干个src_elem_num之和
+  uint32_t full_elem_count; // 若干个src_elem_num之和
   uint32_t full_unit_elem_count; // 若干个src_uint_elem_num之和
   uint64_t wb_data0; // The pointer of Return value. [32] DATA_VALID, [31:0]
                      // data, 函数只有一个返回值时，返回数据写在此寄存器
@@ -374,7 +374,7 @@ typedef struct Ncc_NE_GR_Ctl_Regs {
   uint8_t input_format;
   uint8_t inpsum_en;
   uint8_t lrelu_en; // either relu or lrelu
-  uint8_t relu_en; // relu_en/lrelu_en/bias_en/scale_en 同时为0时,输出是psum
+  uint8_t relu_en;  // relu_en/lrelu_en/bias_en/scale_en 同时为0时,输出是psum
   uint8_t scale_en;
   uint8_t bias_en;
   uint8_t dilation_conv; // valid as conv backwardconv
@@ -424,7 +424,7 @@ typedef struct Ncc_NE_GR_Param_Regs {
   uint8_t quant_q0;       // q2, (范围：0-31),[7:0]
 
   uint32_t sparse_index; // spm地址(稀疏化索引)
-  uint32_t srca_end; // xxx_end = src/dst + 对应操作数在spm中存储范围
+  uint32_t srca_end;     // xxx_end = src/dst + 对应操作数在spm中存储范围
   uint32_t srcw_end;
   uint32_t psum_end;
   uint32_t bias_end;
@@ -600,7 +600,7 @@ typedef struct Ncc_CSR_GR_PRIORITY_RW {
 } Ncc_CSR_GR_PRIORITY_RW;
 
 typedef struct Ncc_CSR_GR_EXCEPTION_MASK {
-  uint8_t exception_clear; // [49] 清中断寄存器(self-clear,无需清零)
+  uint8_t exception_clear;         // [49] 清中断寄存器(self-clear,无需清零)
   uint8_t exception_update_enable; // [48] 1：保存最后一条异常
                                    // 0：保存第一条异常，后续异常忽略
   uint64_t exception_mask; // [47:0] 48'hffff_ffff_ffff 异常使能 1：中断源被屏蔽
@@ -933,7 +933,7 @@ typedef struct NCC_CSR {
       exception; //[7:0]SCALAR_EXCEPTION, [15:8]CT_EXCEPTION,
                  //[23:16]NE_EXCEPTION, [31:24]RDMA_EXCEPTION,
                  //[39:32]WDMA_EXCEPTION, [47:40]TDMA_EXCEPTION, [63:48]Reserved
-  uint64_t priority; //[7:0]PRIORITY,当前worker的优先级, [63:8]Reserved
+  uint64_t priority;       //[7:0]PRIORITY,当前worker的优先级, [63:8]Reserved
   uint64_t exception_mask; //[47:0]EXCEPTION_MASK, [48]EXCEPTION_UPDATE_ENABLE,
                            //[49]EXCEPTION_CLEAR, [63:49]Reserved
   uint64_t
