@@ -186,7 +186,7 @@ tt.func @dot_ops_infer(%ptr: !tt.ptr<f32>, %v : f32) {
 // CHECK-LABEL: @print_no_arg
 tt.func @print_no_arg(%arg0: !tt.ptr<f32>) {
 // CHECK: tt.print "test"
-  tt.print "test" { hex = false }
+  tt.print "test" { hex = false, isSigned = array<i32: 0>}
   %0 = tt.load %arg0 : !tt.ptr<f32>
   tt.store %arg0, %0 : !tt.ptr<f32>
   tt.return
@@ -225,8 +225,14 @@ tt.func @inline_asm_scalar(%0: i32) {
 
 // CHECK-LABEL: reshape
 tt.func @reshape(%0: tensor<512xi32>) {
-  // CHECK: tt.reshape %{{.+}} {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
-  %1 = tt.reshape %0 {allow_reorder = false} : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} : tensor<512xi32> -> tensor<16x32xi32>
+  %1 = tt.reshape %0 : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} allow_reorder : tensor<512xi32> -> tensor<16x32xi32>
+  %2 = tt.reshape %0 allow_reorder : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} allow_reorder efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  %3 = tt.reshape %0 allow_reorder efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  // CHECK: tt.reshape %{{.+}} efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
+  %4 = tt.reshape %0 efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
   tt.return
 }
 

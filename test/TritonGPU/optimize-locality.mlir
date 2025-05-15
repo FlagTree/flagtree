@@ -4,7 +4,7 @@
 // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.reshape %[[LOAD]] {allow_reorder = true, efficient_layout} : {{.*}} -> tensor<{{32x32x4xf32.*}}
+// CHECK: tt.reshape %[[LOAD]] allow_reorder efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.addf
 // CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
@@ -207,7 +207,7 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
 // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0xFF800000>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.reshape %[[LOAD]] {allow_reorder = true, efficient_layout} : {{.*}} -> tensor<{{32x32x4xf32.*}}
+// CHECK: tt.reshape %[[LOAD]] allow_reorder efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
 // CHECK: arith.maximumf %[[FOR_ARG]], %[[REDUCE]]
@@ -314,7 +314,7 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
 // CHECK: %[[CST:.*]] = arith.constant dense<0x7F800000>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.reshape %[[LOAD]] {allow_reorder = true, efficient_layout} : {{.*}} -> tensor<{{32x32x4xf32.*}}
+// CHECK: tt.reshape %[[LOAD]] allow_reorder efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.minimumf
 // CHECK: arith.minimumf %[[FOR_ARG]], %[[REDUCE]]
@@ -421,7 +421,7 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
 // CHECK: %[[CST:.*]] = arith.constant dense<1.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.reshape %[[LOAD]] {allow_reorder = true, efficient_layout} : {{.*}} -> tensor<{{32x32x4xf32.*}}
+// CHECK: tt.reshape %[[LOAD]] allow_reorder efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}
 // CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.mulf
 // CHECK: arith.mulf %[[FOR_ARG]], %[[REDUCE]]
@@ -579,19 +579,47 @@ module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : 
 // CHECK-DAG: #[[$BLOCK1:.+]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [2, 1], order = [1, 0]}>
 // CHECK-DAG: #[[$BLOCK2:.+]] = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 1], order = [0, 1]}>
 // CHECK-LABEL: optimize_view_layout
-// CHECK: %[[R:.+]] = tt.reshape {{.*}} {allow_reorder = true, efficient_layout} : tensor<8x128xf32, #[[$BLOCK0]]> -> tensor<64x16xf32, #[[$BLOCK2]]>
+// CHECK: %[[R:.+]] = tt.reshape {{.*}} allow_reorder efficient_layout : tensor<8x128xf32, #[[$BLOCK0]]> -> tensor<64x16xf32, #[[$BLOCK2]]>
 // CHECK: %[[C:.+]] = triton_gpu.convert_layout %[[R]] : tensor<64x16xf32, #[[$BLOCK2]]> -> tensor<64x16xf32, #[[$BLOCK1]]>
 // CHECK:  "tt.reduce"(%[[C]])
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [2, 1], order = [1, 0]}>
 module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   tt.func public @optimize_view_layout(%arg0: tensor<8x128xf32, #blocked>) -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>> {
-    %0 = tt.reshape %arg0 {allow_reorder = true} : tensor<8x128xf32, #blocked> -> tensor<64x16xf32, #blocked1>
+    %0 = tt.reshape %arg0 allow_reorder : tensor<8x128xf32, #blocked> -> tensor<64x16xf32, #blocked1>
     %1 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
       %2 = arith.maximumf %arg1, %arg2 : f32
       tt.reduce.return %2 : f32
     }) : (tensor<64x16xf32, #blocked1>) -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
     tt.return %1 : tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  }
+}
+
+// -----
+#blocked = #triton_gpu.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#slice = #triton_gpu.slice<{dim = 1, parent = #blocked}>
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32} {
+  tt.func public @reduce_for_arg(%arg: tensor<64x128xf32, #blocked>, %arg1: !tt.ptr<f32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c4096_i32 = arith.constant 4096 : i32
+    %cst_1 = arith.constant dense<1.000000e+00> : tensor<64x128xf32, #blocked>
+    %64:1 = scf.for %arg22 = %c0_i32 to %c4096_i32 step %c128_i32 iter_args(%arg29 = %arg) -> (tensor<64x128xf32, #blocked>)  : i32 {
+      %129 = "tt.reduce"(%arg29) <{axis = 1 : i32}> ({
+      ^bb0(%arg31: f32, %arg32: f32):
+        %160 = arith.maxnumf %arg31, %arg32 : f32
+        tt.reduce.return %160 : f32
+      }) : (tensor<64x128xf32, #blocked>) -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+      %75 = triton_gpu.convert_layout %129 : tensor<64xf32, #slice> -> tensor<64xf32, #blocked1>
+      %79 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked1>
+      %80 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked1>
+      %81 = tt.addptr %80, %79 : tensor<64x!tt.ptr<f32>, #blocked1>, tensor<64xi32, #blocked1>
+      tt.store %81, %75 : tensor<64x!tt.ptr<f32>, #blocked1>
+      %141 = arith.addf %arg29, %cst_1 : tensor<64x128xf32, #blocked>
+      scf.yield %141 : tensor<64x128xf32, #blocked>
+    }
+    tt.return
   }
 }

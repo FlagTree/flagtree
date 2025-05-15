@@ -8,6 +8,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -24,8 +25,7 @@ using namespace triton;
 
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                TensorOrMemDesc type,
-                                                int numWarps) {
+                                                Type eltType, int numWarps) {
   if (version == 1)
     return {16, 16};
   else if (version == 2) {
@@ -35,17 +35,17 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     ret[rank - 2] = 16;
     return ret;
   } else if (version == 3) {
-    unsigned k = 256 / type.getElementTypeBitWidth();
+    unsigned k = 256 / eltType.getIntOrFloatBitWidth();
     if (shape[0] % 64 != 0 || shape[1] % 8 != 0) {
       assert(false && "type not supported");
       return {0, 0, 0};
     }
-    auto eltType = type.getElementType();
     SmallVector<unsigned> validN;
 
     // MMAv3 with larger instruction shape is preferred.
-    if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FNUZ() ||
-        eltType.isF16() || eltType.isBF16() || eltType.isF32()) {
+    if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FN() ||
+        eltType.isFloat8E4M3FNUZ() || eltType.isF16() || eltType.isBF16() ||
+        eltType.isF32()) {
       validN.assign({256, 248, 240, 232, 224, 216, 208, 200, 192, 184, 176,
                      168, 160, 152, 144, 136, 128, 120, 112, 104, 96,  88,
                      80,  72,  64,  56,  48,  40,  32,  24,  16,  8});
@@ -432,6 +432,19 @@ static std::optional<Attribute> inferSrcEncoding(triton::ReshapeOp op,
                                    op.getAllowReorder());
 }
 
+static bool isSingleValue(Value value) {
+  // Don't consider load as expensive if it is loading a scalar.
+  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
+    return tensorTy.getNumElements() == 1;
+  // TODO: Handle other cases.
+  // For example, when ptr is a tensor of single value.
+  // It means that ptr is a resultant of broadcast or generated through
+  // a chain of broadcast and other operations.
+  // Rematerialize it without considering contiguous memory access pattern is
+  // fine.
+  return true;
+}
+
 std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (isa<triton::ScanOp>(op)) {
     // Scan only supports blocked encoding at the moment.
@@ -441,8 +454,8 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp, nvidia_gpu::DotWaitOp>(
-          op)) {
+      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
+          nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     return encoding;
   }
 
@@ -471,7 +484,7 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
       isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::DotWaitOp>(op))
+          nvidia_gpu::WarpGroupDotWaitOp>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
@@ -487,19 +500,6 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reshape, encoding);
 
   return std::nullopt;
-}
-
-bool isSingleValue(Value value) {
-  // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
-    return tensorTy.getNumElements() == 1;
-  // TODO: Handle other cases.
-  // For example, when ptr is a tensor of single value.
-  // It means that ptr is a resultant of broadcast or generated through
-  // a chain of broadcast and other operations.
-  // Rematerialize it without considering contiguous memory access pattern is
-  // fine.
-  return true;
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
@@ -556,8 +556,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     RankedTensorType newDstType =
         RankedTensorType::get(reshapeDstType.getShape(),
                               reshapeDstType.getElementType(), targetEncoding);
-    return reshape.getAllowReorder() &&
-           !reshape.getEfficientLayout().has_value() &&
+    return reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
            !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
                                          newDstType);
   }
@@ -602,6 +601,73 @@ scf::ForOp replaceForOpWithNewSignature(RewriterBase &rewriter, scf::ForOp loop,
   return newForOp;
 }
 
+scf::WhileOp replaceWhileOpWithNewSignature(
+    RewriterBase &rewriter, scf::WhileOp loop, ValueRange newIterOperands,
+    TypeRange newResultTypes,
+    SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(loop);
+
+  // Create a new loop before the existing one, with the extra operands.
+  auto operands = llvm::to_vector<4>(loop.getInits());
+  operands.append(newIterOperands.begin(), newIterOperands.end());
+
+  // Result and operand types
+  SmallVector<Type> resultTypes;
+  SmallVector<Type> argsTypesBefore;
+  for (auto res : loop.getResults())
+    resultTypes.push_back(res.getType());
+  for (auto type : newResultTypes)
+    resultTypes.push_back(type);
+  for (Value operand : operands)
+    argsTypesBefore.push_back(operand.getType());
+  scf::WhileOp newLoop =
+      rewriter.create<scf::WhileOp>(loop.getLoc(), resultTypes, operands);
+  newLoop->setAttrs(loop->getAttrs());
+
+  SmallVector<Location> bbArgLocsBefore(argsTypesBefore.size(), loop.getLoc());
+  SmallVector<Location> bbArgLocsAfter(resultTypes.size(), loop.getLoc());
+  rewriter.createBlock(&newLoop.getBefore(), {}, argsTypesBefore,
+                       bbArgLocsBefore);
+  rewriter.createBlock(&newLoop.getAfter(), {}, resultTypes, bbArgLocsAfter);
+
+  // Copy regions
+  for (int i = 0; i < loop.getNumRegions(); ++i)
+    newLoop->getRegion(i).front().getOperations().splice(
+        newLoop->getRegion(i).front().getOperations().begin(),
+        loop->getRegion(i).front().getOperations());
+
+  // Remap arguments
+  for (auto [oldArg, newArg] : llvm::zip(
+           loop.getBeforeArguments(), newLoop.getBeforeArguments().take_front(
+                                          loop.getBeforeArguments().size())))
+    rewriter.replaceAllUsesWith(oldArg, newArg);
+  for (auto [oldArg, newArg] : llvm::zip(loop.getAfterArguments(),
+                                         newLoop.getAfterArguments().take_front(
+                                             loop.getAfterArguments().size())))
+    rewriter.replaceAllUsesWith(oldArg, newArg);
+
+  // Stack the new results
+  for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
+                                                  loop.getNumResults())))
+    replacements.push_back(it);
+
+  return newLoop;
+}
+
+scf::WhileOp replaceWhileOpWithNewSignature(RewriterBase &rewriter,
+                                            scf::WhileOp loop,
+                                            ValueRange newIterOperands,
+                                            TypeRange newResultTypes) {
+  SmallVector<std::tuple<Value, Value>> replacements;
+  auto newWhileOp = replaceWhileOpWithNewSignature(
+      rewriter, loop, newIterOperands, newResultTypes, replacements);
+  for (auto &kv : replacements) {
+    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+  }
+  return newWhileOp;
+}
+
 scf::IfOp replaceIfOpWithNewSignature(
     RewriterBase &rewriter, scf::IfOp ifOp, TypeRange newResultTypes,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
@@ -624,6 +690,26 @@ scf::IfOp replaceIfOpWithNewSignature(
                            newIf.getResults().take_front(ifOp.getNumResults())))
     replacements.push_back(it);
   return newIf;
+}
+
+void appendToForOpYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
+  Operation *yieldOp = forOp.getBody()->getTerminator();
+  SmallVector<Value> operands(yieldOp->getOperands());
+  operands.append(newOperands.begin(), newOperands.end());
+
+  OpBuilder builder(yieldOp);
+  builder.create<scf::YieldOp>(yieldOp->getLoc(), operands);
+  yieldOp->erase();
+}
+
+scf::IfOp replaceIfOpWithNewSignature(RewriterBase &rewriter, scf::IfOp ifOp,
+                                      TypeRange newResultTypes) {
+  SmallVector<std::tuple<Value, Value>> replacements;
+  auto newIfOp =
+      replaceIfOpWithNewSignature(rewriter, ifOp, newResultTypes, replacements);
+  for (auto &kv : replacements)
+    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+  return newIfOp;
 }
 
 Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
@@ -662,12 +748,13 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   return newOp;
 }
 
-// Check if the convert will be a no-op in codegen.
+// Check if the convert will be performed by reordering registers.
 static bool isFreeConvert(Operation *op) {
   auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!convertOp)
     return false;
-  return isMmaToMmaShortcut(convertOp.getSrc().getType(), convertOp.getType());
+  return cvtReordersRegisters(convertOp.getSrc().getType(),
+                              convertOp.getType());
 }
 
 LogicalResult
@@ -675,13 +762,21 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
                         Attribute rootEncoding,
                         DenseMap<Value, Attribute> &layout,
                         std::function<bool(Operation *)> stopPropagation) {
-  DenseSet<Value> visited;
-  SmallVector<std::pair<Value, Attribute>> queue = {{root, rootEncoding}};
+  DenseSet<std::pair<Value, Attribute>> seen;
+  SmallVector<std::pair<Value, Attribute>> queue;
+
+  auto enqueue = [&](Value operand, Attribute encoding) {
+    auto x = std::make_pair(operand, encoding);
+    if (!seen.insert(x).second) {
+      return; // Already enqueued, skip
+    }
+    queue.push_back(x);
+  };
+  enqueue(root, rootEncoding);
+
   while (!queue.empty()) {
     auto [currentValue, encoding] = queue.back();
     queue.pop_back();
-    if (!visited.insert(currentValue).second)
-      continue;
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
     // Skip propagating through for op results for now.
@@ -702,8 +797,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
       auto elseValue = ifOp.elseYield().getOperand(argIdx);
 
-      queue.push_back({thenValue, encoding});
-      queue.push_back({elseValue, encoding});
+      enqueue(thenValue, encoding);
+      enqueue(elseValue, encoding);
 
       continue;
     }
@@ -712,15 +807,13 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       for (Value result : definingOp->getResults()) {
         if (result == currentValue || !isa<RankedTensorType>(result.getType()))
           continue;
-        if (layout.find(result) != layout.end()) {
-          if (layout[result] != encoding)
-            return failure();
-          continue;
-        }
-        layout[result] = encoding;
+        enqueue(result, encoding);
       }
-      if (!isFreeConvert(definingOp) &&
-          canFoldIntoConversion(definingOp, encoding))
+      if (isFreeConvert(definingOp)) {
+        enqueue(definingOp->getOperand(0), encoding);
+        continue;
+      }
+      if (canFoldIntoConversion(definingOp, encoding))
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
@@ -730,8 +823,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
-        if (slice.count(operand) == 0)
-          queue.push_back({operand, *srcEncoding});
+        enqueue(operand, *srcEncoding);
       }
       continue;
     }
@@ -742,8 +834,8 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
       Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      queue.push_back({initOperand->get(), encoding});
-      queue.push_back({yieldOperand, encoding});
+      enqueue(initOperand->get(), encoding);
+      enqueue(yieldOperand, encoding);
       continue;
     }
     // TODO: add support for WhileOp and other region types.
@@ -818,6 +910,26 @@ bool isPureUnaryInlineAsm(Operation *op) {
          inlineAsmOp.getPure();
 }
 
+int getNVIDIAComputeCapability(Operation *module) {
+  assert(module->hasAttr(triton::AttrTargetName) &&
+         "Expected a target attribute on the module operation");
+
+  StringAttr targetAttr =
+      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+
+  StringRef ref = targetAttr.strref();
+  assert(ref.starts_with("cuda:") &&
+         "expected target attribute to be prefixed with \"cuda:\"");
+
+  StringRef capabilityStr = ref.drop_front(5); // drop the "cuda:"
+  int computeCapability;
+  bool parseError = capabilityStr.getAsInteger(10, computeCapability);
+  assert(!parseError &&
+         "invalid compute capability string in target attribute");
+
+  return computeCapability;
+}
+
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and
@@ -873,6 +985,8 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
       }
       if (auto nestedIf = value.getDefiningOp<scf::IfOp>()) {
         auto result = mlir::cast<OpResult>(value);
+        // mark condition as live.
+        markLive(nestedIf.getCondition());
         for (scf::YieldOp nestedYieldOp :
              {nestedIf.thenYield(), nestedIf.elseYield()}) {
           Value nestedYieldOperand =

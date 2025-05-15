@@ -130,7 +130,7 @@ You will specifically learn about:
 #    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
 #    # *Within groups*, programs are ordered in a column-major order
 #    # Row-id of the program in the *launch grid*
-#    pid_m = first_pid_m + (pid % group_size_m)
+#    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
 #    # Col-id of the program in the *launch grid*
 #    pid_n = (pid % num_pid_in_group) // group_size_m
 #
@@ -206,19 +206,19 @@ def get_hip_autotune_config():
     return [
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
-            num_warps=4, num_stages=0),
+            num_warps=4, num_stages=2),
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
-            num_warps=8, num_stages=0),
+            num_warps=8, num_stages=2),
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
-            num_warps=8, num_stages=0),
+            num_warps=8, num_stages=2),
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 3},
-            num_warps=4, num_stages=0),
+            num_warps=4, num_stages=2),
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 8},
-            num_warps=4, num_stages=0),
+            num_warps=4, num_stages=2),
     ]
 
 
@@ -269,7 +269,7 @@ def matmul_kernel(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     # ----------------------------------------------------------

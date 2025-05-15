@@ -4,6 +4,7 @@ add_triton_library(TritonGPUTransforms
   F32DotTC.cpp
   CombineTensorSelectAndIf.cpp
   ReduceDataDuplication.cpp
+  OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp
   OptimizeThreadLocality.cpp
   Pipeliner/MatmulLoopPipeline.cpp
@@ -12,10 +13,16 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/SoftwarePipeliner.cpp
   Pipeliner/TMAStoresPipeline.cpp
   Pipeliner/PipeliningUtility.cpp
+  Pipeliner/Schedule.cpp
   Prefetch.cpp
   RemoveLayoutConversions.cpp
   ReorderInstructions.cpp
   Utility.cpp
+  TaskIdPropagate.cpp
+  WSTaskPartition.cpp
+  WSDataPartition.cpp
+  WSCodePartition.cpp
+  WSLowering.cpp
 
   DEPENDS
   TritonGPUTransformsIncGen

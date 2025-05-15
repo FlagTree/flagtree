@@ -1,4 +1,4 @@
-#include "PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -34,11 +34,9 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
     return op;
-  if (isa<ttg::AsyncCommitGroupOp>(op))
+  if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
-  if (isa<ttg::AsyncWaitOp>(op))
-    return op;
-  if (isa<ttg::LocalLoadOp>(op))
+  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
@@ -73,6 +71,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     Value mask = getPredMask(rewriter, expectOp.getPred().getType(),
                              expectOp.getPred(), pred);
     expectOp.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
+    rewriter.setInsertionPoint(storeOp);
+    Value mask = getPredMask(rewriter, storeOp.getPtr().getType(),
+                             storeOp.getMask(), pred);
+    storeOp.getMaskMutable().assign(mask);
     return op;
   }
 
@@ -120,4 +125,52 @@ void mlir::triton::addOps(
       continue;
     schedule.emplace_back(&op, stage);
   }
+}
+
+void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
+                                               Operation *oldUse, Value val) {
+  SmallVector<Operation *> opsToDelete;
+  SmallVector<OpOperand *> operandsToReplace;
+
+  // Save the operand to replace / delete later (avoid iterator invalidation).
+  // TODO: can we use an early_inc iterator?
+  for (OpOperand &use : oldUse->getUses()) {
+    // Non-subview/trans ops will be replaced by `val`.
+    if (!isa<triton::TransOp, triton::gpu::MemDescSubviewOp>(use.getOwner())) {
+      operandsToReplace.push_back(&use);
+      continue;
+    }
+    Operation *user = use.getOwner();
+    // `subview(old_op)` is replaced by a new `subview(val)`.
+    OpBuilder::InsertionGuard g(builder);
+    builder.setInsertionPoint(user);
+    Value newVal;
+    if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(user)) {
+      triton::MemDescType oldType = subview.getType();
+      bool isMutable =
+          cast<triton::MemDescType>(val.getType()).getMutableMemory();
+      Type newDstType = triton::MemDescType::get(
+          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
+          oldType.getMemorySpace(), isMutable);
+      newVal = builder.create<triton::gpu::MemDescSubviewOp>(
+          subview.getLoc(), newDstType, val, subview.getOffsets());
+    } else if (auto trans = dyn_cast<triton::TransOp>(user)) {
+      newVal = builder.create<triton::TransOp>(trans.getLoc(), val,
+                                               trans.getOrderAttr());
+    }
+    assert(newVal);
+    newVal.getDefiningOp()->setAttrs(user->getAttrs());
+    replaceUsesAndPropagateType(builder, user, newVal);
+    opsToDelete.push_back(use.getOwner());
+  }
+
+  // Perform late replacement.
+  for (OpOperand *operand : operandsToReplace) {
+    Operation *op = operand->getOwner();
+    operand->set(val);
+  }
+
+  // Perform late op erasure.
+  for (Operation *op : opsToDelete)
+    op->erase();
 }

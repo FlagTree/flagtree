@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <random>
 
@@ -6,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/Support/Signals.h"
 
 namespace {
 
@@ -518,5 +520,111 @@ TEST_F(InferLayoutTest, FuzzReshape) {
          100.0 * numSuccess / numTests);
 }
 
+class AMDMfmaLayoutTest : public ::testing::Test {
+public:
+  AMDMfmaLayoutTest() {
+    ctx.getOrLoadDialect<TritonGPUDialect>();
+    ctaLayout =
+        triton::gpu::CTALayoutAttr::get(&ctx, ctaPerCGA, ctaSplit, ctaOrder);
+    f16Ty = FloatType::getF16(&ctx);
+  }
+
+  triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
+                                              ArrayRef<unsigned> warpsPerCTA) {
+    return triton::gpu::AMDMfmaEncodingAttr::get(
+        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/false, ctaLayout);
+  }
+
+  triton::gpu::AMDMfmaEncodingAttr
+  createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
+    return triton::gpu::AMDMfmaEncodingAttr::get(
+        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/true, ctaLayout);
+  }
+
+  triton::gpu::DotOperandEncodingAttr
+  createDotOperand(int idx, triton::gpu::AMDMfmaEncodingAttr parent,
+                   int kWidth) {
+    return triton::gpu::DotOperandEncodingAttr::get(&ctx, idx, parent, kWidth);
+  }
+
+protected:
+  MLIRContext ctx;
+  const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
+  const SmallVector<unsigned> ctaSplit{1, 1, 1};
+  const SmallVector<unsigned> ctaOrder{2, 1, 0};
+  triton::gpu::CTALayoutAttr ctaLayout;
+  Type f16Ty;
+};
+
+TEST_F(AMDMfmaLayoutTest, mfma32) {
+  auto mfma2d = createMFMA(32, 32, {2, 4});
+  ASSERT_THAT(mfma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(mfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+
+  auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
+  ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
+  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+
+  auto mfma3d = createMFMA(32, 32, {2, 4, 1});
+  ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(mfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+
+  auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
+  ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
+  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+}
+
+TEST_F(AMDMfmaLayoutTest, mfma16) {
+  auto mfma2d = createMFMA(16, 16, {2, 4});
+  ASSERT_THAT(mfma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(mfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+
+  auto tmfma2d = createTransposedMFMA(16, 16, {2, 4});
+  ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
+  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+
+  auto mfma3d = createMFMA(16, 16, {2, 4, 1});
+  ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(mfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+
+  auto tmfma3d = createTransposedMFMA(16, 16, {2, 4, 1});
+  ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
+  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+}
+
+TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
+  auto mfma2d = createMFMA(32, 32, {2, 4});
+  auto dot2dOp0 = createDotOperand(0, mfma2d, 4);
+  auto dot2dOp1 = createDotOperand(1, mfma2d, 4);
+  ASSERT_THAT(dot2dOp0.getWarpOrder(), mfma2d.getWarpOrder());
+  ASSERT_THAT(dot2dOp1.getWarpOrder(), mfma2d.getWarpOrder());
+
+  auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
+  auto tdot2dOp0 = createDotOperand(0, tmfma2d, 4);
+  auto tdot2dOp1 = createDotOperand(1, tmfma2d, 4);
+  ASSERT_THAT(tdot2dOp0.getWarpOrder(), tmfma2d.getWarpOrder());
+  ASSERT_THAT(tdot2dOp1.getWarpOrder(), tmfma2d.getWarpOrder());
+
+  auto mfma3d = createMFMA(32, 32, {2, 4, 1});
+  auto dot3dOp0 = createDotOperand(0, mfma3d, 4);
+  auto dot3dOp1 = createDotOperand(1, mfma3d, 4);
+  ASSERT_THAT(dot3dOp0.getWarpOrder(), mfma3d.getWarpOrder());
+  ASSERT_THAT(dot3dOp1.getWarpOrder(), mfma3d.getWarpOrder());
+
+  auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
+  auto tdot3dOp0 = createDotOperand(0, tmfma3d, 4);
+  auto tdot3dOp1 = createDotOperand(1, tmfma3d, 4);
+  ASSERT_THAT(tdot3dOp0.getWarpOrder(), tmfma3d.getWarpOrder());
+  ASSERT_THAT(tdot3dOp1.getWarpOrder(), tmfma3d.getWarpOrder());
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu
+
+int main(int argc, char *argv[]) {
+  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

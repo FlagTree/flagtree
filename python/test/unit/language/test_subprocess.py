@@ -8,11 +8,6 @@ import pytest
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 print_path = os.path.join(dir_path, "print_helper.py")
-assert_path = os.path.join(dir_path, "assert_helper.py")
-
-# TODO: bfloat16 after LLVM-15
-assert_types = ["device_assert", "device_assert_passes", "assert", "static_assert", "no_debug", "double_assert"]
-nested_types = [(caller, callee) for caller in ["true", "false", "none"] for callee in ["true", "false", "none"]]
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
 
 
@@ -24,43 +19,61 @@ def is_interpreter():
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("func_type, data_type", [("device_print", data_type) for data_type in torch_types] + [
-    ("print", "int32"),
-    ("static_print", "int32"),
-    ("no_arg_print", "int32"),
-    ("print_no_arg", "int32"),
-    ("device_print_large", "int32"),
-    ("print_multiple_args", "int32"),
-    ("device_print_multiple_args", "int32"),
-    ("device_print_hex", "int16"),
-    ("device_print_hex", "int32"),
-    ("device_print_hex", "int64"),
-    ("device_print_pointer", "int32"),
-])
-def test_print(func_type: str, data_type: str):
-    proc = subprocess.Popen([sys.executable, print_path, func_type, data_type], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, shell=False)
-    outs, err = proc.communicate()
+@pytest.mark.parametrize("func_type, data_type", [(fn, data_type)
+                                                  for fn in ["device_print", "device_print_scalar"]
+                                                  for data_type in torch_types] + [
+                                                      ("print", "int32"),
+                                                      ("static_print", "int32"),
+                                                      ("no_arg_print", "int32"),
+                                                      ("print_no_arg", "int32"),
+                                                      ("device_print_large", "int32"),
+                                                      ("print_multiple_args", "int32"),
+                                                      ("device_print_multiple_args", "int32"),
+                                                      ("device_print_hex", "int16"),
+                                                      ("device_print_hex", "int32"),
+                                                      ("device_print_hex", "int64"),
+                                                      ("device_print_pointer", "int32"),
+                                                      ("device_print_negative", "int32"),
+                                                      ("device_print_uint", "uint32"),
+                                                  ])
+def test_print(func_type: str, data_type: str, device: str):
+    proc = subprocess.run(
+        [sys.executable, print_path, "test_print", func_type, data_type, device],
+        capture_output=True,
+    )
     assert proc.returncode == 0
 
     if is_interpreter() and func_type != "static_assert":
         # Interpreter uses a different format for device_print
         # Only check if there's no error
-        assert err == b''
+        assert proc.stderr == b''
         return
 
-    outs = [line for line in outs.decode("UTF-8").split("\n") if line]
+    outs = [line for line in proc.stdout.decode("UTF-8").splitlines() if line]
     # The total number of elements in the 1-D tensor to print.
     N = 128
+
+    # Constant for testing the printing of scalar values
+    SCALAR_VAL = 42
 
     # Format is
     #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>
     expected_lines = Counter()
-    if func_type == "print" or func_type == "device_print":
+    if func_type in ("print", "device_print", "device_print_uint"):
         for i in range(N):
-            line = f"pid (0, 0, 0) idx ({i:3}) x: {i}"
+            offset = (1 << 31) if data_type == "uint32" else 0
+            line = f"pid (0, 0, 0) idx ({i:3}) x: {i + offset}"
             if data_type.startswith("float"):
                 line += ".000000"
+            expected_lines[line] = 1
+    elif func_type == "device_print_scalar":
+        line = f"pid (0, 0, 0) idx () x: {SCALAR_VAL}"
+        if data_type.startswith("float"):
+            line += ".000000"
+        expected_lines[line] = N
+    elif func_type == "device_print_negative":
+        for i in range(N):
+            line = f"pid (0, 0, 0) idx ({i:3}) x: {-i}"
             expected_lines[line] = 1
     elif func_type == "device_print_hex":
         for i in range(N):
@@ -102,58 +115,3 @@ def test_print(func_type: str, data_type: str):
             continue
         print(f'Expected line "{line}" {expected_lines[line]} time(s), but saw {actual_lines[line]} time(s)')
     assert all(delta == 0 for delta in diff.values())
-
-
-@pytest.mark.parametrize("func_type", assert_types)
-def test_assert(func_type: str):
-    # The total number of elements in the 1-D tensor to assert on.
-    N = 128
-
-    os.environ["TRITON_DEBUG"] = "1"
-    proc = subprocess.Popen([sys.executable, assert_path, func_type], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            shell=False)
-    _, errs = proc.communicate()
-    errs = errs.splitlines()
-    num_errs = 0
-    for err in errs:
-        if "x != 0" in err.decode("utf-8", errors="ignore"):
-            num_errs += 1
-
-    # Check for segfaults.
-    assert all("segmentation fault" not in line.decode("utf-8", errors="ignore").lower() for line in errs)
-
-    os.environ["TRITON_DEBUG"] = "0"
-    if func_type == "static_assert" or func_type == "device_assert_passes":
-        assert num_errs == 0
-    else:
-        assert num_errs == N - 1
-
-
-@pytest.mark.parametrize("caller_type, callee_type", nested_types)
-def test_assert_nested(caller_type, callee_type):
-    # The total number of elements in the 1-D tensor to assert on.
-    N = 128
-
-    proc = subprocess.Popen([sys.executable, assert_path, caller_type, callee_type], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, shell=False)
-    _, errs = proc.communicate()
-    errs = errs.splitlines()
-    num_errs = 0
-    for err in errs:
-        if "x != 0" in err.decode("utf-8", errors="ignore"):
-            num_errs += 1
-    if caller_type == "none":
-        if callee_type == "true":
-            assert num_errs == N - 1
-        else:
-            assert num_errs == 0
-    elif caller_type == "true":
-        if callee_type == "false":
-            assert num_errs == 0
-        else:
-            assert num_errs == N - 1
-    elif caller_type == "false":
-        if callee_type == "true":
-            assert num_errs == N - 1
-        else:
-            assert num_errs == 0

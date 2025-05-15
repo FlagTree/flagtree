@@ -43,6 +43,38 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait])> {
 }
 
+def TTNG_MBarrierArriveOp : TTNG_Op<"mbarrier_arrive", [AttrSizedOperandSegments,
+                                                      MemoryEffects<[MemWrite<SharedMemory>]>]> {
+  let summary = "mbarrier arrive";
+
+  let description = [{
+    This operation defining the arriving action for a mbarrier.
+    txCount:
+        An optional attribute that set tx-count. This Op will be lowered into
+        mbarrier.arrive.expect_tx if the optional attribute exist.
+    trackAsyncOp:
+        If true, this op will be lowered into cp.async.mbarrier.arrive.noinc.
+    pred:
+        Only perform arrive action when pred is true.
+    remoteCtaId:
+        if set, perform an remote arrive action.
+
+    Example:
+
+    triton_nvidia_gpu.mbarrier_arrive %0 {trackAsyncOp = false} : !tt.ptr<i64>
+
+  }];
+
+  let arguments = (ins TT_MemDescType:$mbarrier,
+                       Optional<I1>:$pred,
+                       Optional<I32>:$remoteCtaId,
+                       I1Attr: $trackAsyncOp,
+                       DefaultValuedAttr<I32Attr, "0">: $txCount
+                  );
+
+  let assemblyFormat = "operands attr-dict `:` type(operands)";
+}
+
 def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   let arguments = (ins BoolAttr:$bCluster);
 
@@ -57,6 +89,31 @@ def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   }];
 }
 
+def TTNG_GetCanonicalWarpIdOp : TTNG_Op<"get_canonical_warp_id", [Pure]> {
+  let description = [{
+    Returns the one dimensional warpId when it's used for producing warp uniform values.
+  }];
+
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def TTNG_NamedBarrierArriveOp : TTNG_Op<"bar_arrive", []> {
+  let summary = "named barrier arrive";
+
+  let arguments = (ins I32:$bar, I32: $numThreads);
+
+  let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
+}
+
+def TTNG_NamedBarrierWaitOp : TTNG_Op<"bar_wait", []> {
+  let summary = "named barrier wait";
+
+  let arguments = (ins I32:$bar, I32: $numThreads);
+
+  let assemblyFormat = "$bar `,` $numThreads attr-dict `:` type(operands)";
+}
+
 def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
   let arguments = (ins I1Attr:$relaxed);
   let assemblyFormat = "attr-dict";
@@ -67,13 +124,14 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 }
 
 //
-// DotAsync Op
+// WarpGroupDot Op
 //
-def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-                                            TypesMatchWith<"result's type matches accumulator's type",
-                                                            "d", "c", "$_self">]> {
-    let summary = "dot async";
+def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+                                                     DotLike,
+                                                     TypesMatchWith<"result's type matches accumulator's type",
+                                                                     "d", "c", "$_self">]> {
+    let summary = "warp group dot";
 
     let description = [{
         $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
@@ -82,17 +140,23 @@ def TTNG_DotAsyncOp : TTNG_Op<"dot_async", [DeclareOpInterfaceMethods<InferTypeO
     let arguments = (ins TT_TensorOrMemDesc:$a,
                          TT_TensorOrMemDesc:$b,
                          TT_FpIntTensor:$c,
-                         TT_InputPrecisionAttr:$inputPrecision,
-                         I32Attr:$maxNumImpreciseAcc);
+                         Optional<I1>:$useC,
+                         DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
+                         DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
+                         DefaultValuedAttr<BoolAttr, "false">:$isAsync);
 
     let results = (outs TT_FpIntTensor:$d);
 
-    let assemblyFormat = "$a`,` $b`,` $c attr-dict `:` type($a) `*` type($b) `->` type($d)";
+    let assemblyFormat = "$a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)";
+
+    let extraClassDeclaration = [{
+      bool needsPartialAccumulator();
+    }];
 }
 
-def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                                          AllTypesMatch<["inputs", "outputs"]>]> {
-  let summary = "dot wait";
+def TTNG_WarpGroupDotWaitOp : TTNG_Op<"warp_group_dot_wait", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                              AllTypesMatch<["inputs", "outputs"]>]> {
+  let summary = "warp group dot wait";
   let arguments = (ins Variadic<TT_TensorOrMemDesc>:$inputs, I32Attr:$pendings);
   let results = (outs Variadic<TT_TensorOrMemDesc>:$outputs);
   let description = [{
@@ -100,7 +164,7 @@ def TTNG_DotWaitOp : TTNG_Op<"dot_wait", [DeclareOpInterfaceMethods<InferTypeOpI
 
     $inputs must be the tensors corresponding to the async dot ops that we're
     waiting on.  For example, if there are N pending async dot ops and we call
-    `dot_wait 1`, then $inputs must be the result of the first dot op.
+    `warp_group_dot_wait 1`, then $inputs must be the result of the first dot op.
   }];
 
   let assemblyFormat = "$inputs attr-dict `:` type($inputs)";
@@ -242,5 +306,66 @@ def TTNG_TMAStoreWait : TTNG_Op<"async_tma_store_wait"> {
   let assemblyFormat = "attr-dict";
 }
 
+def TTNG_GetAsyncTaskIdOp : TTNG_Op<"get_async_task_id", [Pure]> {
+  let results = (outs I32:$result);
+
+  let builders = [OpBuilder<(ins)>];
+
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+//
+// Token
+//
+
+def TTNG_CreateTokenOp : TTNG_Op<"create_token"> {
+  let results = (outs TensorOf<[TTNG_TokenType]>:$result);
+
+  let arguments = (ins I32Attr:$num);
+
+  let builders = [OpBuilder<(ins "uint32_t":$num)>];
+
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def TTNG_ProducerAcquireOp : TTNG_Op<"producer_acquire"> {
+  let arguments = (ins TensorOf<[TTNG_TokenType]>:$token, I32:$idx, I1:$phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def TTNG_ProducerCommitOp : TTNG_Op<"producer_commit"> {
+  let arguments = (ins TensorOf<[TTNG_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
+def TTNG_ConsumerWaitOp : TTNG_Op<"consumer_wait"> {
+  let arguments = (ins TensorOf<[TTNG_TokenType]>:$token, I32:$idx, I1: $phase);
+
+  let assemblyFormat = "$token `,` $idx `,` $phase attr-dict `:` type(operands)";
+}
+
+def TTNG_ConsumerReleaseOp : TTNG_Op<"consumer_release"> {
+  let arguments = (ins TensorOf<[TTNG_TokenType]>:$token, I32:$idx);
+
+  let assemblyFormat = "$token `,` $idx attr-dict `:` type(operands)";
+}
+
+def TTNG_RegAllocOp : TTNG_Op<"reg_alloc", []> {
+  let summary = "register allocation";
+
+  let arguments = (ins I32Attr: $regCount);
+
+  let assemblyFormat = "$regCount attr-dict";
+}
+
+def TTNG_RegDeallocOp : TTNG_Op<"reg_dealloc", []> {
+  let summary = "register deallocation";
+
+  let arguments = (ins I32Attr: $regCount);
+
+  let assemblyFormat = "$regCount attr-dict";
+}
 
 #endif

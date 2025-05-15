@@ -1,5 +1,23 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func @fn(%v: i32) {
+  %b = tt.splat %v : i32 -> tensor<128xi32>
+  // expected-error @+1 {{rank of source must be same as rank of result}}
+  %c = tt.broadcast %b : tensor<128xi32> -> tensor<128x32xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @fn(%v: i32) {
+  %b = tt.splat %v : i32 -> tensor<2x32xi32>
+  // expected-error @+1 {{Different dimensions at index 0 between source and result.  Broadcast requires the source dimension to be 1.}}
+  %c = tt.broadcast %b : tensor<2x32xi32> -> tensor<128x32xi32>
+  tt.return
+}
+
+// -----
+
 tt.func public @fn(%arg0: tensor<128xf32>) {
     // expected-error @+1 {{packed_element}}
     %a = tt.elementwise_inline_asm ""
@@ -20,7 +38,7 @@ tt.func public @fn(%arg0: tensor<128xf32>, %arg1: tensor<64xf32>) {
 
 tt.func public @reshape_different_num_elements(%arg0: tensor<32x128xf16>) {
     // expected-error @+1 {{number of src and dst elements of reshape must be the same}}
-    %a = tt.reshape %arg0 {allow_reorder = false} : tensor<32x128xf16> -> tensor<64x32xf16>
+    %a = tt.reshape %arg0 : tensor<32x128xf16> -> tensor<64x32xf16>
     tt.return
 }
 
@@ -86,6 +104,19 @@ tt.func public @fn(%v: tensor<4x128xf64>) {
       tt.reduce.return %add : f32
     }) {axis = 0 : i32}  : (tensor<4x128xf64>) -> tensor<128xf32>
     tt.return
+}
+
+// -----
+
+tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>) {
+    // expected-error @below {{op requires the same shape for all operands}}
+    %0:2 = "tt.reduce" (%arg0, %arg1) <{axis = 1 : i32}> ({
+    ^bb0(%acc0: f32, %acc1: f32, %cur0: f32, %cur1: f32):
+      %1 = arith.addf %acc0, %cur0 : f32
+      %2 = arith.addf %acc1, %cur1 : f32
+      tt.reduce.return %1, %2 : f32, f32
+    }) : (tensor<32x32x64xf32>, tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>)
+    tt.return %0#0, %0#1 : tensor<32x64xf32>, tensor<16x64xf32>
 }
 
 // -----
@@ -181,21 +212,6 @@ tt.func public @fn(%arg0: tensor<2xf32>) {
     %a, %b = tt.split %arg0 : tensor<2xf32> -> tensor<f32> // OK
     tt.return
 }
-
-// -----
-
-// Bad order; should start with 2.
-#blocked  = #triton_gpu.blocked<{sizePerThread = [1,1,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [1,2,0]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1,1], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [1,0]}>
-
-module attributes {"triton_gpu.target" = "cuda:80", "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
-tt.func public @fn(%arg0: tensor<2x2x2xf32, #blocked>) {
-    // expected-error @+2 {{last dimension}}
-    // expected-error @+1 {{op failed to infer returned types}}
-    %a, %b = tt.split %arg0 : tensor<2x2x2xf32, #blocked> -> tensor<2x2xf32, #blocked1>
-    tt.return
-}
-}  // end module
 
 // -----
 

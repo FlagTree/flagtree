@@ -1,5 +1,6 @@
-#include "Schedule.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -29,7 +30,7 @@ getTMAStores(scf::ForOp forOp) {
 
 static Value createAlloc(scf::ForOp &forOp,
                          tt::ExperimentalDescriptorStoreOp storeOp) {
-  OpBuilder builder(forOp);
+  OpBuilderWithAsyncTaskIds builder(forOp);
   auto ty = cast<RankedTensorType>(storeOp.getSrc().getType());
   auto order = ttg::getOrder(ty.getEncoding());
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
@@ -39,18 +40,20 @@ static Value createAlloc(scf::ForOp &forOp,
     encoding = ttg::SharedEncodingAttr::get(
         ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
   }
-
-  Type memdescType = tt::MemDescType::get(ty.getShape(), ty.getElementType(),
-                                          encoding, /*mutableMemory*/ true);
-  Value alloc = builder.create<ttg::LocalAllocOp>(storeOp->getLoc(),
-                                                  memdescType, Value());
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(ty.getContext());
+  Type memdescType =
+      tt::MemDescType::get(ty.getShape(), ty.getElementType(), encoding,
+                           sharedMemorySpace, /*mutableMemory*/ true);
+  Value alloc = builder.createWithAsyncTaskIds<ttg::LocalAllocOp>(
+      storeOp->getLoc(), memdescType, Value());
   return alloc;
 }
 
 static void createTMAAsyncCopy(scf::ForOp &forOp,
                                tt::ExperimentalDescriptorStoreOp storeOp,
                                Value alloc) {
-  OpBuilder builder(storeOp);
+  OpBuilderWithAsyncTaskIds builder(storeOp);
   auto loc = storeOp.getLoc();
   auto ty = cast<RankedTensorType>(storeOp.getSrc().getType());
   auto order = ttg::getOrder(ty.getEncoding());
@@ -58,10 +61,11 @@ static void createTMAAsyncCopy(scf::ForOp &forOp,
 
   // Put wait before the local_store make the store truly async. We know
   // that we are the only user of the CopyLocalToGlobal.
-  builder.create<ttng::TMAStoreWait>(loc, 0);
-  builder.create<ttg::LocalStoreOp>(loc, storeOp.getSrc(), alloc);
-  builder.create<ttng::FenceAsyncSharedOp>(loc, false);
-  builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
+  builder.createWithAsyncTaskIds<ttng::TMAStoreWait>(loc, 0);
+  builder.createWithAsyncTaskIds<ttg::LocalStoreOp>(loc, storeOp.getSrc(),
+                                                    alloc);
+  builder.createWithAsyncTaskIds<ttng::FenceAsyncSharedOp>(loc, false);
+  builder.createWithAsyncTaskIds<ttng::AsyncTMACopyLocalToGlobalOp>(
       loc, storeOp.getDescPtr(), storeOp.getIndices(), alloc);
 
   storeOp->erase();
@@ -74,8 +78,21 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     return false;
 
   DenseMap<tt::ExperimentalDescriptorStoreOp, Value> storeToAlloc;
+  DenseMap<std::pair<ArrayRef<int64_t>, Type>, Value> allocs;
   for (tt::ExperimentalDescriptorStoreOp op : tmaStores) {
+    // Reuse allocations for stores of the same shape and types. This allows
+    // saving shared memory usage. It is valid since we have a wait 0 before
+    // every local_store. We could pipeline more aggressively if we didn't
+    // re-use but there is a tradeoff with shared memory usage.
+    auto key = std::make_pair(op.getSrc().getType().getShape(),
+                              op.getSrc().getType().getElementType());
+    auto it = allocs.find(key);
+    if (it != allocs.end()) {
+      storeToAlloc[op] = it->second;
+      continue;
+    }
     storeToAlloc[op] = createAlloc(forOp, op);
+    allocs[key] = storeToAlloc[op];
   }
 
   for (tt::ExperimentalDescriptorStoreOp op : tmaStores) {

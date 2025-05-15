@@ -1,28 +1,25 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
-#include "mlir/Analysis/DataFlowFramework.h"
+#include "TritonNVIDIAGPUToLLVM/Utility.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
-#include "mlir/Conversion/LLVMCommon/VectorPattern.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
-#include "mlir/Dialect/Index/IR/IndexOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
@@ -35,7 +32,6 @@ namespace triton {
 
 using namespace mlir;
 using namespace mlir::triton::NVIDIA;
-namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
@@ -83,31 +79,43 @@ struct ConvertTritonGPUToLLVM
   ConvertTritonGPUToLLVM(int32_t computeCapability)
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
 
+  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
+      : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
-    TritonGPUToLLVMTypeConverter typeConverter(context, option);
+    TargetInfo targetInfo(computeCapability, ptxVersion);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
+    // Hack: WSLowering may have changed the effective number of warps,
+    // in a way that isn't reflected in triton_gpu.num-warps.  If so, we have to
+    // respect that here.
+    if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
+      numWarps *= cast<IntegerAttr>(attr).getInt();
+    }
+
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
+    ModuleMembarAnalysis membarPass(&allocation, NVIDIA::canSkipBarSync);
     membarPass.run();
 
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      mlir::triton::populateFuncOpConversionPattern(
-          typeConverter, funcPatterns, numWarps, patternBenefitDefault);
+      mlir::triton::populateFuncOpConversionPattern(typeConverter, funcPatterns,
+                                                    numWarps, targetInfo,
+                                                    patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -123,13 +131,14 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    TargetInfo targetInfo(computeCapability);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMOptimizedPatterns(
         typeConverter, targetInfo, patterns,
         patternBenefitConvertLayoutOptimizedPattern);
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
+    mlir::triton::NVIDIA::populateTMAToLLVMPatterns(typeConverter, targetInfo,
+                                                    patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                         axisInfoAnalysis, computeCapability,
@@ -151,7 +160,7 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, benefit);
     mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                     benefit);
+                                                     targetInfo, benefit);
     mlir::triton::NVIDIA::populateSPMDOpToLLVMPattern(typeConverter, patterns,
                                                       benefit);
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
@@ -164,6 +173,7 @@ struct ConvertTritonGPUToLLVM
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
+    mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
@@ -172,6 +182,10 @@ struct ConvertTritonGPUToLLVM
                                                 patterns, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
+    mlir::triton::NVIDIA::populateUpcastMXFPToLLVMPatterns(
+        typeConverter, patterns, targetInfo, benefit);
+    mlir::triton::populateRegReallocOpToLLVMPatterns(typeConverter, patterns,
+                                                     benefit);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
 
@@ -224,6 +238,54 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
+}
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int32_t computeCapability,
+                                 int32_t ptxVersion) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability,
+                                                  ptxVersion);
+}
+
+bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
+  // Multiple init barriers on the same allocation would usually not happen but
+  // that allows us to avoid barriers between multiple subslice of an array of
+  // mbarriers. This is still correct even if the inits happen on the same
+  // allocation.
+  if (isa<triton::nvidia_gpu::InitBarrierOp>(before) &&
+      isa<triton::nvidia_gpu::InitBarrierOp>(after))
+    return true;
+
+  if (isa<triton::nvidia_gpu::InvalBarrierOp>(before) &&
+      isa<triton::nvidia_gpu::InvalBarrierOp>(after))
+    return true;
+
+  //  We can't have a warp get ahead when we have a chain of mbarrier wait so we
+  //  need a barrier in between two WaitBarrierOp.
+  if (isa<triton::nvidia_gpu::WaitBarrierOp>(before) &&
+      isa<triton::nvidia_gpu::WaitBarrierOp>(after))
+    return false;
+
+  // Even though WaitBarrierOp, AsyncTMACopyGlobalToLocalOp and
+  // AsyncTMACopyGlobalToLocalOp read and write to the mbarrier allocation it is
+  // valid for them to happen in different order on different threads, therefore
+  // we don't need a barrier between those operations.
+  if (isa<triton::nvidia_gpu::WaitBarrierOp,
+          triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::BarrierExpectOp>(before) &&
+      isa<triton::nvidia_gpu::WaitBarrierOp,
+          triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::BarrierExpectOp>(after))
+    return true;
+
+  // A mbarrier wait is released only when the whole operations is done,
+  // therefore any thread can access the memory after the barrier even if some
+  // threads haven't reached the mbarrier wait.
+  if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::WaitBarrierOp>(before) &&
+      !isa<triton::nvidia_gpu::InvalBarrierOp>(after))
+    return true;
+
+  return false;
 }
 
 } // namespace triton

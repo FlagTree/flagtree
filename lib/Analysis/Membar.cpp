@@ -6,6 +6,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include <deque>
 
 namespace mlir {
@@ -94,7 +95,7 @@ void MembarAnalysis::visitTerminator(Operation *op,
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
+  ::insertBarrier(*builder, op);
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
@@ -117,6 +118,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   }
 
   BlockInfo curBlockInfo;
+  auto scratchBufferId = Allocation::InvalidBufferId;
   if (isa<triton::CallOp>(op)) {
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
@@ -135,38 +137,44 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
           for (auto bufferId : allocation->getBufferIds(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo.syncWriteIntervals.insert(
-                    allocation->getAllocatedInterval(bufferId));
+                curBlockInfo
+                    .syncWriteIntervals[allocation->getAllocatedInterval(
+                        bufferId)]
+                    .insert(op);
               else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo.syncReadIntervals.insert(
-                    allocation->getAllocatedInterval(bufferId));
+                curBlockInfo
+                    .syncReadIntervals[allocation->getAllocatedInterval(
+                        bufferId)]
+                    .insert(op);
             }
           }
         }
       }
     }
-    // XXX(Keren): This is a hack as we cannot set side effects for dot ops, but
-    // on hopper they do have side effects. Need to clean it up
-    if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
-      for (auto value : dotOp.getOperands()) {
-        for (auto bufferId : allocation->getBufferIds(value)) {
-          if (bufferId != Allocation::InvalidBufferId)
-            curBlockInfo.syncReadIntervals.insert(
-                allocation->getAllocatedInterval(bufferId));
-        }
-      }
-    }
-    // Scratch buffer is considered as both shared memory write & read
-    auto bufferId = allocation->getBufferId(op);
-    if (bufferId != Allocation::InvalidBufferId) {
-      curBlockInfo.syncWriteIntervals.insert(
-          allocation->getAllocatedInterval(bufferId));
-      curBlockInfo.syncReadIntervals.insert(
-          allocation->getAllocatedInterval(bufferId));
-    }
+    scratchBufferId = allocation->getBufferId(op);
   }
 
-  if (blockInfo->isIntersected(curBlockInfo)) {
+  // Scratch buffer operations consist of a series of shared memory operations
+  // starting from a shared memory write, followed by a series of shared memory
+  // read/write operations, and ending with a shared memory read, i.e., shared
+  // memory write -> ... -> shared memory read.
+  if (scratchBufferId != Allocation::InvalidBufferId) {
+    if (!curBlockInfo.syncReadIntervals.empty() ||
+        !curBlockInfo.syncWriteIntervals.empty()) {
+      llvm::report_fatal_error(
+          "scratch buffer operations should not have any shared memory "
+          "dependencies");
+    }
+    auto interval = allocation->getAllocatedInterval(scratchBufferId);
+    curBlockInfo.syncWriteIntervals[interval].insert(op);
+    if (blockInfo->isIntersected(curBlockInfo, filter)) {
+      builder->setInsertionPoint(op);
+      insertBarrier(op, builder);
+    }
+    // Ops with a scratch buffer internally syncs read/write on shared memory
+    blockInfo->sync();
+    curBlockInfo.syncReadIntervals[interval].insert(op);
+  } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();

@@ -22,7 +22,9 @@ unsigned getPointeeBitWidth(Type type);
 
 Type getPointeeType(Type type);
 
-Type getPointerType(Type type);
+Type getPointerType(Type type, int addressSpace = 1);
+
+int getAddressSpace(Type type);
 
 Type getElementTypeOfTensorPointerType(Type type);
 
@@ -31,6 +33,8 @@ Type getI1SameShape(Type type);
 Type getI32SameShape(Type type);
 
 Type getPointerTypeSameShape(Type type);
+
+Type getPointerTypeToElement(Type type);
 
 } // namespace triton
 

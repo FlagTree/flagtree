@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef __AMD__
+#include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "amd/include/TritonAMDGPUTransforms/Passes.h"
+#endif
 #ifdef __NVIDIA__
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #endif
@@ -72,27 +76,31 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();
   mlir::triton::registerDecomposeUnsupportedAMDConversions();
+  mlir::triton::registerOptimizeAMDLDSUsage();
 
   // TritonAMDGPUTransforms passes
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPUReorderInstructions();
   mlir::registerTritonAMDGPUStreamPipeline();
+  mlir::registerTritonAMDGPUStreamPipelineV2();
+  mlir::registerTritonAMDGPUCanonicalizePointers();
+  mlir::registerTritonAMDGPUConvertToBufferOps();
 #endif
 
   // TODO: register Triton & TritonGPU passes
-  registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+  registry.insert<
+      mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
 #ifdef __NVIDIA__
-                  mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+      mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
 #endif
-                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
-                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+      mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+      mlir::arith::ArithDialect, mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
 #ifdef __NVIDIA__
-                  mlir::triton::nvgpu::NVGPUDialect,
+      mlir::triton::nvgpu::NVGPUDialect,
 #endif
 #ifdef __AMD__
-                  mlir::ROCDL::ROCDLDialect,
+      mlir::triton::amdgpu::TritonAMDGPUDialect, mlir::ROCDL::ROCDLDialect,
 #endif
-                  mlir::NVVM::NVVMDialect>();
+      mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect>();
 }

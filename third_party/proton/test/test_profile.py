@@ -9,6 +9,10 @@ from typing import NamedTuple
 import triton.language as tl
 
 
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context):
     with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
@@ -21,6 +25,7 @@ def test_torch(context):
         if context == "shadow":
             assert len(data[0]["children"]) == 1
             assert data[0]["children"][0]["frame"]["name"] == "test"
+            assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
         elif context == "python":
             assert len(data[0]["children"]) == 1
             # The last frame is the torch kernel
@@ -54,6 +59,59 @@ def test_triton():
         assert len(data[0]["children"][0]["children"]) == 1
         assert data[0]["children"][0]["children"][0]["frame"]["name"] == "test1"
         assert data[0]["children"][1]["frame"]["name"] == "test2"
+
+
+def test_cudagraph():
+    stream = torch.cuda.Stream()
+    torch.cuda.set_stream(stream)
+
+    @triton.jit
+    def foo(x, y, z):
+        tl.store(z, tl.load(y) + tl.load(x))
+
+    def fn():
+        a = torch.ones((2, 2), device="cuda")
+        b = torch.ones((2, 2), device="cuda")
+        c = a + b
+        foo[(1, )](a, b, c)
+
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+        proton.start(f.name.split(".")[0], context="shadow")
+
+        # warmup
+        # four kernels
+        fn()
+
+        # no kernels
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g):
+            for _ in range(10):
+                fn()
+
+        proton.enter_scope("test")
+        g.replay()
+        g.reset()
+        torch.cuda.synchronize()
+        proton.exit_scope()
+        proton.finalize()
+
+        data = json.load(f)
+        # CUDA/HIP graph may also invoke additional kernels to reset outputs
+        # {torch.ones, add, foo, test}
+        assert len(data[0]["children"]) >= 4
+        # find the test frame
+        test_frame = None
+        for child in data[0]["children"]:
+            if child["frame"]["name"] == "test":
+                test_frame = child
+                break
+        assert test_frame is not None
+        # {torch.ones, add, foo}
+        if is_hip():
+            assert len(test_frame["children"]) >= 2
+        else:
+            assert len(test_frame["children"]) >= 3
+        assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics():
@@ -139,3 +197,54 @@ def test_hook():
         assert data[0]["children"][0]["frame"]["name"] == "test0"
         assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
         assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
+        assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+
+
+def test_pcsampling():
+    if is_hip():
+        pytest.skip("HIP backend does not support pc sampling")
+
+    import os
+    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+        pytest.skip("PC sampling test is disabled")
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        for _ in range(1000):
+            tl.store(y + offs, tl.load(x + offs))
+
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+        proton.start(f.name.split(".")[0], hook="triton", backend="cupti_pcsampling")
+        with proton.scope("init"):
+            x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+            y = torch.zeros_like(x)
+        with proton.scope("test"):
+            foo[(1, )](x, y, x.size()[0], num_warps=4)
+        proton.finalize()
+        data = json.load(f)
+        init_frame = data[0]["children"][0]
+        test_frame = data[0]["children"][1]
+        # With line mapping
+        assert "foo" in test_frame["children"][0]["frame"]["name"]
+        assert test_frame["children"][0]["children"][0]["metrics"]["num_samples"] > 0
+        assert "@" in test_frame["children"][0]["children"][0]["frame"]["name"]
+        # Without line mapping
+        assert "elementwise" in init_frame["children"][0]["frame"]["name"]
+        assert init_frame["children"][0]["metrics"]["num_samples"] > 0
+
+
+def test_deactivate():
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".hatchet") as f:
+        session_id = proton.start(f.name.split(".")[0], hook="triton")
+        proton.deactivate(session_id)
+        torch.randn((10, 10), device="cuda")
+        proton.activate(session_id)
+        torch.zeros((10, 10), device="cuda")
+        proton.deactivate(session_id)
+        proton.finalize()
+        data = json.load(f)
+        # Root shouldn't have device id
+        assert "device_id" not in data[0]["metrics"]
+        assert len(data[0]["children"]) == 1
+        assert "device_id" in data[0]["children"][0]["metrics"]

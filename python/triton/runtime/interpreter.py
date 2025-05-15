@@ -1,3 +1,5 @@
+import ast
+import textwrap
 import inspect
 from typing import Tuple
 
@@ -73,12 +75,14 @@ class BlockPointerHandle:
 class InterpreterOptions:
     extern_libs: dict = None
     debug: bool = False
+    sanitize_overflow: bool = True
     arch: str = None
-    allow_fp8e4nv: bool = True
-    allow_fp8e4b15: bool = True
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
+    deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
+    backend_name: str = "interpreter"
 
 
 def _get_signed_np_dtype(dtype):
@@ -238,6 +242,7 @@ class InterpreterBuilder:
         self.options = InterpreterOptions()
         self.codegen_fns = {}
         self.codegen_fns["convert_custom_types"] = ExtraFunctions._convert_custom_types
+        self.codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (16, 16, 16)
 
     def set_grid_idx(self, x, y, z):
         if not x < self.grid_dim[0]:
@@ -460,6 +465,8 @@ class InterpreterBuilder:
     create_and = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_and)
     create_xor = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_xor)
     create_or = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_or)
+    create_int_to_ptr = create_bitcast
+    create_ptr_to_int = create_bitcast
 
     def create_idiv(self, lhs, rhs):
         # Triton has IEEE, not numpy/torch, semantics for %, and those carry
@@ -584,12 +591,6 @@ class InterpreterBuilder:
     def create_broadcast(self, arg, shape):
         return TensorHandle(np.broadcast_to(arg.data, shape), arg.dtype.scalar)
 
-    def create_int_to_ptr(self, val, dst_ty):
-        return TensorHandle(val.data.astype(np.uint64), dst_ty.scalar)
-
-    def create_ptr_to_int(self, val, dst_ty):
-        return TensorHandle(val.data.astype(np.uint64), dst_ty.scalar)
-
     def create_cat(self, lhs, rhs):
         return TensorHandle(np.concatenate([lhs.data, rhs.data]), lhs.dtype.scalar)
 
@@ -628,7 +629,10 @@ class InterpreterBuilder:
     def create_inline_asm(self, inlineAsm, constraints, values, type, isPure, pack):
         raise NotImplementedError("inline_asm not supported in interpreter mode")
 
-    def create_print(self, prefix, hex, values):
+    def create_print(self, prefix, hex, values, isSigned):
+        # NOTE: the `isSigned` variable is not really used here; because Signness is already known
+        # by `values` themselves in python interpreter, thus not really needed here;
+        # it is only used for triton PrintOpToLLVM to correctly construct the format specifier.
         # Interpreter's device_print function has a different format than Triton's device_print
         msg = f"({self.grid_idx[0]}, {self.grid_idx[1]}, {self.grid_idx[2]})"
         if prefix:
@@ -640,9 +644,12 @@ class InterpreterBuilder:
         if hex:
             np.set_printoptions(formatter=None)
 
-    def create_assert(self, condition, message, fileName, funcName, lineNo):
+    def create_assert(self, condition, message):
         # Interpreter's device_assert function has a different format than Triton's device_assert
-        assert condition, f"{message} in {fileName}:{funcName}:{lineNo}"
+        assert condition, f"{message}"
+
+    def create_assume(self, condition):
+        assert condition, "Assume failed"
 
     def create_barrier(self):
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
@@ -723,7 +730,7 @@ class ReduceScanOpIneterface:
         if hasattr(ret, "shape") and ret.shape:
             ret_type = tl.block_type(dtype, ret.shape)
         else:
-            ret = np.array([ret], dtype=_get_np_dtype(dtype))
+            ret = np.array([ret]).astype(_get_np_dtype(dtype))
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
@@ -990,14 +997,15 @@ def _patch_lang_core(lang):
 
 
 def _patch_lang(fn):
-    lang = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
-    assert len(lang) == 1, "triton.language must be visible from within jit'd function"
-    _patch_builtin(lang[0], interpreter_builder)
-    _patch_builtin(lang[0].tensor, interpreter_builder)
-    if lang[0] == tl:
-        _patch_builtin(lang[0].math, interpreter_builder)
-    _patch_lang_tensor(lang[0].tensor)
-    _patch_lang_core(lang[0])
+    langs = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
+    assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
+    for lang in langs:
+        _patch_builtin(lang, interpreter_builder)
+        _patch_builtin(lang.tensor, interpreter_builder)
+        if lang == tl:
+            _patch_builtin(lang.math, interpreter_builder)
+        _patch_lang_tensor(lang.tensor)
+        _patch_lang_core(lang)
 
 
 # TODO: wrap everything in triton tensors
@@ -1098,30 +1106,130 @@ class GridExecutor:
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
 
 
-class InterpretedFunction:
+class ASTTransformer(ast.NodeTransformer):
 
-    def __init__(self, fn) -> None:
+    def visit_Assign(self, node):
+        names = []
+        for target in node.targets:
+            names += [self.visit(target)]
+        if len(names) > 1:
+            raise ValueError("Multiple assignments are not supported")
+        # Modify the assignment x = value to
+        # triton.language.semantic.to_tensor(value, interpreter_builder, False)
+        node.value = ast.Call(
+            func=ast.Attribute(
+                value=ast.Attribute(
+                    value=ast.Attribute(value=ast.Name(id='triton', ctx=ast.Load()), attr='language', ctx=ast.Load()),
+                    attr='semantic', ctx=ast.Load()), attr='to_tensor', ctx=ast.Load()),
+            args=[node.value, ast.Name(id='interpreter_builder', ctx=ast.Load()),
+                  ast.Constant(value=False)], keywords=[])
+        return node
+
+
+class FunctionRewriter:
+    ast_transformer = ASTTransformer()
+
+    def __init__(self, fn, **kwargs):
         self.fn = fn
+        self.kwargs = kwargs
+        self.filename: str = ""
+        # Absolute line number in the file
+        self.def_file_lineno: int = 0
+
+    def rewrite_ast(self):
+        # If exception is raise, it means the function does not have source code available,
+        # e.g., dynamically generated functions, we cannot rewrite it so just return the original function
+        try:
+            lines, _ = inspect.getsourcelines(self.fn)
+        except Exception:
+            return self.fn
+
+        # truncate lines before def
+        # @triton.autotune(...)
+        # ...
+        # @triton.jit
+        # ...
+        # def foo(...): <- this line is the function definition
+        self.filename, self.def_file_lineno = self._get_jit_fn_file_line()
+        self.def_lineno = self._find_def(lines)
+        src = self._prepare_source(lines)
+        transformed_ast = self._transform_ast(src)
+        return self._compile_and_exec(transformed_ast)
+
+    def _get_jit_fn_file_line(self):
+        from .jit import get_jit_fn_file_line, JITFunction
+        return get_jit_fn_file_line(JITFunction(self.fn))
+
+    def _find_def(self, lines):
+        def_lineno = 0
+        # Line numbers start from 1
+        for i, line in enumerate(lines):
+            if line.strip().startswith("def "):
+                def_lineno = i + 1
+        return def_lineno
+
+    def _prepare_source(self, lines):
+        lines = lines[self.def_lineno - 1:]
+        src = ''.join(lines)
+        return textwrap.dedent(src)
+
+    def _transform_ast(self, src):
+        # src is like:
+        # 1: def foo(...):
+        # 2:  ...
+        parsed_ast = ast.parse(src)
+        transformed_ast = self.ast_transformer.visit(parsed_ast)
+        ast.fix_missing_locations(transformed_ast)
+        inc_lineno = self.def_file_lineno - 1
+        ast.increment_lineno(transformed_ast, inc_lineno)
+        return transformed_ast
+
+    def _compile_and_exec(self, transformed_ast):
+        compiled_code = compile(transformed_ast, filename=self.filename, mode='exec')
+        local_namespace = {**self.kwargs}
+        fn_globals = self.fn.__globals__
+        for key, value in globals().items():
+            if key not in fn_globals:
+                fn_globals[key] = value
+        exec(compiled_code, fn_globals, local_namespace)
+        return local_namespace[self.fn.__name__]
+
+
+class InterpretedFunction:
+    # Cache all rewritten functions
+    rewritten_fn = {}
+
+    def __init__(self, fn, **kwargs) -> None:
+        self.fn = fn
+        self.rewriter = FunctionRewriter(fn, **kwargs)
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]
-            return GridExecutor(self.fn, self.arg_names, grid)(*args, **kwargs)
+            fn = self.rewrite()
+            return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
 
         self.run = run
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
+
+    def rewrite(self):
+        if self.fn not in self.rewritten_fn:
+            self.rewritten_fn[self.fn] = self.rewriter.rewrite_ast()
+        return self.rewritten_fn[self.fn]
 
     @property
     def __name__(self):
         return self.fn.__name__
 
     def __getitem__(self, grid):
-        return GridExecutor(self.fn, self.arg_names, grid)
+        fn = self.rewrite()
+        return GridExecutor(fn, self.arg_names, grid)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
         _patch_lang(self.fn)
+        fn = self.rewrite()
         try:
-            return self.fn(*args, **kwargs)
+            return fn(*args, **kwargs)
         except Exception as e:
             raise InterpreterError(repr(e)) from e

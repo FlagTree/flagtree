@@ -1,6 +1,6 @@
 #include "TargetInfo.h"
+#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "Utility.h"
-#include "amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -10,12 +10,11 @@ namespace mlir::triton::AMD {
 namespace {
 template <typename T>
 LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
-                                     ConversionPatternRewriter &rewriter,
-                                     StringRef name,
+                                     RewriterBase &rewriter, StringRef name,
                                      LLVM::LLVMFunctionType type) {
   LLVM::LLVMFuncOp ret;
   if (!(ret = moduleOp.template lookupSymbol<LLVM::LLVMFuncOp>(name))) {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
     ret = rewriter.create<LLVM::LLVMFuncOp>(loc, name, type,
                                             LLVM::Linkage::External);
@@ -24,7 +23,7 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
 }
 
 // Extend all values to 64-bit per printf call requirements.
-Value printfPromoteValue(ConversionPatternRewriter &rewriter, Value value) {
+Value printfPromoteValue(RewriterBase &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto loc = UnknownLoc::get(context);
   auto type = value.getType();
@@ -68,72 +67,74 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
 }
 
-Value TargetInfo::ballot(ConversionPatternRewriter &rewriter, Location loc,
-                         Type type, Value cmp) const {
-  auto stringAttr = rewriter.getStringAttr("llvm.amdgcn.ballot");
-  SmallVector<Value> operands = {cmp};
-  Value asmResult =
-      rewriter.create<LLVM::CallIntrinsicOp>(loc, type, stringAttr, operands)
-          ->getResult(0);
-  return asmResult;
+Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
+                         Value cmp) const {
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.ballot",
+                                         type, cmp)
+      ->getResult(0);
 }
 
-void TargetInfo::storeShared(ConversionPatternRewriter &rewriter, Location loc,
-                             Value ptr, Value val, Value pred) const {
+void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Value val,
+                              Value pred) const {
+  if (ctaId.has_value()) {
+    llvm::report_fatal_error(
+        "AMDGPU does not support cross-CTA shared memory transfers");
+  }
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-Value TargetInfo::loadShared(ConversionPatternRewriter &rewriter, Location loc,
-                             const TypeConverter *converter, Value ptr,
-                             Type elemTy, Value pred) const {
-  Value falseVal = rewriter.create<arith::ConstantOp>(
+void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr, Value val) const {
+  llvm::report_fatal_error("AMDGPU does not support stmatrix");
+}
+
+Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
+                              std::optional<Value> ctaId, Type elemTy,
+                              Value pred) const {
+  if (ctaId.has_value()) {
+    llvm::report_fatal_error(
+        "AMDGPU does not support cross-CTA shared memory transfers");
+  }
+  Value falseVal = rewriter.create<LLVM::ConstantOp>(
       loc, elemTy, rewriter.getZeroAttr(elemTy));
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
 }
 
-Value TargetInfo::shuffleXor(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::AMD::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(ConversionPatternRewriter &rewriter, Location loc,
-                            Value val, int i) const {
+Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
+                            int i) const {
   return LLVM::AMD::shuffleUp(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, int i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             int i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleIdx(ConversionPatternRewriter &rewriter, Location loc,
-                             Value val, Value i) const {
+Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
+                             Value i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
 }
 
-Value TargetInfo::programId(ConversionPatternRewriter &rewriter, Location loc,
+Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, int axis) const {
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
-bool TargetInfo::warpReduce(ConversionPatternRewriter &rewriter, Location loc,
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned numLaneToReduce) const {
-  return false;
-}
-
-bool TargetInfo::processReplicaUsingStMatrix(
-    ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
-    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzleByteWidth) const {
+                            unsigned numLaneToReduce,
+                            unsigned interleave) const {
   return false;
 }
 
 void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
-                            ValueRange args,
-                            ConversionPatternRewriter &rewriter,
+                            ValueRange args, RewriterBase &rewriter,
                             bool useStdErr) const {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto *ctx = rewriter.getContext();
@@ -204,14 +205,25 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   return funcName;
 }
 
-void TargetInfo::printf(ConversionPatternRewriter &rewriter,
-                        Value formatStrStart, int formatStrByteCount,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
+                        int formatStrByteCount, ValueRange args) const {
   return printfImpl(formatStrStart, formatStrByteCount, args, rewriter,
                     /*useStdError=*/false);
 }
 
-void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
+                        ValueRange args) const {
+  assert(!msg.empty() && "printf with empty string not supported");
+  llvm::SmallString<64> msgNewline(msg);
+  msgNewline.push_back('\n');
+  msgNewline.push_back('\0');
+  Value msgValue =
+      LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
+                              "printfFormat_", msgNewline);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+}
+
+void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   // Compose and print an assert message.
@@ -224,8 +236,19 @@ void TargetInfo::assertFail(ConversionPatternRewriter &rewriter, Location loc,
   printfImpl(msgValue, msgBuffer.size_in_bytes(), /*args=*/ValueRange(),
              rewriter, /*useStdError=*/true);
 
+  // Set block barrrier before aborting kernel, give a chance for all
+  // the threads in a block to check/print the assert failure.
+  barrier();
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
+}
+
+int TargetInfo::getSharedAddressSpace() const { return 3; }
+
+bool TargetInfo::supportVectorizedAtomics() const {
+  // Note: not currently tested or used, but AMD generally supports vectorized
+  // atomics.
+  return true;
 }
 
 } // namespace mlir::triton::AMD

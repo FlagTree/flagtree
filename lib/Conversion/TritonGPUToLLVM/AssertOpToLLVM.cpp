@@ -34,19 +34,41 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
         return failure();
       }
     }
-    llAssert(op, condition, adaptor.getMessage(), adaptor.getFile(),
-             adaptor.getFunc(), adaptor.getLine(), rewriter);
+    llAssert(op, condition, adaptor.getMessage(), rewriter);
+    if (isa<RankedTensorType>(op.getCondition().getType())) {
+      // Add a barrier to avoid a race condition in case an assert is followed
+      // by an op that may trap if the assert condition is true. Since the
+      // tensor in those two operations may have different layout we need to
+      // make sure all the threads are done executing the assert before going to
+      // the next op.
+      barrier();
+    }
     rewriter.eraseOp(op);
     return success();
   }
   // op: the op at which the assert is inserted. Unlike printf, we need to
   // know about the op to split the block.
   void llAssert(Operation *op, Value condition, StringRef message,
-                StringRef file, StringRef func, int line,
                 ConversionPatternRewriter &rewriter) const {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
+
     auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
+
+    StringRef file = "unknown";
+    StringRef func = "unknown";
+    int line = 0;
+    int col = 0;
+
+    while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
+      loc = callLoc.getCallee();
+
+    if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
+      file = fileLineColLoc.getFilename();
+      line = fileLineColLoc.getLine();
+      col = fileLineColLoc.getColumn();
+    }
+
     // #block1
     // if (condition) {
     //   #block2

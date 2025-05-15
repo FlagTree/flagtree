@@ -18,11 +18,10 @@ using namespace mlir::triton;
 
 namespace ttn = mlir::triton::nvgpu;
 using ::mlir::LLVM::NVIDIA::getSRegValue;
+using ttn::Constraints;
+using ttn::OperandsAndConstraints;
 
 namespace {
-
-using OperandsAndConstraints = std::vector<std::pair<mlir::Value, std::string>>;
-typedef std::vector<std::string> Constraints;
 
 const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
 const std::string Wgmma_Commit_Group_Op = "wgmma.commit_group.sync.aligned;";
@@ -39,6 +38,11 @@ const std::string Cluster_Cta_Id_Op = "{\n"
                                       "mad.lo.u32 a1, a2, a4, a1;     \n"
                                       "mad.lo.u32 $0, a1, a3, a0;     \n"
                                       "}";
+const std::string Reg_Alloc_Op = "setmaxnreg.inc.sync.aligned.u32 #regCount;";
+const std::string Reg_Dealloc_Op = "setmaxnreg.dec.sync.aligned.u32 #regCount;";
+
+const std::string Named_Barrier_Arrive_Op = "bar.arrive $0, $1;";
+const std::string Named_Barrier_Wait_Op = "bar.sync $0, $1;";
 const std::string Canonical_Warp_Id_Op =
     "{\n"
     ".reg .u32 a<5>;              \n"
@@ -63,7 +67,7 @@ bool isNumber(const std::string &s) {
                        }) == s.end();
 }
 
-Type getTypeFromConstraint(char constraint, mlir::PatternRewriter &rewriter) {
+Type getTypeFromConstraint(char constraint, PatternRewriter &rewriter) {
   Type ty;
   if (constraint == 'b')
     ty = IntegerType::get(rewriter.getContext(), 1);
@@ -83,242 +87,185 @@ Type getTypeFromConstraint(char constraint, mlir::PatternRewriter &rewriter) {
   return ty;
 }
 
-template <typename SourceOp, typename ConcreteT>
-class NVGPUOpPatternBase : public mlir::RewritePattern {
-public:
-  explicit NVGPUOpPatternBase(mlir::MLIRContext *context)
-      : mlir::RewritePattern(SourceOp::getOperationName(), 1, context) {}
-
-  // Converts the given value to the type represented by the constraint
-  // E.g. if val is of type llvmptr and constraint is 'r', then we convert
-  // val to i32 using ptrtoint(i32_ty, val)
-  mlir::Value convertToType(mlir::Value val, std::string constraint,
-                            Location &loc,
-                            mlir::PatternRewriter &rewriter) const {
-    auto isConstraintNumber = isNumber(constraint);
-    if (!isConstraintNumber) {
-      auto ty = getTypeFromConstraint(constraint[0], rewriter);
-      if (isa<LLVM::LLVMPointerType>(val.getType())) {
-        return ptrtoint(ty, val);
-      } else {
-        assert(val.getType().getIntOrFloatBitWidth() <=
-                   ty.getIntOrFloatBitWidth() &&
-               "Cannot convert to a smaller type");
-        if (val.getType().getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
-          return zext(ty, val);
-      }
-    }
-    return val;
-  }
-
-  SmallVector<PTXBuilder::Operand *>
-  getPtxOutputs(std::vector<std::string> &outputConstraints,
-                PTXBuilder &ptxBuilder) const {
-    SmallVector<PTXBuilder::Operand *> ptxOutputs;
-    for (unsigned i = 0; i < outputConstraints.size(); i++) {
-      auto *ptxOutput = ptxBuilder.newOperand(outputConstraints[i]);
-      ptxOutputs.push_back(ptxOutput);
-    }
-    return ptxOutputs;
-  }
-
-  OperandsAndConstraints
-  unpackOperands(OperandsAndConstraints &operandsAndConstraints,
-                 PTXBuilder &ptxBuilder, Location &loc,
-                 mlir::PatternRewriter &rewriter) const {
-    OperandsAndConstraints unpackedOperands;
-    for (auto &[operand, constraint] : operandsAndConstraints) {
-      auto llvmStruct = llvm::dyn_cast<LLVM::LLVMStructType>(operand.getType());
-      // if a constraint is a number, then we are doing input/output tying
-      // if the operand is a struct, then we need to unpack it, and
-      // add the constraint to each of the unpacked operands uses the constraint
-      // as an offset
-      auto isConstraintNumber = isNumber(constraint);
-      if (llvmStruct) {
-        for (unsigned i = 0; i < llvmStruct.getBody().size(); i++) {
-          if (isConstraintNumber) {
-            auto constraintInt = std::stoi(constraint) + i;
-            unpackedOperands.push_back(
-                {extract_val(llvmStruct.getBody()[i], operand, i),
-                 std::to_string(constraintInt)});
-          } else {
-            unpackedOperands.push_back(
-                {extract_val(llvmStruct.getBody()[i], operand, i), constraint});
-          }
-        }
-      } else {
-        unpackedOperands.push_back({operand, constraint});
-      }
-    }
-    return unpackedOperands;
-  }
-
-  SmallVector<PTXBuilder::Operand *>
-  getPtxOperands(OperandsAndConstraints &operandsAndConstraints,
-                 PTXBuilder &ptxBuilder, Location &loc,
-                 mlir::PatternRewriter &rewriter) const {
-    SmallVector<PTXBuilder::Operand *> ptxOperands;
-    auto unpackedOperandsAndConstraints =
-        unpackOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
-    for (auto &[operand, constraint] : unpackedOperandsAndConstraints) {
-      auto convertedOperand = convertToType(operand, constraint, loc, rewriter);
-      auto *ptxOperand = ptxBuilder.newOperand(convertedOperand, constraint);
-      ptxOperands.push_back(ptxOperand);
-    }
-    return ptxOperands;
-  }
-
-  virtual std::vector<std::string> getOutputConstraints(SourceOp op) const {
-    return {};
-  }
-
-  virtual OperandsAndConstraints getOperandsAndConstraints(SourceOp op) const {
-    return {};
-  }
-
-  std::string patchPtxAsm(mlir::Operation *op, std::string ptxAsm) const {
-    std::vector<std::pair<int, int>> patchLocations;
-    std::vector<std::string> patchValues;
-    auto start = ptxAsm.find("#", 0);
-    while (start != std::string::npos) {
-      auto endIterator =
-          std::find_if(ptxAsm.begin() + start + 1, ptxAsm.end(),
-                       [](unsigned char c) { return !std::isalnum(c); });
-
-      assert(endIterator != ptxAsm.end() && "unexpected asm format");
-
-      auto end = std::distance(ptxAsm.begin(), endIterator);
-      auto patchLocation = std::make_pair(start, end);
-      patchLocations.push_back(patchLocation);
-      auto patchValue = ptxAsm.substr(start + 1, end - start - 1);
-      patchValues.push_back(patchValue);
-      start = ptxAsm.find("#", end);
-    }
-    assert(patchLocations.size() == patchValues.size() &&
-           "patchLocations and patchValues should have the same size");
-    if (patchLocations.size() == 0) {
-      return ptxAsm;
-    }
-    std::string res = "";
-    size_t prevStart = 0;
-    unsigned i = 0;
-    for (auto &[start, end] : patchLocations) {
-      res += ptxAsm.substr(prevStart, start - prevStart);
-      auto integerAttr = op->getAttrOfType<IntegerAttr>(patchValues[i]);
-      auto attr = integerAttr.getInt();
-      res += std::to_string(attr);
-      prevStart = end;
-      i++;
-    }
-    if (prevStart < ptxAsm.size())
-      res += ptxAsm.substr(prevStart, ptxAsm.size() - prevStart);
-    return res;
-  }
-
-  LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto ctx = rewriter.getContext();
-    auto loc = op->getLoc();
-    auto sourceOp = llvm::dyn_cast<SourceOp>(op);
-    if (!sourceOp)
-      return mlir::failure();
-    auto concrete = static_cast<const ConcreteT *>(this);
-    auto ptxAsm = concrete->getPtxAsm(sourceOp);
-    auto ptxAsmPatched = patchPtxAsm(sourceOp, ptxAsm);
-    auto hasSideEffects = !isMemoryEffectFree(sourceOp);
-    auto operandsAndConstraints = concrete->getOperandsAndConstraints(sourceOp);
-    auto outputConstraints = concrete->getOutputConstraints(sourceOp);
-
-    PTXBuilder ptxBuilder;
-    auto ptxOutputs = getPtxOutputs(outputConstraints, ptxBuilder);
-    auto ptxOperands =
-        getPtxOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
-    SmallVector<PTXBuilder::Operand *> outputsAndOperands = ptxOutputs;
-    outputsAndOperands.append(ptxOperands.begin(), ptxOperands.end());
-    auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsmPatched);
-    ptxInstr(outputsAndOperands, /*onlyAttachMLIRArgs=*/true);
-    auto retTy =
-        op->getNumResults() == 0 ? void_ty(ctx) : op->getResult(0).getType();
-    auto res = ptxBuilder.launch(rewriter, loc, retTy,
-                                 /*hasSideEffects*/ hasSideEffects);
-    if (op->getNumResults() == 0) {
-      rewriter.eraseOp(op);
+// Converts the given value to the type represented by the constraint
+// E.g. if val is of type llvmptr and constraint is 'r', then we convert
+// val to i32 using ptrtoint(i32_ty, val)
+Value convertToType(Value val, std::string constraint, Location loc,
+                    PatternRewriter &rewriter) {
+  auto isConstraintNumber = isNumber(constraint);
+  if (!isConstraintNumber) {
+    auto ty = getTypeFromConstraint(constraint[0], rewriter);
+    if (isa<LLVM::LLVMPointerType>(val.getType())) {
+      return ptrtoint(ty, val);
     } else {
-      rewriter.replaceOp(op, res);
+      assert(val.getType().getIntOrFloatBitWidth() <=
+                 ty.getIntOrFloatBitWidth() &&
+             "Cannot convert to a smaller type");
+      if (val.getType().getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
+        return zext(ty, val);
     }
-
-    return mlir::success();
   }
-};
+  return val;
+}
+
+SmallVector<PTXBuilder::Operand *>
+getPtxOutputs(const nvgpu::Constraints &outputConstraints,
+              PTXBuilder &ptxBuilder) {
+  SmallVector<PTXBuilder::Operand *> ptxOutputs;
+  for (unsigned i = 0; i < outputConstraints.size(); i++) {
+    auto *ptxOutput = ptxBuilder.newOperand(outputConstraints[i]);
+    ptxOutputs.push_back(ptxOutput);
+  }
+  return ptxOutputs;
+}
+
+OperandsAndConstraints
+unpackOperands(const OperandsAndConstraints &operandsAndConstraints,
+               PTXBuilder &ptxBuilder, Location loc,
+               PatternRewriter &rewriter) {
+  OperandsAndConstraints unpackedOperands;
+  for (const auto &[operand, constraint] : operandsAndConstraints) {
+    auto llvmStruct = llvm::dyn_cast<LLVM::LLVMStructType>(operand.getType());
+    // if a constraint is a number, then we are doing input/output tying
+    // if the operand is a struct, then we need to unpack it, and
+    // add the constraint to each of the unpacked operands uses the constraint
+    // as an offset
+    auto isConstraintNumber = isNumber(constraint);
+    if (llvmStruct) {
+      for (unsigned i = 0; i < llvmStruct.getBody().size(); i++) {
+        if (isConstraintNumber) {
+          auto constraintInt = std::stoi(constraint) + i;
+          unpackedOperands.push_back(
+              {extract_val(llvmStruct.getBody()[i], operand, i),
+               std::to_string(constraintInt)});
+        } else {
+          unpackedOperands.push_back(
+              {extract_val(llvmStruct.getBody()[i], operand, i), constraint});
+        }
+      }
+    } else {
+      unpackedOperands.push_back({operand, constraint});
+    }
+  }
+  return unpackedOperands;
+}
+
+SmallVector<PTXBuilder::Operand *>
+getPtxOperands(const OperandsAndConstraints &operandsAndConstraints,
+               PTXBuilder &ptxBuilder, Location loc,
+               PatternRewriter &rewriter) {
+  SmallVector<PTXBuilder::Operand *> ptxOperands;
+  auto unpackedOperandsAndConstraints =
+      unpackOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
+  for (auto &[operand, constraint] : unpackedOperandsAndConstraints) {
+    auto convertedOperand = convertToType(operand, constraint, loc, rewriter);
+    auto *ptxOperand = ptxBuilder.newOperand(convertedOperand, constraint);
+    ptxOperands.push_back(ptxOperand);
+  }
+  return ptxOperands;
+}
+
+std::string patchPtxAsm(Operation *op, std::string ptxAsm) {
+  std::vector<std::pair<int, int>> patchLocations;
+  std::vector<std::string> patchValues;
+  auto start = ptxAsm.find("#", 0);
+  while (start != std::string::npos) {
+    auto endIterator =
+        std::find_if(ptxAsm.begin() + start + 1, ptxAsm.end(),
+                     [](unsigned char c) { return !std::isalnum(c); });
+
+    assert(endIterator != ptxAsm.end() && "unexpected asm format");
+
+    auto end = std::distance(ptxAsm.begin(), endIterator);
+    auto patchLocation = std::make_pair(start, end);
+    patchLocations.push_back(patchLocation);
+    auto patchValue = ptxAsm.substr(start + 1, end - start - 1);
+    patchValues.push_back(patchValue);
+    start = ptxAsm.find("#", end);
+  }
+  assert(patchLocations.size() == patchValues.size() &&
+         "patchLocations and patchValues should have the same size");
+  if (patchLocations.size() == 0) {
+    return ptxAsm;
+  }
+  std::string res = "";
+  size_t prevStart = 0;
+  unsigned i = 0;
+  for (auto &[start, end] : patchLocations) {
+    res += ptxAsm.substr(prevStart, start - prevStart);
+    auto integerAttr = op->getAttrOfType<IntegerAttr>(patchValues[i]);
+    auto attr = integerAttr.getInt();
+    res += std::to_string(attr);
+    prevStart = end;
+    i++;
+  }
+  if (prevStart < ptxAsm.size())
+    res += ptxAsm.substr(prevStart, ptxAsm.size() - prevStart);
+  return res;
+}
 
 template <typename SourceOp>
-class NVGPUOpGenericPattern
-    : public NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>> {
+class NVGPUOpGenericPattern : public OpRewritePattern<SourceOp> {
 public:
-  explicit NVGPUOpGenericPattern(mlir::MLIRContext *context, std::string ptxAsm,
-                                 std::vector<std::string> outputConstraints,
-                                 std::vector<std::string> inputConstraints)
-      : NVGPUOpPatternBase<SourceOp, NVGPUOpGenericPattern<SourceOp>>(context),
-        ptxAsm(ptxAsm), outputConstraints(outputConstraints),
+  explicit NVGPUOpGenericPattern(MLIRContext *context, std::string ptxAsm,
+                                 Constraints outputConstraints,
+                                 Constraints inputConstraints)
+      : OpRewritePattern<SourceOp>(context), ptxAsm(std::move(ptxAsm)),
+        outputConstraints(outputConstraints),
         inputConstraints(inputConstraints) {}
 
-  std::vector<std::string> getOutputConstraints(SourceOp op) const {
-    return outputConstraints;
-  }
-  OperandsAndConstraints getOperandsAndConstraints(SourceOp op) const {
+  LogicalResult matchAndRewrite(SourceOp op,
+                                PatternRewriter &rewriter) const override {
     OperandsAndConstraints operandsAndConstraints;
     for (unsigned i = 0; i < inputConstraints.size(); i++) {
       operandsAndConstraints.push_back(
           {op->getOperand(i), inputConstraints[i]});
     }
-    return operandsAndConstraints;
+    return rewriteAsPtxAsm(op, rewriter, ptxAsm, operandsAndConstraints,
+                           outputConstraints);
   }
-  std::string getPtxAsm(SourceOp op) const { return ptxAsm; }
 
 private:
   std::string ptxAsm;
-  std::vector<std::string> outputConstraints;
-  std::vector<std::string> inputConstraints;
+  Constraints outputConstraints;
+  Constraints inputConstraints;
 };
 
 class FenceAsyncSharedOpPattern
-    : public NVGPUOpPatternBase<ttn::FenceAsyncSharedOp,
-                                FenceAsyncSharedOpPattern> {
+    : public OpRewritePattern<ttn::FenceAsyncSharedOp> {
 public:
-  using Base =
-      NVGPUOpPatternBase<ttn::FenceAsyncSharedOp, FenceAsyncSharedOpPattern>;
-  using Base::Base;
+  using OpRewritePattern<ttn::FenceAsyncSharedOp>::OpRewritePattern;
 
-  std::string getPtxAsm(ttn::FenceAsyncSharedOp op) const {
-    auto bCluster = op.getBCluster();
-    if (bCluster)
-      return "fence.proxy.async.shared::cluster;";
-    else
-      return "fence.proxy.async.shared::cta;";
+  LogicalResult matchAndRewrite(ttn::FenceAsyncSharedOp op,
+                                PatternRewriter &rewriter) const override {
+    std::string ptxAsm = op.getBCluster() ? "fence.proxy.async.shared::cluster;"
+                                          : "fence.proxy.async.shared::cta;";
+    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
   }
 };
 
-class ClusterArriveOpPattern
-    : public NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern> {
+class ClusterArriveOpPattern : public OpRewritePattern<ttn::ClusterArriveOp> {
 public:
-  using Base = NVGPUOpPatternBase<ttn::ClusterArriveOp, ClusterArriveOpPattern>;
-  using Base::Base;
+  using OpRewritePattern<ttn::ClusterArriveOp>::OpRewritePattern;
 
-  std::string getPtxAsm(ttn::ClusterArriveOp op) const {
-    auto relaxed = op.getRelaxed();
-    if (relaxed)
-      return "barrier.cluster.arrive.relaxed.aligned;";
-    else
-      return "barrier.cluster.arrive.aligned;";
+  LogicalResult matchAndRewrite(ttn::ClusterArriveOp op,
+                                PatternRewriter &rewriter) const override {
+    std::string ptxAsm = op.getRelaxed()
+                             ? "barrier.cluster.arrive.relaxed.aligned;"
+                             : "barrier.cluster.arrive.aligned;";
+    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
   }
 };
 
-class StoreMatrixOpPattern
-    : public NVGPUOpPatternBase<ttn::StoreMatrixOp, StoreMatrixOpPattern> {
+class StoreMatrixOpPattern : public OpRewritePattern<ttn::StoreMatrixOp> {
 public:
-  using Base = NVGPUOpPatternBase<ttn::StoreMatrixOp, StoreMatrixOpPattern>;
-  using Base::Base;
+  using OpRewritePattern<ttn::StoreMatrixOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::StoreMatrixOp op,
+                                PatternRewriter &rewriter) const override {
+    return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
+                           getOperandsAndConstraints(op));
+  }
 
   OperandsAndConstraints
   getOperandsAndConstraints(ttn::StoreMatrixOp op) const {
@@ -353,137 +300,94 @@ public:
   }
 };
 
-class StoreDSmemOpPattern
-    : public NVGPUOpPatternBase<ttn::StoreDSmemOp, StoreDSmemOpPattern> {
+class MBarrierArriveOpPattern : public OpRewritePattern<ttn::MBarrierArriveOp> {
 public:
-  using Base = NVGPUOpPatternBase<ttn::StoreDSmemOp, StoreDSmemOpPattern>;
-  using Base::Base;
+  using OpRewritePattern<ttn::MBarrierArriveOp>::OpRewritePattern;
 
-  OperandsAndConstraints getOperandsAndConstraints(ttn::StoreDSmemOp op) const {
+  LogicalResult matchAndRewrite(ttn::MBarrierArriveOp op,
+                                PatternRewriter &rewriter) const override {
+    return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
+                           getOperandsAndConstraints(op));
+  }
+
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::MBarrierArriveOp op) const {
     OperandsAndConstraints operandsAndTypes;
-    auto addr = op.getAddr();
-    auto ctaId = op.getCtaId();
-    auto values = op.getValues();
-    auto pred = op.getPred();
-    auto bitwidth = op.getBitwidth();
-    operandsAndTypes.push_back({addr, "r"});
-    operandsAndTypes.push_back({ctaId, "r"});
-    operandsAndTypes.push_back({pred, "b"});
-    std::string c = bitwidth == 16 ? "h" : (bitwidth == 32 ? "r" : "l");
-    for (unsigned i = 0; i < values.size(); i++) {
-      operandsAndTypes.push_back({values[i], c});
+    Value mbarrier = op.getMbarrier();
+    Value pred = op.getPred();
+    Value ctaId = op.getCtaId();
+    auto arriveType = op.getArriveType();
+
+    switch (arriveType) {
+    case ttn::MBarriveType::normal:
+    case ttn::MBarriveType::cp_async:
+    case ttn::MBarriveType::expect_tx:
+      operandsAndTypes.push_back({mbarrier, "r"});
+      operandsAndTypes.push_back({pred, "b"});
+      break;
+    case ttn::MBarriveType::remote:
+      operandsAndTypes.push_back({mbarrier, "r"});
+      operandsAndTypes.push_back({ctaId, "r"});
+      operandsAndTypes.push_back({pred, "b"});
+      break;
+    default:
+      llvm::errs() << "Unsupported mbarrier arrive type " << arriveType << "\n";
+      llvm_unreachable("");
+      break;
     }
     return operandsAndTypes;
   }
 
-  std::string getPtxAsm(ttn::StoreDSmemOp op) const {
-    auto bitwidth = op.getBitwidth();
-    auto vec = op.getVec();
-    auto values = op.getValues();
-    assert(
-        (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
-        "invalid bitwidth");
-    assert((vec == 1 || vec == 2 || vec == 4) && vec == values.size() &&
-           "invalid vec size");
+  std::string getPtxAsm(ttn::MBarrierArriveOp op) const {
+    Value ctaId = op.getCtaId();
+    auto arriveType = op.getArriveType();
+    uint32_t txCount = op.getTxCount();
     std::string ptxAsm;
-    if (vec == 1) {
-      ptxAsm = "{                                           \n"
-               ".reg .u32 remoteAddr;                       \n"
-               "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
-               ".reg .pred p;                               \n"
-               "mov.pred p, $2;                             \n"
-               "@p st.shared::cluster.u#bitwidth [remoteAddr], $3; \n"
-               "}\n";
-    }
-    if (vec == 2) {
-      ptxAsm = "{                                           \n"
-               ".reg .u32 remoteAddr;                       \n"
-               "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
-               ".reg .pred p;                               \n"
-               "mov.pred p, $2;                             \n"
-               "@p st.shared::cluster.v.u#bitwidth [remoteAddr], {$3, $4}; \n"
-               "}\n";
-    }
-    if (vec == 4) {
-      ptxAsm = "{                                           \n"
-               ".reg .u32 remoteAddr;                       \n"
-               "mapa.shared::cluster.u32 remoteAddr, $0, $1;\n"
-               ".reg .pred p;                               \n"
-               "mov.pred p, $2;                             \n"
-               "@p st.shared::cluster.v.u#bitwidth [remoteAddr], {$3, $4, $5, "
-               "$6}; \n"
-               "}\n";
+    switch (arriveType) {
+    case ttn::MBarriveType::normal:
+      ptxAsm = "@$1 mbarrier.arrive.shared.b64 _, [$0];";
+      break;
+    case ttn::MBarriveType::cp_async:
+      ptxAsm = "@$1 cp.async.mbarrier.arrive.noinc.shared.b64 [$0];";
+      break;
+    case ttn::MBarriveType::expect_tx:
+      assert(txCount > 0 && "txCount should be valid");
+      ptxAsm = "@$1 mbarrier.arrive.expect_tx.shared.b64 _, [$0], " +
+               std::to_string(txCount) + ";";
+      break;
+    case ttn::MBarriveType::remote:
+      assert(ctaId && "ctaId should have a valid value");
+      ptxAsm =
+          " { .reg .b32 remAddr32;                                       \n"
+          "  @$2 mapa.shared::cluster.u32  remAddr32, $0, $1;            \n"
+          "  @$2 mbarrier.arrive.shared::cluster.b64  _, [remAddr32]; }  \n";
+      break;
+    default:
+      llvm::errs() << "Unsupported mbarrier arrive type " << arriveType << "\n";
+      llvm_unreachable("");
+      break;
     }
     return ptxAsm;
   }
 };
 
-class LoadDSmemOpPattern
-    : public NVGPUOpPatternBase<ttn::LoadDSmemOp, LoadDSmemOpPattern> {
+class WGMMAWaitGroupOpPattern : public OpRewritePattern<ttn::WGMMAWaitGroupOp> {
 public:
-  using Base = NVGPUOpPatternBase<ttn::LoadDSmemOp, LoadDSmemOpPattern>;
-  using Base::Base;
+  using OpRewritePattern<ttn::WGMMAWaitGroupOp>::OpRewritePattern;
 
-  std::vector<std::string> getOutputConstraints(ttn::LoadDSmemOp op) const {
-    auto bitwidth = op.getBitwidth();
-    std::string c = bitwidth == 16 ? "=h" : (bitwidth == 32 ? "=r" : "=l");
-    auto vec = op.getVec();
-    return std::vector<std::string>(vec, c);
-  }
-  OperandsAndConstraints getOperandsAndConstraints(ttn::LoadDSmemOp op) const {
-    OperandsAndConstraints operandsAndTypes;
-    auto addr = op.getAddr();
-    auto ctaId = op.getCtaId();
-
-    operandsAndTypes.push_back({addr, "r"});
-    operandsAndTypes.push_back({ctaId, "r"});
-    return operandsAndTypes;
+  LogicalResult matchAndRewrite(ttn::WGMMAWaitGroupOp op,
+                                PatternRewriter &rewriter) const override {
+    return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
+                           getOperandsAndConstraints(op),
+                           getOutputConstraints(op));
   }
 
-  std::string getPtxAsm(ttn::LoadDSmemOp op) const {
-    auto addr = op.getAddr();
-    auto ctaId = op.getCtaId();
-    auto bitwidth = op.getBitwidth();
-    auto vec = op.getVec();
-
-    assert(
-        (bitwidth == 8 || bitwidth == 16 || bitwidth == 32 || bitwidth == 64) &&
-        "invalid bitwidth");
-    assert((vec == 1 || vec == 2 || vec == 4) && "invalid vec size");
-
-    std::string o1 = vec > 1 ? ".v.u" : ".u";
-    std::string vecStr = vec == 1   ? "$0"
-                         : vec == 2 ? "{$0, $1}"
-                                    : "{$0, $1, $2, $3}";
-    unsigned argNum = vec == 1 ? 1 : vec == 2 ? 2 : 4;
-    auto ptxAsm = "{\n"
-                  ".reg .u32 remoteAddr;\n"
-                  "mapa.shared::cluster.u32 remoteAddr, $" +
-                  std::to_string(argNum) + " , $" + std::to_string(argNum + 1) +
-                  " ; \n"
-                  "ld.shared::cluster" +
-                  o1 + std::to_string(bitwidth) + " " + vecStr +
-                  ", [remoteAddr];\n"
-                  "}\n";
-    return ptxAsm;
-  }
-};
-
-class WGMMAWaitGroupOpPattern
-    : public NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp,
-                                WGMMAWaitGroupOpPattern> {
-public:
-  using Base =
-      NVGPUOpPatternBase<ttn::WGMMAWaitGroupOp, WGMMAWaitGroupOpPattern>;
-  using Base::Base;
-
-  std::vector<std::string>
-  getOutputConstraints(ttn::WGMMAWaitGroupOp op) const {
+  Constraints getOutputConstraints(ttn::WGMMAWaitGroupOp op) const {
     auto outputStructType = cast<LLVM::LLVMStructType>(op.getType());
     uint32_t numOutputRegs = outputStructType.getBody().size();
     std::string output =
         outputStructType.getBody().front().isF32() ? "=f" : "=r";
-    return std::vector<std::string>(numOutputRegs, output);
+    return Constraints(numOutputRegs, output);
   }
 
   OperandsAndConstraints
@@ -508,10 +412,16 @@ public:
   }
 };
 
-class WGMMAOpPattern : public NVGPUOpPatternBase<ttn::WGMMAOp, WGMMAOpPattern> {
+class WGMMAOpPattern : public OpRewritePattern<ttn::WGMMAOp> {
 public:
-  using Base = NVGPUOpPatternBase<ttn::WGMMAOp, WGMMAOpPattern>;
-  using Base::Base;
+  using OpRewritePattern<ttn::WGMMAOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::WGMMAOp op,
+                                PatternRewriter &rewriter) const override {
+    return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
+                           getOperandsAndConstraints(op),
+                           getOutputConstraints(op));
+  }
 
   std::vector<std::string> getOutputConstraints(ttn::WGMMAOp op) const {
     // TODO (zahi): Return type must always be a struct for wgmma, currently
@@ -531,6 +441,7 @@ public:
     auto opA = op.getOpA();
     auto opB = op.getOpB();
     auto opC = op.getOpC();
+    auto opScaleD = op.getUseC();
     auto typeA = opA.getType();
 
     auto structTypeA = dyn_cast<LLVM::LLVMStructType>(typeA);
@@ -547,6 +458,11 @@ public:
 
     // Operand B (must be `desc`)
     operandsAndConstraints.push_back({opB, "l"});
+
+    // `scale-d`
+    if (op.getOpC())
+      operandsAndConstraints.push_back({opScaleD, "b"});
+
     return operandsAndConstraints;
   }
 
@@ -643,8 +559,11 @@ public:
     // Operand B (must be `desc`)
     args += "$" + std::to_string(asmOpIdx++) + ", ";
 
-    // `scale-d` is 1 if we have a C operand.
-    args += op.getOpC() ? "1" : "0";
+    // `scale-d`
+    if (op.getOpC())
+      args += "$" + std::to_string(asmOpIdx++);
+    else
+      args += "0";
 
     // `imm-scale-a`, and `imm-scale-b` are 1 by default only for float-based
     // WGMMA
@@ -681,17 +600,25 @@ public:
 #define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
   patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
                                               Constraints());
+    POPULATE_NVGPU_OP(ttn::RegAllocOp, Reg_Alloc_Op)
     POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, Wgmma_Fence_Op)
     POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, Wgmma_Commit_Group_Op)
     POPULATE_NVGPU_OP(ttn::ClusterWaitOp, Cluster_Wait_Op)
+    POPULATE_NVGPU_OP(ttn::RegDeallocOp, Reg_Dealloc_Op)
 #undef POPULATE_NVGPU_OP
+    patterns.add<NVGPUOpGenericPattern<ttn::NamedBarrierArriveOp>>(
+        context, Named_Barrier_Arrive_Op, Constraints(),
+        Constraints({"r", "r"}));
+    patterns.add<NVGPUOpGenericPattern<ttn::NamedBarrierWaitOp>>(
+        context, Named_Barrier_Wait_Op, Constraints(), Constraints({"r", "r"}));
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, Cluster_Cta_Id_Op, Constraints({"=r"}), Constraints());
+    patterns.add<NVGPUOpGenericPattern<ttn::CanonicalWarpIdOp>>(
+        context, Canonical_Warp_Id_Op, Constraints({"=r"}), Constraints());
 
-    patterns
-        .add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
-             ClusterArriveOpPattern, WGMMAOpPattern, WGMMAWaitGroupOpPattern>(
-            context);
+    patterns.add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
+                 MBarrierArriveOpPattern, ClusterArriveOpPattern,
+                 WGMMAOpPattern, WGMMAWaitGroupOpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
@@ -702,6 +629,37 @@ public:
 
 namespace mlir {
 namespace triton {
+
+LogicalResult
+nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
+                       std::string ptxAsm,
+                       const OperandsAndConstraints &operandsAndConstraints,
+                       const Constraints &outputConstraints) {
+  auto ctx = rewriter.getContext();
+  auto loc = op->getLoc();
+  ptxAsm = patchPtxAsm(op, std::move(ptxAsm));
+  auto hasSideEffects = !isMemoryEffectFree(op);
+
+  PTXBuilder ptxBuilder;
+  auto ptxOutputs = getPtxOutputs(outputConstraints, ptxBuilder);
+  auto ptxOperands =
+      getPtxOperands(operandsAndConstraints, ptxBuilder, loc, rewriter);
+  SmallVector<PTXBuilder::Operand *> outputsAndOperands = ptxOutputs;
+  outputsAndOperands.append(ptxOperands.begin(), ptxOperands.end());
+  auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
+  ptxInstr(outputsAndOperands, /*onlyAttachMLIRArgs=*/true);
+  auto retTy =
+      op->getNumResults() == 0 ? void_ty(ctx) : op->getResult(0).getType();
+  auto res = ptxBuilder.launch(rewriter, loc, retTy,
+                               /*hasSideEffects*/ hasSideEffects);
+  if (op->getNumResults() == 0) {
+    rewriter.eraseOp(op);
+  } else {
+    rewriter.replaceOp(op, res);
+  }
+
+  return success();
+}
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUToLLVMPass() {
   return std::make_unique<::ConvertNVGPUToLLVM>();

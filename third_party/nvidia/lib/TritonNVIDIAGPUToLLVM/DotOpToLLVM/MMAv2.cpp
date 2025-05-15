@@ -1,6 +1,9 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -58,16 +61,89 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int n0, int n1,
     RankedTensorType type) {
-
   auto elems = unpackLLElements(loc, value, rewriter);
   int offset{};
   ValueTableV2 vals;
+
+  // FIXME [Dot LL]
+  // [ez] Generalize the logic below for kWidth * elemBitWidth > 32
+  auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
+  auto largeK = dot.getKWidth() == 8 &&
+                cast<NvidiaMmaEncodingAttr>(dot.getParent()).isAmpere();
+  if (largeK) {
+    llvm::SmallVector<unsigned> si;
+
+    // For kWidth = 8, split the mma into 4 mmas with "stride 4" along K
+    if (dot.getOpIdx() == 0) {
+      // Original register layout:
+      //
+      //   [0, 1, 2, 3], [8, 9, 10, 11]
+      //   [4, 5, 6, 7], [12, 13, 14, 15]
+      //
+      // Each element in the layout consists of two bf16 values.
+      // For example, the row [0, 1, 2, 3] expands to:
+      //
+      //   [[0/0, 0/1], [1/0, 1/1], [2/0, 2/1], [3/0, 3/1]]
+      //
+      // Here, 0/0 refers to the first half of element 0, and 0/1 refers to the
+      // second half, matching kWidth = 8.
+      //
+      // To derive four independent MMA operations, a stride of 4 is applied to
+      // the original register layout:
+      //
+      //   1st MMA: [0, 4, 8, 12]
+      //   2nd MMA: [1, 5, 9, 13]
+      //   3rd MMA: [2, 6, 10, 14]
+      //   4th MMA: [3, 7, 11, 15]
+      si = llvm::SmallVector<unsigned>{0, 4, 8,  12, 1, 5, 9,  13,
+                                       2, 6, 10, 14, 3, 7, 11, 15};
+    } else {
+      // Original register layout:
+      //
+      //   [0, 1, 2, 3]^T, [4, 5, 6, 7]^T
+      //
+      // A stride of 4 is applied to derive four independent MMA operations:
+      //
+      //   1st MMA: [0, 4]
+      //   2nd MMA: [1, 5]
+      //   3rd MMA: [2, 6]
+      //   4th MMA: [3, 7]
+      si = llvm::SmallVector<unsigned>{0, 4, 1, 5, 2, 6, 3, 7};
+    }
+
+    auto step = si.size();
+    SmallVector<Value> perm(step);
+    for (auto i = 0; i < elems.size() / step; ++i) {
+      for (auto j = 0; j < step; ++j) {
+        perm[j] = elems[i * step + si[j]];
+      }
+      std::copy(perm.begin(), perm.end(), elems.begin() + i * step);
+    }
+
+    if (dot.getOpIdx() == 1) {
+      // there are kWidth * 2 elems packed as bf16x2
+      int elemsInTile = dot.getKWidth();
+      // n0 and n1 are unrolled in the legacy path
+      // Unrolling n1 makes some sense, but unrolling n0 makes absolutely no
+      // sense IMO
+      n0 *= 2;
+      n1 *= 2;
+      for (auto b = 0; b < batch; ++b)
+        for (auto j = 0; j < n1 / elemsInTile; ++j)
+          for (auto i = 0; i < n0; ++i)
+            for (auto k = 0; k < elemsInTile; ++k) {
+              vals[{b, i, elemsInTile * j + k}] = elems[offset++];
+            }
+      return vals;
+    }
+  }
+
   for (auto b = 0; b < batch; ++b)
     for (auto i = 0; i < n0; ++i) {
       for (auto j = 0; j < n1; j++) {
         vals[{b, 2 * i, 2 * j}] = elems[offset++];
-        vals[{b, 2 * i, 2 * j + 1}] = elems[offset++];
         vals[{b, 2 * i + 1, 2 * j}] = elems[offset++];
+        vals[{b, 2 * i, 2 * j + 1}] = elems[offset++];
         vals[{b, 2 * i + 1, 2 * j + 1}] = elems[offset++];
       }
     }
@@ -81,9 +157,9 @@ enum class TensorCoreType : uint8_t {
   FP32_TF32_TF32_FP32,
   FP16_FP16_FP16_FP16,
   FP32_FP8E5M2_FP8E5M2_FP32,
-  FP32_FP8E5M2_FP8E4M3FNUZ_FP32,
-  FP32_FP8E4M3FNUZ_FP8E5M2_FP32,
-  FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32,
+  FP32_FP8E5M2_FP8E4M3FN_FP32,
+  FP32_FP8E4M3FN_FP8E5M2_FP32,
+  FP32_FP8E4M3FN_FP8E4M3FN_FP32,
   // integer tensor core instr
   INT32_INT1_INT1_INT32, // Not implemented
   INT32_INT4_INT4_INT32, // Not implemented
@@ -112,9 +188,9 @@ Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   case TensorCoreType::FP16_FP16_FP16_FP16:
     return fp16x2Pack2Ty;
   case TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32:
-  case TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32:
-  case TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32:
-  case TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32:
+  case TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32:
+  case TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32:
+  case TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32:
     return fp32x4Ty;
   case TensorCoreType::INT32_INT8_INT8_INT32:
     return i32x4Ty;
@@ -140,14 +216,14 @@ TensorCoreType getMmaType(triton::DotOp op) {
         bTy.getElementType().isFloat8E5M2())
       return TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32;
     if (aTy.getElementType().isFloat8E5M2() &&
-        bTy.getElementType().isFloat8E4M3FNUZ())
-      return TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32;
-    if (aTy.getElementType().isFloat8E4M3FNUZ() &&
+        bTy.getElementType().isFloat8E4M3FN())
+      return TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32;
+    if (aTy.getElementType().isFloat8E4M3FN() &&
         bTy.getElementType().isFloat8E5M2())
-      return TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32;
-    if (aTy.getElementType().isFloat8E4M3FNUZ() &&
-        bTy.getElementType().isFloat8E4M3FNUZ())
-      return TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32;
+      return TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32;
+    if (aTy.getElementType().isFloat8E4M3FN() &&
+        bTy.getElementType().isFloat8E4M3FN())
+      return TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32;
     if (aTy.getElementType().isF32() && bTy.getElementType().isF32() &&
         op.getInputPrecision() == InputPrecision::TF32)
       return TensorCoreType::FP32_TF32_TF32_FP32;
@@ -193,11 +269,11 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
 
     {TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32"},
-    {TensorCoreType::FP32_FP8E5M2_FP8E4M3FNUZ_FP32,
+    {TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e4m3.f32"},
-    {TensorCoreType::FP32_FP8E4M3FNUZ_FP8E5M2_FP32,
+    {TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32"},
-    {TensorCoreType::FP32_FP8E4M3FNUZ_FP8E4M3FNUZ_FP32,
+    {TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32,
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"},
 };
 
@@ -318,19 +394,25 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-                  .getMMAv2Rep(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+                  .getMMAv2RepForOperand(aShapePerCTA, bitwidth,
+                                         dotOpA.getKWidth(), dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-                  .getMMAv2Rep(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
+                  .getMMAv2RepForOperand(bShapePerCTA, bitwidth,
+                                         dotOpB.getKWidth(), dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
   int repM = repA[1], repN = repB[2], repK = repA[2];
   int repBatch = repA[0];
 
-  // shape / shape_per_cta
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
+
+  // FIXME [Dot LL]
+  // max(repN / 2, 1) is wrong for repN = 1!
+  // This is also wrong in
+  // NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, std::max(repN / 2, 1),
       repK, bTensorTy);

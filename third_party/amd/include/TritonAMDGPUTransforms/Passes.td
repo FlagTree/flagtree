@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::ModuleOp"> {
+def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{
@@ -11,9 +11,15 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     tile
   }];
 
-  let constructor = "mlir::createTritonAMDGPUStreamPipelinePass()";
+  let constructor = "mlir::createTritonAMDGPUStreamPipelineV2Pass()";
 
   let dependentDialects = [];
+
+  let options = [
+    Option<"numStages", "num_stages",
+           "int32_t", /*default*/"2",
+           "Number of Pipeline stages">
+  ];
 }
 
 def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir::ModuleOp"> {
@@ -53,6 +59,46 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
 
 }
 
+def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers", "mlir::ModuleOp"> {
+  let summary = "Canonicalize pointers: rewrite pointers passed to load/store operation as a `<basePtr, offset>` pair.";
+
+  let description = [{
+  This pass pushes all the constant pointer arithmetic on a scalar basePtr, while all the vector
+  pointer arithmetic to a vector offset. I.e., if we consider the following IR:
+  ```
+    %v_ptr = tt.splat %s_ptr
+    %c_offset = tt.splat %s_offset
+    %v_offset0 = tt.make_range
+    %v_offset1 = tt.make_range
+    %v_ptr0 = tt.addptr %v_ptr, %c_offset
+    %v_ptr1 = tt.addptr %v_ptr0, %v_offset0
+    %v_ptr2 = tt.addptr %v_ptr0, %v_offset1
+    %data = tt.load(%v_ptr2)
+  ```
+  We transform this into:
+  ```
+    %s_ptr0 = tt.addptr %s_ptr, %s_offset
+    %v_offset = %zero
+    %v_offset = arith.addi %v_offset, %v_offset0
+    %v_offset = arith.addi %v_offset, %v_offset1
+    %c_ptr = tt.splat %s_ptr0
+    %v_ptr = tt.addptr %c_ptr, %v_offset
+    %data = tt.load(%v_ptr)
+  ```
+  In the above IR:
+  -  `v_` means "variable vector across the program"
+  -  `c_` means "constant vector across the program"
+  -  `s_` means "scalar"
+  So we transform the IR such that the constant updates become scalar updates, and the variable updates happen on the offset. Note that
+  when we have to load the data, we splat the scalar pointer, add the "variable" offset and then issue the load.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUCanonicalizePointersPass()";
+
+  let dependentDialects = [];
+
+}
+
 def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
   let summary = "Reorder instructions";
 
@@ -63,6 +109,16 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
   let constructor = "mlir::createTritonAMDGPUReorderInstructionsPass()";
 
   let dependentDialects = [];
+}
+
+def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "mlir::ModuleOp"> {
+  let summary = "Convert memory operations to buffer operations";
+
+  let description = "This pass converts memory operations (e.g., tt.load/tt.store) to  amdgpu buffer operations, if possible";
+
+  let constructor = "mlir::createTritonAMDGPUConvertToBufferOpsPass()";
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 #endif

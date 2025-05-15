@@ -2,10 +2,16 @@
 #define PROTON_DRIVER_GPU_CUPTI_H_
 
 #include "cupti.h"
+#include "cupti_pcsampling.h"
 
 namespace proton {
 
 namespace cupti {
+
+template <bool CheckSuccess> CUptiResult getVersion(uint32_t *version);
+
+template <bool CheckSuccess>
+CUptiResult getContextId(CUcontext context, uint32_t *pCtxId);
 
 template <bool CheckSuccess>
 CUptiResult activityRegisterCallbacks(
@@ -19,6 +25,10 @@ CUptiResult subscribe(CUpti_SubscriberHandle *subscriber,
 template <bool CheckSuccess>
 CUptiResult enableDomain(uint32_t enable, CUpti_SubscriberHandle subscriber,
                          CUpti_CallbackDomain domain);
+
+template <bool CheckSuccess>
+CUptiResult enableCallback(uint32_t enable, CUpti_SubscriberHandle subscriber,
+                           CUpti_CallbackDomain domain, CUpti_CallbackId cbid);
 
 template <bool CheckSuccess>
 CUptiResult activityEnableContext(CUcontext context, CUpti_ActivityKind kind);
@@ -55,6 +65,46 @@ template <bool CheckSuccess>
 CUptiResult unsubscribe(CUpti_SubscriberHandle subscriber);
 
 template <bool CheckSuccess> CUptiResult finalize();
+
+template <bool CheckSuccess>
+CUptiResult getGraphExecId(CUgraphExec graph, uint32_t *pId);
+
+template <bool CheckSuccess>
+CUptiResult getGraphId(CUgraph graph, uint32_t *pId);
+
+template <bool CheckSuccess>
+CUptiResult getCubinCrc(CUpti_GetCubinCrcParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult
+getSassToSourceCorrelation(CUpti_GetSassToSourceCorrelationParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult
+pcSamplingGetNumStallReasons(CUpti_PCSamplingGetNumStallReasonsParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult
+pcSamplingGetStallReasons(CUpti_PCSamplingGetStallReasonsParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult pcSamplingSetConfigurationAttribute(
+    CUpti_PCSamplingConfigurationInfoParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult pcSamplingEnable(CUpti_PCSamplingEnableParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult pcSamplingDisable(CUpti_PCSamplingDisableParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult pcSamplingGetData(CUpti_PCSamplingGetDataParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult pcSamplingStart(CUpti_PCSamplingStartParams *pParams);
+
+template <bool CheckSuccess>
+CUptiResult pcSamplingStop(CUpti_PCSamplingStopParams *pParams);
 
 } // namespace cupti
 
