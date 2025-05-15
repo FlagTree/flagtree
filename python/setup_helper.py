@@ -10,7 +10,7 @@ from pathlib import Path
 import hashlib
 from dataclasses import dataclass
 
-use_triton_shared = True
+use_triton_shared = False
 necessary_third_party = ["triton_shared"]
 default_backends = ["nvidia", "amd"]
 extend_backends = []
