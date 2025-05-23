@@ -319,6 +319,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
       LLVMPasses
       LLVMXPUCodeGen
       LLVMXPUAsmParser
+      LLVMXCNCodeGen
+      LLVMXCNAsmParser
     )
   endif()
 
