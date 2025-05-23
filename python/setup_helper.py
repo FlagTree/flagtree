@@ -14,9 +14,11 @@ use_triton_shared = False
 necessary_third_party = ["triton_shared"]
 default_backends = ["nvidia", "amd"]
 extend_backends = []
+plugin_backends = ["cambricon", "ascend"]
 ext_sourcedir = "triton/_C/"
 flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
 flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
+device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend"}
 
 
 @dataclass
@@ -41,6 +43,51 @@ set_llvm_env = lambda path: set_env({
     'LLVM_LIBRARY_DIR': Path(path) / "lib",
     'LLVM_SYSPATH': path,
 })
+
+
+def get_device_name():
+    return device_mapping[flagtree_backend]
+
+
+def get_extra_packages():
+    packages = []
+    if flagtree_backend == 'ascend':
+        packages = [
+            "triton/triton_patch",
+            "triton/triton_patch/language",
+            "triton/triton_patch/compiler",
+            "triton/triton_patch/runtime",
+        ]
+    return packages
+
+
+def get_package_data_tools():
+    package_data = ["compile.h", "compile.c"]
+    if flagtree_backend == 'xpu':
+        package_data += ["compile_xpu.h", "compile_xpu.c"]
+    return package_data
+
+
+def post_install(self):
+
+    def get_module(module_path):
+        import importlib.util
+        import os
+        module_path = os.path.abspath(module_path)
+        spec = importlib.util.spec_from_file_location("module", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def ascend():
+        utils = get_module("../third_party/ascend/utils.py")
+        utils.post_install()
+
+    code = f"{flagtree_backend}()"
+    try:
+        exec(code, globals(), locals())
+    except:  #noqa: E722
+        pass
 
 
 class FlagTreeCache:
@@ -236,7 +283,7 @@ class CommonUtils:
     @staticmethod
     def get_package_dir(packages):
         package_dict = {}
-        if flagtree_backend and flagtree_backend != 'cambricon':
+        if flagtree_backend and flagtree_backend not in plugin_backends:
             connection = []
             backend_triton_path = f"../third_party/{flagtree_backend}/python/"
             for package in packages:
@@ -245,6 +292,12 @@ class CommonUtils:
                 pair = (package, f"{backend_triton_path}{package}")
                 connection.append(pair)
             package_dict.update(connection)
+        if flagtree_backend == "ascend":
+            triton_patch_root_rel_dir = "../third_party/ascend/triton_patch/python/triton_patch"
+            package_dict["triton/triton_patch"] = f"{triton_patch_root_rel_dir}"
+            package_dict["triton/triton_patch/language"] = f"{triton_patch_root_rel_dir}/language"
+            package_dict["triton/triton_patch/compiler"] = f"{triton_patch_root_rel_dir}/compiler"
+            package_dict["triton/triton_patch/runtime"] = f"{triton_patch_root_rel_dir}/runtime"
         return package_dict
 
     @staticmethod

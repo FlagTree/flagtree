@@ -611,6 +611,7 @@ class plugin_install(install):
     def run(self):
         add_links()
         install.run(self)
+        helper.post_install(self)
 
 
 class plugin_develop(develop):
@@ -618,6 +619,7 @@ class plugin_develop(develop):
     def run(self):
         add_links()
         develop.run(self)
+        helper.post_install(self)
 
 
 class plugin_bdist_wheel(bdist_wheel):
@@ -625,6 +627,7 @@ class plugin_bdist_wheel(bdist_wheel):
     def run(self):
         add_links()
         bdist_wheel.run(self)
+        helper.post_install(self)
 
 
 class plugin_egginfo(egg_info):
@@ -632,11 +635,10 @@ class plugin_egginfo(egg_info):
     def run(self):
         add_links()
         egg_info.run(self)
+        helper.post_install(self)
 
 
-package_data_tools = ["compile.h", "compile.c"]
-if helper.flagtree_backend == "xpu":
-    package_data_tools += ["compile_xpu.h", "compile_xpu.c"]
+package_data_tools = helper.get_package_data_tools()
 package_data = {
     "triton/tools": package_data_tools, **{f"triton/backends/{b.name}": b.package_data
                                            for b in backends}, "triton/language/extra": sum(
@@ -676,10 +678,10 @@ def get_packages():
         "triton/backends",
         "triton/tools",
     ]
-    if helper.flagtree_backend == "xpu":
-        packages.append("triton/language/extra/xpu")
-    elif helper.flagtree_backend == "mthreads":
-        packages.append("triton/language/extra/musa")
+    if helper.flagtree_backend:
+        packages.append(f"triton/language/extra/{helper.get_device_name()}")
+    packages += helper.get_extra_packages()
+
     packages += [f'triton/backends/{backend.name}' for backend in backends]
     packages += get_language_extra_packages()
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
