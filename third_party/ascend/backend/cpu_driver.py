@@ -5,7 +5,7 @@ import os
 import sysconfig
 import subprocess
 import importlib
-from triton.backends.huawei.utils import _get_llvm_path
+from triton.backends.ascend.utils import _get_llvm_path
 
 
 # TODO: temporarily fake CPUUtils class

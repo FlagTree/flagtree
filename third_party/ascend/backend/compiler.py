@@ -271,7 +271,7 @@ class HuaweiBackend(BaseBackend):
         return options
 
     def pack_metadata(self, metadata):
-        from triton.backends.huawei.utils import TRITON_PROFILER_REGISTERED
+        from triton.backends.ascend.utils import TRITON_PROFILER_REGISTERED
         # collect necessary metadata to launch kernels
         # TORCHINDUCTOR_UNIQUE_KERNEL_NAMES=1 could set unique name.
         # Get this name as the kernel_name to CANN runtime.
