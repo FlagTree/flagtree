@@ -54,10 +54,8 @@ python3 -m pip install . --no-build-isolation -v
 
 ```shell
 # ascend
-TRITON_BUILD_WITH_CLANG_LLD=true
-LLVM_SYSPATH=yourpath/llvm-install 
-TRITON_BUILD_PROTON=OFF 
-TRITON_APPEND_CMAKE_ARGS="-DTRITON_BUILD_UT=OFF"
+export TRITON_BUILD_WITH_CLANG_LLD=true
+export LLVM_SYSPATH=yourpath/llvm-install 
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=ascend
 python3 -m pip install . --no-build-isolation -v
