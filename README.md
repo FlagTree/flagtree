@@ -52,6 +52,17 @@ export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
 ```
 
+```shell
+# ascend
+TRITON_BUILD_WITH_CLANG_LLD=true
+LLVM_SYSPATH=yourpath/llvm-install 
+TRITON_BUILD_PROTON=OFF 
+TRITON_APPEND_CMAKE_ARGS="-DTRITON_BUILD_UT=OFF"
+cd ${YOUR_CODE_DIR}/flagtree/python
+export FLAGTREE_BACKEND=ascend
+python3 -m pip install . --no-build-isolation -v
+```
+
 To build with default backends (nvidia, amd, triton_shared):
 ```shell
 # manually download LLVM
