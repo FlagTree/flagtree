@@ -57,7 +57,7 @@ endif()
 
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
-option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
+option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" ON)
 if(FLAGTREE_BACKEND)
   option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" OFF)
   option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" OFF)
@@ -66,7 +66,6 @@ else()
   option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 endif()
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
-
 # Ensure Python3 vars are set correctly
 # used conditionally in this file and by lit tests
 
@@ -423,6 +422,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
+
   if(FLAGTREE_BACKEND STREQUAL "cambricon")
     add_library(triton SHARED)
   else()
@@ -431,7 +431,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     else()
       set(IR_SRC ${PYTHON_SRC_PATH}/ir.cc)
     endif()
-    add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
+    add_library(triton SHARED
+                ${PYTHON_SRC_PATH}/main.cc
                 ${IR_SRC}
                 ${PYTHON_SRC_PATH}/passes.cc
                 ${PYTHON_SRC_PATH}/interpreter.cc

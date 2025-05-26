@@ -14,7 +14,7 @@ import hashlib
 import ctypes
 from typing import Optional
 
-from triton.backends.huawei.utils import downgrade_llir, _get_llvm_path, _get_mlir_path, _get_triton_adapter_opt_path, \
+from triton.backends.ascend.utils import downgrade_llir, _get_llvm_path, _get_mlir_path, _get_triton_adapter_opt_path, \
     _get_kernel_target, _get_npucompiler_path, _is_ascend_sanitizer_enabled
 
 

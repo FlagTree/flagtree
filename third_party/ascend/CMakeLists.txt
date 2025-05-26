@@ -7,6 +7,6 @@ add_custom_target(COPY_TRITON_ADAPTER_OPT)
 add_custom_command(TARGET COPY_TRITON_ADAPTER_OPT POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy
                         $<TARGET_FILE:triton-adapter-opt>
-                        ${TRITON_ROOT_DIR}/python/triton/backends/huawei/triton-adapter-opt
+                        ${TRITON_ROOT_DIR}/python/triton/backends/ascend/triton-adapter-opt
                     DEPENDS triton-adapter-opt)
 add_dependencies(TritonHUAWEI COPY_TRITON_ADAPTER_OPT)
