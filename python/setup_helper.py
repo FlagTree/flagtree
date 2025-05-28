@@ -9,6 +9,7 @@ import urllib.request
 from pathlib import Path
 import hashlib
 from dataclasses import dataclass
+from distutils.sysconfig import get_python_lib
 
 use_triton_shared = False
 necessary_third_party = ["triton_shared"]
@@ -257,7 +258,11 @@ class CommonUtils:
     @staticmethod
     def unlink():
         cur_path = os.path.dirname(__file__)
-        backends_dir_path = Path(cur_path) / "triton" / "backends"
+        if "editable_wheel" in sys.argv:
+            installation_dir = cur_path
+        else:
+            installation_dir = get_python_lib()
+        backends_dir_path = Path(installation_dir) / "triton" / "backends"
         if not os.path.exists(backends_dir_path):
             return
         for name in os.listdir(backends_dir_path):
