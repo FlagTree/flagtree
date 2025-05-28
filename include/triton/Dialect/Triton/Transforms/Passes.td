@@ -41,4 +41,15 @@ def TritonRewriteTensorPointer : Pass</*cli-arg*/"triton-rewrite-tensor-pointer"
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonExpressionRestructing : Pass</*cli-arg*/"triton-expression-resturcting", /*Op*/"mlir::ModuleOp"> {
+  let summary = "ExpressionRestructing";
+  let description = [{
+    transform a = b / c; d = a /e; to  a= c * e; d = b / a; 
+  }];
+
+  let constructor = "mlir::triton::createExpressionRestructingPass()";
+
+  let dependentDialects = ["mlir::triton::TritonDialect", "mlir::arith::ArithDialect"];
+}
+
 #endif
