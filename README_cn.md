@@ -51,6 +51,20 @@ cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
 ```
+```shell
+# ascend
+# manually download LLVM
+cd ${YOUR_LLVM_DOWNLOAD_DIR}
+wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-x64.tar.gz
+tar -zxvf llvm-b5cc222d-ubuntu-x64.tar.gz
+cd ${YOUR_CODE_DIR}/flagtree/python
+export LLVM_BUILD_DIR=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-b5cc222d-ubuntu-x64
+export LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include
+export LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib
+export LLVM_SYSPATH=$LLVM_BUILD_DIR
+export FLAGTREE_BACKEND=ascend
+python3 -m pip install . --no-build-isolation -v
+```
 
 使用默认的编译命令，可以编译安装 nvidia、amd、triton_shared 后端：
 ```shell
