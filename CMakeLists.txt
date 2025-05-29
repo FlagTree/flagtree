@@ -79,6 +79,9 @@ else()
 endif()
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
 
+if(FLAGTREE_BACKEND STREQUAL "metax")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_MACA -DUSE_MACA_OPAQUE_PTR -DUSE_BUILTIN -Wno-unused-result -Wno-attributes")
+endif()
 
 # #########
 # LLVM
@@ -322,6 +325,33 @@ if(TRITON_BUILD_PYTHON_MODULE)
       LLVMXCNCodeGen
       LLVMXCNAsmParser
     )
+  elseif(FLAGTREE_BACKEND STREQUAL "metax")
+    set(TRITON_LIBRARIES
+      ${triton_libs}
+      ${triton_plugins}
+      
+      # mlir
+      MLIRMACADialect
+      MLIRGPUToMACATransforms
+      MLIRGPUToGPURuntimeTransforms
+      MLIRGPUTransforms
+      MLIRIR
+      MLIRControlFlowToLLVM
+      MLIRBytecodeWriter
+      MLIRPass
+      MLIRTransforms
+      MLIRLLVMDialect
+      MLIRSupport
+      MLIRTargetLLVMIRExport
+      MLIRMathToLLVM
+      MLIRGPUDialect
+      MLIRSCFToControlFlow
+      MLIRIndexToLLVM
+
+      # LLVM
+      LLVMPasses
+      LLVMNVPTXCodeGen
+    )
   endif()
 
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
@@ -352,6 +382,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
   if(FLAGTREE_BACKEND STREQUAL "cambricon")
     add_library(triton SHARED)
+  elseif(FLAGTREE_BACKEND STREQUAL "metax")
+    add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
+                ${PYTHON_SRC_PATH}/interpreter.cc
+                ${PYTHON_SRC_PATH}/llvm.cc)
   else()
     add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                 ${PYTHON_SRC_PATH}/ir.cc
