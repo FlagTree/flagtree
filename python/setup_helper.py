@@ -357,7 +357,7 @@ class CommonUtils:
 def handle_flagtree_backend():
     global ext_sourcedir
     if flagtree_backend:
-        print(f"flagtree_backend is {flagtree_backend}")
+        print(f"\033[1;32m[INFO] FlagtreeBackend is {flagtree_backend}\033[0m")
         extend_backends.append(flagtree_backend)
         if "editable_wheel" in sys.argv and flagtree_backend != "ascend":
             ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
@@ -424,5 +424,14 @@ cache.store(
     url=
     "https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz",
     pre_hock=lambda: check_env('LLVM_BUILD_DIR'),
+    post_hock=set_llvm_env,
+)
+
+# ascend
+cache.store(
+    file="ascend-llvm-b5cc222d-ubuntu-x64.tar.gz",
+    condition=("ascend" == flagtree_backend),
+    url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-x64.tar.gz",
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
