@@ -324,4 +324,3 @@ class CUDABackend(BaseBackend):
     def hash(self):
         version = get_ptxas_version()
         return f'{version}-{self.capability}'
-
