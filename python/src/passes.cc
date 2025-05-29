@@ -37,7 +37,8 @@ void init_triton_passes_ttir(py::module &&m) {
   using namespace mlir::triton;
   ADD_PASS_WRAPPER_0("add_combine", createCombineOpsPass);
   ADD_PASS_WRAPPER_0("add_reorder_broadcast", createReorderBroadcastPass);
-  ADD_PASS_WRAPPER_0("add_expression_restructing", createExpressionRestructingPass);
+  ADD_PASS_WRAPPER_0("add_expression_restructing",
+                     createExpressionRestructingPass);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
                      createRewriteTensorPointerPass);
   ADD_PASS_WRAPPER_4("add_convert_to_ttgpuir",

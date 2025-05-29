@@ -8,6 +8,7 @@ add_triton_library(TritonTransforms
   RewriteTensorPointer.cpp
   ExpressionRestructing.cpp
 
+
   DEPENDS
   TritonTransformsIncGen
   TritonCombineIncGen
