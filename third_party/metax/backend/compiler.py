@@ -57,7 +57,7 @@ def ptx_get_version(cuda_version) -> int:
 def file_hash(path):
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
-    
+
 
 def maca_get_kernel_name(src: str) -> str:
     '''
@@ -70,6 +70,7 @@ def maca_get_kernel_name(src: str) -> str:
         line = line.strip()
         if line.startswith('define metaxgpu_kernel void @'):
             return re.match(r"define metaxgpu_kernel void @(.+?)\(", line).groups()[0]
+
 
 def parse_option(string):
     return [item for item in string.split(';') if item]
@@ -107,7 +108,8 @@ class MACAOptions:
         if not extern_libs.get('libdevice', None):
             # ext_maca_mathlib.bc
             env_ext_libdevice_path = os.getenv("TRITON_EXT_LIBDEVICE_PATH", None)
-            ext_libdevice_path = env_ext_libdevice_path if env_ext_libdevice_path is not None else str(ext_default_libdir) + '/ext_maca_mathlib.bc'
+            ext_libdevice_path = env_ext_libdevice_path if env_ext_libdevice_path is not None else str(
+                ext_default_libdir) + '/ext_maca_mathlib.bc'
             assert os.path.exists(ext_libdevice_path), "ext_maca_mathlib.bc do not exit, please check!"
             extern_libs['ext_libdevice'] = ext_libdevice_path
             # maca_kernellib.bc
@@ -171,7 +173,6 @@ class MACABackend(BaseBackend):
     def load_dialects(self, ctx):
         metax.load_dialects(ctx)
 
-
     @staticmethod
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
@@ -191,7 +192,7 @@ class MACABackend(BaseBackend):
     def make_ttgir(mod, metadata, opt, capability):
         assert opt.pipeline_load_num >= -1, "invalid pipeline_load_num value!"
         scenarios = parse_option(opt.scenario)
-        disable_prefetch = "unprefetch" in scenarios 
+        disable_prefetch = "unprefetch" in scenarios
         fullstage = "fullstage" in scenarios
         store_coalesce = "storeCoalesce" in scenarios
         mla = "mla" in scenarios
@@ -208,8 +209,8 @@ class MACABackend(BaseBackend):
             passes.ttgpuir.add_f32_dot_tc(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        
-        if opt.pipeline == "cpasync" :
+
+        if opt.pipeline == "cpasync":
             disable_prefetch = True
         metax.passes.ttgpuir.add_accelerate_matmul(pm, opt.num_stages, disable_prefetch, store_coalesce, "c500")
         passes.ttgpuir.add_remove_layout_conversions(pm)
@@ -225,15 +226,18 @@ class MACABackend(BaseBackend):
                 if opt.pipeline == "basic":
                     if mla and single_shm:
                         # only mla=True and single_shm=True
-                        metax.passes.ttgpuir.add_pipeline_maca(pm, opt.num_stages, opt.pipeline_load_num, fullstage, True)
+                        metax.passes.ttgpuir.add_pipeline_maca(pm, opt.num_stages, opt.pipeline_load_num, fullstage,
+                                                               True)
                     else:
-                        metax.passes.ttgpuir.add_pipeline_maca(pm, opt.num_stages, opt.pipeline_load_num, fullstage, False)
+                        metax.passes.ttgpuir.add_pipeline_maca(pm, opt.num_stages, opt.pipeline_load_num, fullstage,
+                                                               False)
                 elif opt.pipeline == "cpasync" and not mla:
                     metax.passes.ttgpuir.add_pipeline_async_tn(pm, opt.num_stages)
                     metax.passes.ttgpuir.add_pipeline_async_tt(pm, opt.num_stages)
                     metax.passes.ttgpuir.add_pipeline_async_base(pm, opt.num_stages, fullstage)
                 elif mla and opt.num_stages == 2 and opt.pipeline == "cpasync":
-                    metax.passes.ttgpuir.add_pipeline_async_multidot_mla(pm, opt.num_stages, fullstage, opt.pipeline_load_num)
+                    metax.passes.ttgpuir.add_pipeline_async_multidot_mla(pm, opt.num_stages, fullstage,
+                                                                         opt.pipeline_load_num)
                 else:
                     print("no avalilable pipeline for maca")
             else:
@@ -299,7 +303,6 @@ class MACABackend(BaseBackend):
         metadata["name"] = maca_get_kernel_name(llir)
         return llir
 
-
     @staticmethod
     def make_mcfatbin(src, metadata, opt, capability):
         scenarios = parse_option(opt.scenario)
@@ -312,16 +315,17 @@ class MACABackend(BaseBackend):
         compile_options = ""
         if (opt.pipeline == "basic" or opt.pipeline == "basic-prefetch") and "mla" not in scenarios:
             compile_options = " -mllvm -metaxgpu-sched-regpressure=false -mllvm -metaxgpu-PostRA-Scheduler=false -mllvm -metaxgpu-mma-sched=true "
-            if "fullstage" in scenarios: 
+            if "fullstage" in scenarios:
                 compile_options += " -mllvm -metaxgpu-vectorize-slp=true -mllvm -metaxgpu-igroup "
             else:
                 compile_options += " -mllvm -metaxgpu-vectorize-slp=true -mllvm -metaxgpu-sched-mma-maxnum=3 "
-            if "roll" not in scenarios: 
+            if "roll" not in scenarios:
                 compile_options += " -mllvm -metaxgpu-mma-unroll-count=" + str(opt.num_stages) + " "
         elif opt.pipeline == "cpasync" and "mla" not in scenarios:
             compile_options = " -mllvm -metaxgpu-sched-regpressure=true -mllvm -metaxgpu-sinkload=false -mllvm -metaxgpu-vectorize-slp=true \
                                 -mllvm -metaxgpu-igroup -mllvm -metaxgpu-aggressive-4g-addr-opt=true -mllvm -metaxgpu-shl-add-combine=false \
                                 -mllvm -misched-postra=true -mllvm -enable-post-misched=true "
+
             if os.getenv("TRITON_ENABLE_MACA_COMPILER_INT8_OPT"):
                 compile_options += " -mllvm -metaxgpu-slp-vectorize-i8=true"
             if "unroll" in scenarios:
@@ -329,7 +333,6 @@ class MACABackend(BaseBackend):
         if opt.extra_options != "":
             compile_options = opt.extra_options
         return metax.translate_llvmir_to_mcfatbin(src, mxcc_arch, os.environ.get('MACA_PATH'), compile_options)
-    
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)

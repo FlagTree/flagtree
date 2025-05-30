@@ -16,14 +16,17 @@ libdevice_dir = os.path.join(dirname, "lib")
 # libraries = ['cuda']
 libraries = []
 
+
 @functools.lru_cache()
 def maca_home_dirs():
     return os.getenv("MACA_PATH")
+
 
 @functools.lru_cache()
 def libmaca_dirs():
     maca_path = maca_home_dirs()
     return ["{}/lib/".format(maca_path)]
+
 
 maca_lib_dir = libmaca_dirs()
 maca_include_dir = [os.path.join(maca_home_dirs(), "include")]

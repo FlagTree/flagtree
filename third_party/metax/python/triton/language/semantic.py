@@ -708,7 +708,8 @@ def _str_to_rounding_mode(rounding_mode: Optional[str]):
         return ir.ROUNDING_MODE.RTNE_NO_NAN
     if rounding_mode == 'rtz':
         return ir.ROUNDING_MODE.RTZ
-    raise ValueError(f"Invalid rounding mode: {rounding_mode}. Supported rounding modes are 'rtne' and 'rtz' and 'rtne_no_nan'.")
+    raise ValueError(
+        f"Invalid rounding mode: {rounding_mode}. Supported rounding modes are 'rtne' and 'rtz' and 'rtne_no_nan'.")
 
 
 def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tensor:
