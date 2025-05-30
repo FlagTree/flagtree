@@ -11,6 +11,7 @@ std::unique_ptr<Pass> createCombineOpsPass();
 std::unique_ptr<Pass> createReorderBroadcastPass();
 std::unique_ptr<Pass> createRewriteTensorPointerPass();
 
+std::unique_ptr<Pass> createExpressionRestructingPass();
 } // namespace triton
 
 #define GEN_PASS_REGISTRATION
