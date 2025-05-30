@@ -49,6 +49,7 @@ def expression_restructuring_function_test(in_ptr0, in_ptr1, in_ptr2, in_ptr3, o
     tmp10 = tmp1 * tmp9
     tl.store(out_ptr2 + (r1 + (rnumel * x0)), tmp10, rmask)
 
+
 @pytest.mark.parametrize("vec_shape", VEC_SHAPES)
 def test_accruacy_kernel(vec_shape):
     x = vec_shape[0]
