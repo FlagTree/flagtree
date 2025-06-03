@@ -20,14 +20,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: FlagTree Build on NVIDIA-A100
+      - name: FlagTree Build
         shell: bash
         run: |
           source ~/env.sh
           cd python
-          MAX_JOBS=20 pip3.11 install . --no-build-isolation
+          MAX_JOBS=32 pip3.11 install . --no-build-isolation
 
-      - name: FlagTree Test on NVIDIA-A100
+      - name: FlagTree Test
         shell: bash
         run: |
           pytest -s python/test/unit
+          pytest -s python/test/operators
