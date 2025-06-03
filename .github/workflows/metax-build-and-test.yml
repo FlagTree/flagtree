@@ -1,7 +1,10 @@
 name: Metax-Build-And-Test
 
 on:
-  workflow_call:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -12,8 +15,36 @@ jobs:
     runs-on: metax
     if: ${{ github.repository == 'FlagTree/flagtree' }}
     steps:
-      - name: Checkout code
+      - name: Checkout code (attempt 1)
+        id: checkout1
         uses: actions/checkout@v4
+        continue-on-error: true
+
+      - name: Sleep before checkout2
+        if: steps.checkout1.outcome == 'failure'
+        run: |
+          echo "First checkout attempt failed. Sleeping for 120 seconds before retry..."
+          sleep 120
+
+      - name: Checkout code (attempt 2)
+        id: checkout2
+        if: steps.checkout1.outcome == 'failure'
+        uses: actions/checkout@v4
+        continue-on-error: true
+
+      - name: Sleep before final checkout
+        if: steps.checkout1.outcome == 'failure' && steps.checkout2.outcome == 'failure'
+        run: |
+          echo "Second checkout attempt failed. Sleeping for 180 seconds before final retry..."
+          sleep 180
+
+      - name: Checkout code (final attempt)
+        if: steps.checkout1.outcome == 'failure' && steps.checkout2.outcome == 'failure'
+        uses: actions/checkout@v4
+
+      - name: Verify checkout success
+        if: success()
+        run: echo "Checkout completed successfully"
 
       - name: FlagTree Build on Metax
         shell: bash
@@ -21,9 +52,9 @@ jobs:
           source ~/env.sh
           export FLAGTREE_BACKEND=metax
           cd python
-          MAX_JOBS=20 pip3 install . --no-build-isolation
+          MAX_JOBS=32 python3.10 -m pip install . --no-build-isolation
 
       - name: FlagTree Test on Metax
         shell: bash
         run: |
-          pytest -s python/test/unit
+          python3.10 -m pytest -s third_party/metax/python/test/unit
