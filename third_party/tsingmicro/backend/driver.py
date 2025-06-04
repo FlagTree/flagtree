@@ -11,54 +11,98 @@ import subprocess
 import importlib.util
 import shutil
 import sysconfig
+import atexit
 from pathlib import Path
-from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import GPUDriver
 from triton.backends.compiler import GPUTarget
 
+import torch
+from torch.utils import cpp_extension, rename_privateuse1_backend, generate_methods_for_privateuse1_backend
+
+module = cpp_extension.load(
+    name="txda",
+    sources=[os.path.dirname(__file__) + "/txda_device.cpp"],
+    #runtime include path
+    extra_include_paths=[""],
+    #runtime *.so path
+    extra_ldflags=[""],
+    extra_cflags=["-g"],
+    verbose=True,
+)
+
+torch.utils.rename_privateuse1_backend("txda")
+
+torch._register_device_module("txda", module)
+
+generate_methods_for_privateuse1_backend(for_storage=True)
+
+
+def _get_tx8_path(bin_name: str) -> str:
+    path = os.getenv("TX8_HOME", "")
+    if path == "":
+        raise Exception("TX8_HOME is not set.")
+    return os.path.join(path, bin_name)
+
+
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [
     os.path.join(dirname, "include"),
+    os.path.realpath(_get_tx8_path("include")),
     os.path.join(sysconfig.get_path('platlib'), "pybind11", "include"),
     os.path.join(sysconfig.get_path('platlib'), "torch", "include"),
     os.path.join(sysconfig.get_path('platlib'), "torch", "include", "torch", "csrc", "api", "include"),
     os.path.join(sysconfig.get_path('platlib'), "numpy", "_core", "include")
 ]
-library_dirs = [os.path.join(dirname, "lib"), os.path.join(sysconfig.get_path('platlib'), "torch", "lib")]
+library_dirs = [
+    os.path.join(dirname, "lib"),
+    os.path.realpath(_get_tx8_path("lib")),
+    os.path.join(sysconfig.get_path('platlib'), "torch", "lib")
+]
 libraries = ['tx8_runtime', 'torch', 'torch_cpu', 'torch_python', 'c10']
 
 
-# Path configuration for cross compilation
-def _get_llvm_bin_path(bin_name: str) -> str:
-    path = os.getenv("LLVM_BINARY_DIR", "")
-    if path == "":
-        raise Exception("LLVM_BINARY_DIR is not set.")
-    return os.path.join(path, bin_name)
-
-
-def _get_libc_root() -> str:
-    path = os.getenv("LIB_C_ROOT", "")
-    if path == "":
-        raise Exception("LIB_C_ROOT is not set.")
-    return path
-
-
-def _get_vendor_runtime_path() -> str:
-    path = os.getenv("LIB_VENDOR_RUNTIME_PATH", "")
-    if path == "":
-        raise Exception("LIB_VENDOR_RUNTIME_PATH is not set.")
-    return path
-
-
 def _dump_ir_if_needed(files):
-    path = os.getenv("ZTC_DUMP_PATH", "")
+    path = os.getenv("TRITON_DUMP_PATH", "")
     if not path:
         return
 
     os.makedirs(path, exist_ok=True)
     for f in files:
         shutil.copy(f, os.path.join(path, os.path.basename(f)))
+
+
+def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
+    suffix = sysconfig.get_config_var('EXT_SUFFIX')
+    so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
+    # try to avoid setuptools if possible
+    cc = os.environ.get("CC")
+    if cc is None:
+        # TODO: support more things here.
+        clang = shutil.which("clang")
+        cc = clang
+        if cc is None:
+            raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
+    # This function was renamed and made public in Python 3.10
+    if hasattr(sysconfig, 'get_default_scheme'):
+        scheme = sysconfig.get_default_scheme()
+    else:
+        scheme = sysconfig._get_default_scheme()
+    # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
+    # path changes to include 'local'. This change is required to use triton with system-wide python.
+    if scheme == 'posix_local':
+        scheme = 'posix_prefix'
+    py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
+    custom_backend_dirs = set(os.getenv(var) for var in ('TRITON_CUDACRT_PATH', 'TRITON_CUDART_PATH'))
+    include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
+    # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
+    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-std=c++17", "-Wno-psabi", "-o", so]
+    cc_cmd += [f'-l{lib}' for lib in libraries]
+    cc_cmd += [f"-L{dir}" for dir in library_dirs]
+    cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
+    cc_cmd += [f"-Wl,-rpath,{dir}" for dir in library_dirs]
+    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
+    return so
 
 
 # Build a native ELF on the platform running this python script
@@ -82,58 +126,6 @@ def compile_native(src, name):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-# Build a accelerator controller ELF
-def compile_accelerator(src, name, ext):
-    name = "npu_" + name
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
-    libc_inc = os.path.join(_get_libc_root(), "riscv64-unknown-elf", "include")
-    cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_path = os.path.join(tmpdir, f"{name}.{ext}")
-            # FIXME: Hardcoded path
-            #dst_path = os.path.join(tmpdir, "wrapper.so")
-            dst_path = "/tmp/wrapper.o"
-            with open(src_path, "w") as f:
-                f.write(src)
-            _dump_ir_if_needed([src_path])
-            clang_path = _get_llvm_bin_path("clang")
-            # Compile
-            subprocess.check_call([
-                clang_path, src_path, "-O2", "-c", "-fPIC", f"-I{libc_inc}", "--target=riscv64-unknown-elf",
-                "-march=rv64imafdc", "-o", dst_path
-            ])
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # FIXME: Hardcoded path
-            #dst_path = os.path.join(tmpdir, f"{name}.so")
-            dst_path = "/tmp/kernel.so"
-            libc_lib = os.path.join(_get_libc_root(), "riscv64-unknown-elf", "lib", "rv64imafdc", "lp64d")
-            libcrt_lib = os.path.join(_get_libc_root(), "lib", "gcc", "riscv64-unknown-elf", "15.0.0", "rv64imafdc",
-                                      "lp64d")
-            libvr_path = _get_vendor_runtime_path()
-            clang_path = _get_llvm_bin_path("clang")
-            # Link wrapper, kernel with Tx81 crt and intrinsics(libkcorert.a)
-            subprocess.check_call([
-                clang_path, "-nostdlib",
-                # FIXME: Hardcoded path
-                "/tmp/wrapper.o", "/tmp/kernel.o", "-O2", "--target=riscv64-unknown-elf", "-march=rv64imafdc", "-fPIC",
-                # "-shared",  # ELF toolchain doesn't support -shared
-                f"-L{libvr_path}", f"-L{libc_lib}", f"-L{libcrt_lib}",
-                # Allow libkcorert symbol overwrite libc symbols, libkcorert
-                # should be specified before libc
-                "-Wl,--allow-multiple-definition", "-lvr",  # Wrapper API of Tx81 intrinsic
-                "-lkcorert",  # Tx81 intrinsic API
-                "-lc", "-lm", "-lgcc", "-T", f"{libvr_path}/gcc_tx8_smarth.ld", "-o", dst_path
-            ])
-
-            _dump_ir_if_needed([dst_path])
-            with open(dst_path, 'rb') as f:
-                so = f.read()
-            return so
 
 
 # -------------------- Launcher ----------------------------
@@ -160,173 +152,43 @@ def _ty_to_cpp(ty):
 
 
 def _extracted_type(ty):
+    if isinstance(ty, tuple):
+        val = ','.join(map(_extracted_type, ty))
+        return f"[{val}]"
     if ty[0] == '*':
+        return "PyObject*"
+    if ty == "constexpr":
         return "PyObject*"
     return _ty_to_cpp(ty)
 
 
 def _format_of(ty):
+    if isinstance(ty, tuple):
+        val = ''.join(map(format_of, ty))
+        return f"({val})"
+    if ty[0] == '*':
+        return "O"
+    if ty in ("constexpr", "nvTmaDesc"):
+        return "O"
     return {
-        "PyObject*": "O",
         "float": "f",
         "double": "d",
         "long": "l",
         "int8_t": "b",
         "int16_t": "h",
         "int32_t": "i",
-        "int64_t": "l",
+        "int64_t": "L",
         "uint8_t": "B",
         "uint16_t": "H",
         "uint32_t": "I",
         "uint64_t": "K",
-    }[ty]
-
-
-# This function makes a single kernel invoker which wraps all the input args into
-# a single input buffer.
-def make_kernel_wrapper_v2(constants, signature, kernel_name):
-    arg_decls = ', '.join(f"{_ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
-
-    return f"""
-#include <stdbool.h>
-#include <stdint.h>
-
-// Triton kernel forward declaration, the last 6 arguments are: gridXYZ and xyz
-// Using -convert-func-to-llvm=use-bare-ptr-memref-call-conv=true.
-void {kernel_name}({arg_decls}, int, int, int, int, int, int);
-
-// Kernel entry point
-// NOTE: Assuming the triton kernel can only take 2 kind of arguments:
-//   1. 8 bytes scalar
-//   2. Tensor buffer (8 bytes memory address)
-//
-// The input buffer has the following format:
-// +--------------------------------------------------------------------------+
-// |  4 bytes  | 4 bytes | 4 bytes |  4 bytes | 4 bytes | 4 bytes |   8 bytes |
-// |    gridX  |  gridY  |  gridZ  |    x     |    y    |    z    |    karg1  |
-// +--------------------------------------------------------------------------+
-// |  8 bytes  |   ...   | 8 bytes |
-// |   karg2   |   ...   |  kargn  |
-// +-------------------------------+
-void __{kernel_name}(void *args) {{
-    void* basePtr = args;
-
-    // Extract the kernel arguments from kernel buffer
-    int gridX = *((int*)basePtr);
-    int gridY = *((int*)basePtr+1);
-    int gridZ = *((int*)basePtr+2);
-    int x = *((int*)basePtr+3);
-    int y = *((int*)basePtr+4);
-    int z = *((int*)basePtr+5);
-    void* krnArgOffsets = (void*) ((int*)basePtr + 6);
-
-    if (gridX*gridY*gridZ <= 0)
-        return;
-
-    // Invoke the actual kernel.
-    {kernel_name}({', '.join([f"(void*) (((uint64_t*)krnArgOffsets)[{i}])"
-                              if ty[0] == "*" else
-                              f"*({_ty_to_cpp(ty)}*)(((uint64_t*)krnArgOffsets)[{i}])"
-                              for i, ty in signature.items()])},
-                              gridX, gridY, gridZ, x, y, z);
-}}
-"""
-
-
-def make_kernel_wrapper(constants, signature, kernel_name):
-    arg_decls = ', '.join(f"{_ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
-
-    return f"""
-#include <assert.h>
-#include <stdbool.h>
-#include <stdint.h>
-
-// Tx81 target framwork related definition
-typedef struct BootParamHead
-{{
-    uint32_t MaxLen;
-    uint32_t LdmemLen;
-    uint32_t InputNum;
-    uint32_t OutputNum;
-    uint32_t ParamNum;
-    uint32_t reserved;
-    uint64_t CacheMemLen;
-    uint64_t CacheMemAttr;
-    uint32_t Datalen;
-    uint32_t reserved1;
-    uint64_t DataAddr;
-}} D_BootParamHead;
-
-// Tx81 target framwork related definition
-typedef struct BootParamDyninfo
-{{
-    uint64_t addr; // device
-    uint64_t size;
-    uint32_t dtype;
-    uint32_t dim;
-    uint32_t shape[6];
-}} D_BootParamDyninfo;
-
-// Triton kernel forward declaration, the last 6 arguments are: gridXYZ and xyz
-void {kernel_name}({arg_decls}, int, int, int, int, int, int);
-
-// Get the entry point of kernel arg buffer
-void* getKernelArgBuffer(void *args) {{
-    // Always use the first BootParam to carry the address points to kernel
-    // arguments buffer
-    D_BootParamHead *head = (D_BootParamHead *)args;
-    assert(head->InputNum == 1);
-    // Decode the first parameter from BootParam as the kernel buffer info.
-    D_BootParamDyninfo* kernelBuffer = (D_BootParamDyninfo *)((char *)args +
-        sizeof(D_BootParamHead));
-    // Kernel buffer address on device DDR
-    return (void*) kernelBuffer->addr;
-}}
-
-// Kernel wrapper
-void task(void *krnArgBuf, void *krnArgOffsets,
-          int gridX, int gridY, int gridZ, int x, int y, int z) {{
-
-    // Invoke the actual kernel by passing in the triton kernel arguments stored
-    // on device DDR and the other arguments which generated by compiler.
-    {kernel_name}({', '.join([f"(void*) (krnArgBuf + ((uint64_t*)krnArgOffsets)[{i}])"
-                              if ty[0] == "*" else
-                              f"*({_ty_to_cpp(ty)}*)(krnArgBuf + ((uint64_t*)krnArgOffsets)[{i}])"
-                              for i, ty in signature.items()])},
-                              gridX, gridY, gridZ, x, y, z);
-}}
-
-// Kernel entry point, name is aligned that specified to TsmLoadKernel
-void __kernel_entry(void *args) {{
-    void* basePtr = getKernelArgBuffer(args);
-
-    // Extract the kernel arguments from kernel buffer
-    int krnArgCount = *(int*)basePtr;
-    int gridX = *((int*)basePtr+1);
-    int gridY = *((int*)basePtr+2);
-    int gridZ = *((int*)basePtr+3);
-    void* krnArgOffsets = (void*) ((int*)basePtr + 4);
-    void* krnArgBuf = krnArgOffsets + krnArgCount * sizeof(uint64_t*);
-
-    if (gridX*gridY*gridZ <= 0)
-        return;
-
-    // Cast "function" to the real function type.
-    for(int x = 0; x < gridX; x++) {{
-        for(int y = 0; y < gridY; y++) {{
-            for(int z = 0; z < gridZ; z++) {{
-                task (krnArgBuf, krnArgOffsets, gridX, gridY, gridZ, x, y, z);
-            }}
-        }}
-    }}
-}}
-"""
+    }[_ty_to_cpp(ty)]
 
 
 def make_launcher(constants, signature, kernel_name):
     # Basic declarations
-    arg_decls = ', '.join(f"{_ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
-    args_format = ''.join([_format_of(_extracted_type(ty)) for ty in signature.values()])
+    arg_decls = ', '.join(f"{_ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
+    args_format = ''.join([_format_of(ty) for ty in signature.values()])
     format = "iiiOOOOOO" + args_format
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
@@ -334,7 +196,7 @@ def make_launcher(constants, signature, kernel_name):
     kernel_parameters = ', '.join(
         f"static_cast<{_ty_to_cpp(ty)}>(arg{i})" if ty[0] != "*" else f"tx81_ptr{i}, &ptr_arg{i}"
         for i, ty in signature.items()
-        if i not in constants)
+        if ty != "constexpr")
     kernel_parameters += ', ' if kernel_parameters else ''
 
     return f"""
@@ -346,11 +208,12 @@ def make_launcher(constants, signature, kernel_name):
 #include <torch/csrc/autograd/python_variable.h>
 #include <pybind11/numpy.h>
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
-#include <numpy/arrayobject.h>
+//#include <numpy/arrayobject.h>
 #include <stdint.h>
 #include <vector>
 #include <memory>
 #include <string>
+#include <filesystem>
 #include "hrt_interface.h"
 #include "hrt_common.h"
 
@@ -370,6 +233,10 @@ def make_launcher(constants, signature, kernel_name):
 //                        karg1 offset     karg2 offset      kargn offset
 // ... Metadata buffer... | ............ kernel arg buffer ..................
 
+enum DATA_TYPE {{
+    SCALAR,
+    POINT,
+}};
 
 // A kernel argument
 struct KernelArg {{
@@ -379,16 +246,19 @@ struct KernelArg {{
         uint64_t scalar;  // Scalar data
     }} data;
     size_t size;  // The size of the kernel argument
+    int data_type;
 
     KernelArg(void *ptr, size_t s) : size(s) {{
         data.ptr = ptr;
+        data_type = POINT;
     }}
 
-    KernelArg(uint64_t v, size_t s) : size(s) {{
+    KernelArg(uint64_t v, size_t s) : size(0) {{
         data.scalar = v;
+        data_type = SCALAR;
     }}
-}};
 
+}};
 
 extern "C" {{
   // The kernel arguments includes:
@@ -401,6 +271,23 @@ extern "C" {{
 // Global device vector
 static std::vector<TsmDevice*> g_tx81_devices;
 static bool g_runtime_initialized = false;
+
+// FIXME: Hardcoded path
+std::string chip_out = "/tmp/chip_out/node0/";
+std::string kernel_file = "/tmp/kernel.so";
+std::string kernel_fun_name = "{kernel_name}";
+uint32_t sharedMemBytes = 0;
+
+typedef void* Stream_t;
+
+static uint64_t get_phy_addr(uint64_t logic_addr) {{
+    uint32_t card_id;
+    uint64_t addr;
+    uint64_t size;
+    TsmMemGetInfo(logic_addr, card_id, addr, size);
+    return addr;
+}}
+
 
 // Initialize Tx81 runtime
 bool init_tx81_runtime() {{
@@ -422,182 +309,22 @@ bool init_tx81_runtime() {{
         return false;
     }}
 
+    // FIXME: Hardcoded
     // Set up devices - for simplicity, we're using a 1x1 configuration
     uint32_t first_phy_id = 0;
     uint32_t card_x = 1;
     uint32_t card_y = 1;
 
-    if (TsmSetDevice(first_phy_id, card_x, card_y, g_tx81_devices) != RET_SUCCESS) {{
+    TsmDevice *dev = new TsmDevice();
+    if (TsmSetDevice(&dev, 0, first_phy_id) != RET_SUCCESS) {{
         PyErr_SetString(PyExc_RuntimeError, "Failed to set Tx81 devices");
         TsmDeInitRuntime();
         return false;
     }}
+    g_tx81_devices.push_back(dev);
 
-    // Initialize all devices
-    for (auto* dev : g_tx81_devices) {{
-        if (TsmInitDevice(dev) != RET_SUCCESS) {{
-            PyErr_SetString(PyExc_RuntimeError, "Failed to initialize Tx81 device");
-            TsmDeInitRuntime();
-            return false;
-        }}
-    }}
-
-    g_runtime_initialized = true;
-    return true;
-}}
-
-// Clean up Tx81 runtime resources
-void cleanup_tx81_runtime() {{
-    if (!g_runtime_initialized) {{
-        return;
-    }}
-
-    for (auto* dev : g_tx81_devices) {{
-        // Reset and release each device
-        TsmResetDevice(dev);
-        TsmReleaseDevice(dev);
-    }}
-
-    g_tx81_devices.clear();
-    TsmDeInitRuntime();
-    g_runtime_initialized = false;
-}}
-
-
-static void prepare_input(std::vector<TsmDevice *> devices, uint32_t dev_index,
-    std::shared_ptr<chip_common_info_t> chip_info) {{
-  for (uint32_t i = 0; i < chip_info->input_num; ++i) {{
-    chip_info->input_dev_addr.push_back(0);
-    if (TsmDeviceMalloc(devices[dev_index], chip_info->input_dev_addr[i],
-        chip_info->input_size[i]) != RET_SUCCESS) {{
-      printf("[Chip id %u] Input%d, DeviceMalloc failed!\\n", devices[dev_index]->chip_id, i);
-      TsmResetDevice(devices[dev_index]);
-      return;
-    }}
-
-    if (TsmMemcpyH2D((TsmDevicePtr)chip_info->input_dev_addr[i],
-                     (void*) chip_info->input_host_addr[i],
-                     chip_info->input_size[i]) != RET_SUCCESS) {{
-      printf("[Chip id %u] Input%d, MemcpyH2D failed!\\n", devices[dev_index]->chip_id, i);
-      TsmResetDevice(devices[dev_index]);
-      return;
-    }}
-  }}
-}}
-
-static void prepare_output(std::vector<TsmDevice *> devices, uint32_t dev_index,
-  std::shared_ptr<chip_common_info_t> chip_info) {{
-  for (size_t i = 0; i < chip_info->output_num; ++i) {{
-    chip_info->output_dev_addr.push_back(0);
-    printf("[Chip id %u] output[%lu] data(size: %lu)\\n",
-           devices[dev_index]->chip_id, i, chip_info->output_size[i]);
-
-    if (TsmDeviceMalloc(devices[dev_index], chip_info->output_dev_addr[i],
-        chip_info->output_size[i]) != RET_SUCCESS) {{
-      printf("[Chip id %u] output[%lu], DeviceMalloc failed!\\n",
-             devices[dev_index]->chip_id, i);
-      TsmResetDevice(devices[dev_index]);
-      return;
-    }}
-  }}
-}}
-
-TSM_RETCODE kernel_result_process(std::vector<TsmDevice *> devices, uint32_t dev_index,
-              std::shared_ptr<HrtBootParam> hostboot,
-              std::shared_ptr<chip_common_info_t> chip_info,
-              TsmDevicePtr bootpm_dev, std::string case_dir) {{
-  for (size_t i = 0; i < chip_info->output_num; ++i) {{
-    // 动态shape, 需要处理真实的output size
-    if (TsmMemcpyD2H(hostboot->get_bootpmbuffer(), bootpm_dev,
-        hostboot->get_maxlen()) != RET_SUCCESS) {{
-      return RET_ERROR;
-    }}
-
-    auto out_tensor = hostboot->get_dev_output_tensor_after_run(i);
-    chip_info->output[i]->dim = out_tensor->dim;
-    std::memcpy(chip_info->output[i]->shape, out_tensor->shape, sizeof(out_tensor->shape));
-    chip_info->output_size[i] = hrt_get_dtype_size((DTYPE)chip_info->output[i]->dtype);
-    for (uint32_t j = 0; j < out_tensor->dim; ++j) {{
-      if (out_tensor->shape[j] > 0) {{
-        chip_info->output_size[i] *= out_tensor->shape[j];
-      }}
-    }}
-
-    TsmHostPtr output_host_addr = (TsmHostPtr)malloc(chip_info->output_size[i]);
-    if (chip_info->output_size[i] > 0) {{
-      if (TsmMemcpyD2H((void*)output_host_addr, chip_info->output_dev_addr[i],
-          chip_info->output_size[i]) != RET_SUCCESS) {{
-        return RET_ERROR;
-      }}
-    }}
-
-    printf("[Chip id %u] output_dev_addr=%ld\\n", devices[dev_index]->chip_id,
-          chip_info->output_dev_addr[i]);
-
-    // TODO: Processing output
-#if 0
-    std::string file_path = case_dir + "/chip" + std::to_string(dev_index) +
-        "/agent/data/out" + std::to_string(i) + "_riscv.bin";
-    saveDataToFile(file_path, output_host_addr, chip_info->output_size[i]);
-#endif
-
-    if (output_host_addr != 0) {{
-      free((void *)output_host_addr);
-    }}
-  }}
-  return RET_SUCCESS;
-}}
-
-TSM_RETCODE freeMemPerStep(uint32_t chip_id, TsmDevicePtr &bootpm_dev) {{
-  if (bootpm_dev != 0) {{
-    printf("[Chip id %u] bootpm dev addr: 0x%lx \\n", chip_id, bootpm_dev);
-    if (TsmDeviceFree(bootpm_dev) != RET_SUCCESS) {{
-      return RET_ERROR;
-    }}
-    bootpm_dev = 0;
-  }}
-
-  return RET_SUCCESS;
-}}
-
-static void setHostBoot(std::shared_ptr<chip_common_info_t> &chip_info,
-  std::shared_ptr<HrtBootParam> &hostboot) {{
-  if (chip_info == nullptr) {{
-    printf("chip_info is null.\\n");
-    return;
-  }}
-
-  if (hostboot == nullptr) {{
-    printf("hostboot is null.\\n");
-    return;
-  }}
-
-  for (size_t i = 0; i < chip_info->input_dev_addr.size(); ++i) {{
-    hostboot->set_dev_input(i, chip_info->input_dev_addr[i], chip_info->input_size[i]);
-    hostboot->set_dev_input_tensor(i, chip_info->input[i]);
-  }}
-
-  for (size_t i = 0; i < chip_info->output_dev_addr.size(); ++i) {{
-    hostboot->set_dev_output(i, chip_info->output_dev_addr[i], chip_info->output_size[i]);
-  }}
-
-  for (size_t i = 0; i < chip_info->param_num; ++i) {{
-    hostboot->set_dev_param(i, chip_info->param_dev_addr[i], chip_info->param_size[i]);
-  }}
-
-  return;
-}}
-
-
-static void _launch(int gridX, int gridY, int gridZ, std::vector<KernelArg> &kargs) {{
-    std::vector<TsmDevice *> devices;
-
-    if (gridX*gridY*gridZ <= 0) {{
-        return;  // No work to do
-    }}
-
+    // FIXME: Hardcoded
     TsmModel *new_model = new TsmModel();
-
     // Create a vector of models
     std::vector<TsmModel *> kmodel_vec = {{new_model}};
     std::string option = "-O2";
@@ -608,172 +335,184 @@ static void _launch(int gridX, int gridY, int gridZ, std::vector<KernelArg> &kar
     compl_option.check_enable = true;
     compl_option.enable_kcore_bin = 1;
     compl_option.enable_kcore_so = 1;
-    // FIXME: Hardcoded path
-    new_model->case_dir = "/tmp/kernel.so";
+    new_model->case_dir = chip_out;
 
-    printf("====> Calling TsmCompileMultiGraph\\n");
-#if 0
-    if (TsmCompileMultiGraph(devices, *new_model, option, compl_option) != RET_SUCCESS) {{
-        for (uint32_t dev_index = 0; dev_index < devices.size(); ++dev_index) {{
-            if (TsmResetDevice(devices[dev_index]) != RET_SUCCESS) {{
-                printf("[Chip id %u] tx_engine: tx_reset, failed!\\n", dev_index);
-            }} else {{
-                printf("[Chip id %u] tx_engine: tx_reset, success!\\n", dev_index);
+    for (TsmDevice * dev : g_tx81_devices) {{
+        if (TsmCompileMultiGraph(dev, *new_model, option, compl_option) != RET_SUCCESS) {{
+            for (uint32_t dev_index = 0; dev_index < g_tx81_devices.size(); ++dev_index) {{
+                if (TsmResetDevice(g_tx81_devices[dev_index]) != RET_SUCCESS) {{
+                    return false;
+                }}
+            }}
+            return false;
+        }}
+    }}
+
+    // Initialize all devices
+    for (auto* dev : g_tx81_devices) {{
+        if (TsmLaunch(dev, *new_model) != RET_SUCCESS) {{
+            PyErr_SetString(PyExc_RuntimeError, "[Chip id] TsmLaunch failed.");
+            TsmReleaseDevice(dev);
+            TsmResetDevice(dev);
+            return false;
+        }}
+
+        if (TsmSetMonitorInfo(dev) != RET_SUCCESS) {{
+            PyErr_SetString(PyExc_RuntimeError, "[Chip id] TsmLaunch failed.");
+            TsmReleaseDevice(dev);
+            TsmResetDevice(dev);
+            return false;
+        }}
+    }}
+
+    delete new_model;
+    g_runtime_initialized = true;
+
+    return true;
+}}
+
+// Clean up Tx81 runtime resources
+static PyObject* cleanup_tx81_runtime(PyObject* self, PyObject* args)  {{
+    if (!g_runtime_initialized) {{
+        Py_RETURN_NONE;
+    }}
+
+    for (auto* dev : g_tx81_devices) {{
+        if (TsmSetTerminate(dev) != RET_SUCCESS) {{
+            Py_RETURN_NONE;
+        }}
+        // Reset and release each device
+        TsmReleaseDevice(dev);
+        TsmResetDevice(dev);
+        delete dev;
+    }}
+    g_tx81_devices.clear();
+    TsmDeInitRuntime();
+    g_runtime_initialized = false;
+    Py_RETURN_NONE;
+}}
+
+TSM_RETCODE argsToDevMemArray(TsmDevice *dev, std::vector<KernelArg> &kargs,
+    std::vector<uint64_t> &rtKargs, std::vector<uint64_t> &devAddrs) {{
+    int count = 0;
+    for (KernelArg& karg : kargs) {{
+        if (karg.data_type == POINT) {{
+            TsmDevicePtr dev_buffer;
+            if (TsmDeviceMalloc(dev, dev_buffer, karg.size) != RET_SUCCESS) {{
+                PyErr_SetString(PyExc_RuntimeError, "Failed to TsmDeviceMalloc");
+                return RET_ERROR;
+            }}
+
+            if (TsmMemcpyH2D(dev_buffer, karg.data.ptr, karg.size) != RET_SUCCESS) {{
+                PyErr_SetString(PyExc_RuntimeError, "Failed to TsmMemcpyH2D");
+                return RET_ERROR;
+            }}
+            devAddrs.push_back(dev_buffer);
+            // FIXME: rank
+            rtKargs.push_back(1);
+            rtKargs.push_back(get_phy_addr(dev_buffer));
+
+            count++;
+        }}
+        else {{
+            rtKargs.push_back(karg.data.scalar);
+        }}
+    }}
+    return RET_SUCCESS;
+}}
+
+TSM_RETCODE devMemArrayToArgs(TsmDevice *dev, std::vector<KernelArg> &kargs,
+        std::vector<uint64_t> &devAddrs) {{
+
+    int count = 0;
+    for (KernelArg& karg : kargs) {{
+        if (karg.data_type == POINT) {{
+            uint64_t dev_buffer = devAddrs[count++];
+            if (TsmMemcpyD2H(karg.data.ptr, dev_buffer, karg.size) != RET_SUCCESS) {{
+                PyErr_SetString(PyExc_RuntimeError, "Failed to TsmMemcpyH2D");
+                return RET_ERROR;
             }}
         }}
-        printf("TsmCompile failed.\\n");
+    }}
+    return RET_SUCCESS;
+}}
+
+TSM_RETCODE devMemFree(TsmDevice *dev, std::vector<uint64_t> &devAddrs) {{
+    for (uint64_t dev_buffer : devAddrs) {{
+        if (TsmDeviceFree(dev_buffer) != RET_SUCCESS) {{
+            PyErr_SetString(PyExc_RuntimeError, "Failed to TsmDeviceFree");
+            return RET_ERROR;
+        }}
+    }}
+    return RET_SUCCESS;
+}}
+
+TSM_RETCODE freeMemPerStep(uint32_t chip_id, TsmDevicePtr &bootpm_dev) {{
+    if (bootpm_dev != 0) {{
+        if (TsmDeviceFree(bootpm_dev) != RET_SUCCESS) {{
+            return RET_ERROR;
+        }}
+            bootpm_dev = 0;
+        }}
+    return RET_SUCCESS;
+}}
+
+static void _launch(int gridX, int gridY, int gridZ, std::vector<KernelArg> kargs) {{
+    std::vector<TsmDevice *> &devices = g_tx81_devices;
+
+    if (gridX*gridY*gridZ <= 0) {{
+        return;  // No work to do
+    }}
+
+     // TODO::mv
+    uint64_t kernel_len = 0;
+    uint8_t* kernel_ptr = read_file_data(kernel_file, kernel_len);
+    if (kernel_ptr == nullptr) {{
+        PyErr_SetString(PyExc_RuntimeError, "Failed to read kernel so");
+        TsmDeInitRuntime();
         return;
     }}
-#endif
-    // Calculate the total size of kernel arguments buffer
-    uint64_t kernel_buffer_size = 0;
-    for (auto karg : kargs)
-        kernel_buffer_size += karg.size;
-
-    // Calcuate The kernel argument buffer header size
-    // 4 bytes header + n * kernel argument metadata + 3 * sizeof(gridXYZ)
-    uint64_t kernel_meta_buf_size = sizeof(uint64_t*) * kargs.size() + 4 + 12;
-    kernel_buffer_size += kernel_meta_buf_size;
-
-    // We use input_num = 1 to set the whole kernel arguments buffer as a single
-    // input
-    uint32_t input_num = 1;
-    uint32_t output_num = 0;
-    uint32_t param_num = 0;
-
-    // Create boot parameter
-    std::shared_ptr<HrtBootParam> hostboot = std::make_shared<HrtBootParam>(input_num, output_num, param_num);
-
-    // Create chip common info
-    std::shared_ptr<chip_common_info_t> chip_info = std::make_shared<chip_common_info_t>();
-    chip_info->input_num = input_num;
-    chip_info->output_num = output_num;
-    chip_info->param_num = param_num;
-    chip_info->imm_size = 0; // Cache size
-
-    // Prepare input/output sizes and addresses
-    chip_info->input_size.resize(input_num);
-    chip_info->input_host_addr.resize(input_num);
-    chip_info->input_dev_addr.resize(input_num);
-    chip_info->output_size.resize(output_num);
-    chip_info->output_host_addr.resize(output_num);
-    chip_info->output_dev_addr.resize(output_num);
-
-    // Prepare whole kernel buffer info
-    chip_info->input.push_back(std::make_shared<tensor_info_t>());
-    chip_info->input[0]->dim = 1;
-    chip_info->input[0]->dtype = FMT_FP32;  // Default to float
-    chip_info->input[0]->shape[0] = 1;      // Default shape
-    chip_info->input_size[0] = kernel_buffer_size;
-    chip_info->input_host_addr = std::vector<uint64_t>{{(uint64_t) 0x0}};
 
     // prepare data/ load kernel/run/unload kernel/get out data/release memory
     for (uint32_t dev_index = 0; dev_index < devices.size(); ++dev_index) {{
-        // input prepare
-        prepare_input(devices, dev_index, chip_info);
-        // output prepare
-        prepare_output(devices, dev_index, chip_info);
-
-        uint32_t chip_id = devices[dev_index]->chip_id;
-        TsmSetMonitorInfo(devices[dev_index]);
-
-        // load kernel
-        char module_symbol[] = "__kernel_entry";
-        TsmLoadKernel(devices[dev_index], kmodel_vec, module_symbol);
-        printf("TsmLoadKernel finish!...\\n");
-
-        printf("[Chip id %u] Set boot-params...\\n", chip_id);
-        size_t dyn_mod_size = sizeof(DynMods) + sizeof(DynModule);
-        TsmDevicePtr dev_dyn_mods_ptr;
-        if (TsmDeviceMalloc(devices[dev_index], dev_dyn_mods_ptr, dyn_mod_size) != RET_SUCCESS)
-            return;
-
         // Allocate the device memory for all kernel arguments
-        TsmDevicePtr dev_kernel_buffer;
-        if (TsmDeviceMalloc(devices[dev_index], dev_kernel_buffer, kernel_buffer_size) != RET_SUCCESS)
-            return;
+        std::vector<uint64_t> devAddrs;
+        std::vector<uint64_t> rtKargs;
 
-        // Kernel meta data and argument buffer
-        int dev_karg_ptr = dev_kernel_buffer + kernel_meta_buf_size;
-
-        // Kernel arguments address
-        uint64_t arg_metadata[kargs.size()];
-
-        // Copy kernel arguments to device DDR (immediately after the metadata)
-        int i = 0;
-        uint64_t offset = 0;
-        for (auto karg : kargs) {{
-            if (TsmMemcpyH2D(dev_karg_ptr, karg.data.ptr, karg.size) != RET_SUCCESS)
-                return;
-
-            // Calculate the offset of each kernel arg's buffer
-            arg_metadata[i++] = offset;
-
-            // Shift the offset and pointer for next kernel argument.
-            offset += karg.size;
-            dev_karg_ptr += karg.size;
-        }}
-
-        // Create the metadata buffer
-        uint32_t* metadata = (uint32_t*) malloc(kernel_meta_buf_size);
-        metadata[0] = (int) kargs.size();
-        metadata[1] = gridX;
-        metadata[2] = gridY;
-        metadata[3] = gridZ;
-        memcpy(metadata+20, arg_metadata, kernel_meta_buf_size - 16);
-
-        // Copy kernel metadata to device DDR
-        if (TsmMemcpyH2D(dev_kernel_buffer, metadata, kernel_meta_buf_size) != RET_SUCCESS)
-            return;
-
-        setHostBoot(chip_info, hostboot);
-        set_multi_graph(kmodel_vec[0], hostboot, dev_dyn_mods_ptr, 0, dev_kernel_buffer);
-
-        TsmDevicePtr bootpm_dev;
-        if (TsmDeviceMalloc(devices[dev_index], bootpm_dev, hostboot->get_maxlen()) != RET_SUCCESS)
-            return;
-
-        if (TsmMemcpyH2D(bootpm_dev, hostboot->get_bootpmbuffer(), hostboot->get_maxlen()) != RET_SUCCESS)
-            return;
-
-        if (TsmRun(devices[dev_index], bootpm_dev) != RET_SUCCESS) {{
-            printf("TsmRun bootpm_dev failed.\\n");
+        if (argsToDevMemArray(devices[dev_index], kargs, rtKargs, devAddrs) != RET_SUCCESS) {{
+            PyErr_SetString(PyExc_RuntimeError, "Failed to argsToDevMemArray");
+            TsmDeInitRuntime();
             return;
         }}
 
-        TsmUnloadKernel(devices[dev_index], kmodel_vec);
+        rtKargs.push_back(gridX);
+        rtKargs.push_back(gridY);
+        rtKargs.push_back(gridZ);
+        rtKargs.push_back(0);
+        rtKargs.push_back(0);
+        rtKargs.push_back(0);
 
-        // Process kernel output data
-        printf("[Chip id %u] Copy output from device...\\n", chip_id);
-        if (kernel_result_process(devices, dev_index, hostboot, chip_info, bootpm_dev, new_model->case_dir) != RET_SUCCESS) {{
-            printf("free dev memory failed.\\n");
+        // TSM_RETCODE TsmKernelLaunch(TsmDevice *dev, const char *func_name, void *kernel_ptr, uint32_t kernel_len,
+        // uint32_t grid_dim, uint32_t block_dim, void *args, uint32_t args_len);
+        if (TsmKernelLaunch(devices[dev_index], kernel_fun_name.c_str(), (void*)kernel_ptr, kernel_len,
+            gridX, 1, (void*)(&rtKargs[0]), rtKargs.size()*sizeof(uint64_t)) != RET_SUCCESS){{
+            PyErr_SetString(PyExc_RuntimeError, "Failed to TsmKernelLaunch");
+            TsmDeInitRuntime();
+        }}
+        if (devMemArrayToArgs(devices[dev_index], kargs, devAddrs) != RET_SUCCESS) {{
+            PyErr_SetString(PyExc_RuntimeError, "Failed to devMemArrayToArgs");
+            TsmDeInitRuntime();
             return;
         }}
 
-        if (freeMemPerStep(chip_id, bootpm_dev) != RET_SUCCESS) {{
-            printf("free dev memory failed.\\n");
-            return;
-        }}
+        // getchar();
 
-        if (TsmDeviceFree(dev_kernel_buffer) != RET_SUCCESS) {{
-            printf("free dev_kernel_param_ptr failed.\\n");
-            return;
-        }}
+        // TsmUnloadKernel(devices[dev_index], kmodel_vec);
 
-        if (TsmDeviceFree(dev_dyn_mods_ptr) != RET_SUCCESS) {{
-            printf("free dev_dyn_mods_ptr failed.\\n");
-            return;
-        }}
-
-        printf("[dev_index %u] Set Terminal Info...\\n", dev_index);
-        if (TsmSetTerminate(devices[dev_index]) != RET_SUCCESS) {{
-            printf("TsmSetTerminate failed.\\n");
+        if (devMemFree(devices[dev_index], devAddrs) != RET_SUCCESS) {{
             return;
         }}
     }}
-
-    // Clean up the model
-    delete new_model;
 }}
 
 // Structure to represent a device pointer
@@ -792,6 +531,21 @@ static void* extractTensor(PyObject* tensor_obj) {{
     const at::Tensor& tensor = THPVariable_Unpack(tensor_obj);
     torch::Tensor contiguous_tensor = tensor.contiguous();
     return contiguous_tensor.data_ptr();
+}}
+
+static PyObject* init_runtime(PyObject* self, PyObject* args) {{
+    const char* _chip_out;
+    if (!PyArg_ParseTuple(args, "s", &_chip_out)) {{
+        return NULL;
+    }}
+    chip_out = _chip_out;
+
+    // Initialize Tx81 runtime during module import
+    if (!init_tx81_runtime()) {{
+        return NULL;
+    }}
+
+    return Py_None;
 }}
 
 // Python module launch function
@@ -836,9 +590,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
     // Construct a data kernel arguments list data structure
     std::vector<KernelArg> kargs;
+    //{' '.join([f"kargs.emplace_back(_arg{i}, PyObject_Size(_arg{i})*4);" if ty[0]=="*" else f"kargs.emplace_back(_arg{i}, sizeof(_arg{i}));" for i, ty in signature.items() if ty != "constexpr"])}
     {' '.join([f"kargs.emplace_back(extractTensor(_arg{i}), getTensorStorageSize(_arg{i}));"
                if ty[0]=="*" else f"kargs.emplace_back(_arg{i}, sizeof(_arg{i}));"
-                  for i, ty in signature.items()])}
+                  for i, ty in signature.items() if ty != "constexpr"])}
 
     // Launch the kernel
     _launch(gridX, gridY, gridZ, kargs);
@@ -863,6 +618,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 // Python module method definitions
 static PyMethodDef ModuleMethods[] = {{
     {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+    {{"init_runtime", init_runtime, METH_VARARGS, "Init runtime with chip_out dir"}},
     {{NULL, NULL, 0, NULL}} // sentinel
 }};
 
@@ -891,13 +647,6 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
     PyModule_AddFunctions(m, ModuleMethods);
 
-#if 0
-    // Initialize Tx81 runtime during module import
-    if (!init_tx81_runtime()) {{
-        Py_DECREF(m);
-        return NULL;
-    }}
-
     // Register an atexit handler to cleanup Tx81 runtime
     PyObject* atexit_module = PyImport_ImportModule("atexit");
     if (atexit_module) {{
@@ -909,30 +658,29 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
         }}
         Py_DECREF(atexit_module);
     }}
-#endif
 
     return m;
 }}
 """
 
 
-class CrossUtils(object):
+class TXDAUtils(object):
 
     def __new__(cls):
         if not hasattr(cls, "instance"):
-            cls.instance = super(CrossUtils, cls).__new__(cls)
+            cls.instance = super(TXDAUtils, cls).__new__(cls)
         return cls.instance
 
     def __init__(self):
         src = Path(os.path.join(dirname, "driver.cpp")).read_text()
         mod = compile_native(src, "tx81_utils")
-        # NOTE: The triton compiler.py framework requires these 2 interface.
+        # # NOTE: The triton compiler.py framework requires these 2 interface.
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
 
 
 # Launch cross compiled runtime program on controller
-class CrossLauncher(object):
+class TXDALauncher(object):
 
     def __init__(self, src, metadata):
         constants = src.constants if hasattr(src, "constants") else dict()
@@ -940,17 +688,13 @@ class CrossLauncher(object):
         constants = {cst_key(key): value for key, value in constants.items()}
         signature = {cst_key(key): value for key, value in src.signature.items()}
 
-        # Compiler kernel wrapper source code
-        # NOTE: Replace this make_kernel_wrapper to v2 version by if you want
-        # to call the triton kernel with single input buffer and with a '__'
-        # prefixed name.
-        wrapper_src = make_kernel_wrapper(constants, signature, src.fn.__name__)
-        krn = compile_accelerator(wrapper_src, src.fn.__name__, "c")
-
         # Compiler runtime kernel launcher source code
         launcher_src = make_launcher(constants, signature, src.fn.__name__)
         mod = compile_native(launcher_src, "__triton_launcher")
         self.launch = mod.launch
+        chip_out = os.path.join(_get_tx8_path("chip_out"), "node0")
+        chip_out = chip_out + os.sep
+        mod.init_runtime(chip_out)
 
     def __call__(self, *args, **kwargs):
         # args: 0: gridX, 1: gridY, 2: gridZ,
@@ -961,33 +705,41 @@ class CrossLauncher(object):
         self.launch(*args, **kwargs)
 
 
-class CrossDriver(GPUDriver):
+class TXDADriver(GPUDriver):
 
     def __init__(self):
         super().__init__()
-        self.utils = CrossUtils()
-        self.launcher_cls = CrossLauncher
+        self.utils = TXDAUtils()
+        self.launcher_cls = TXDALauncher
         # Needs to overwrite GPUDriver base methods
-        self.get_current_device = self.get_npu_device
-        self.set_current_device = self.set_npu_device
-        self.get_current_stream = self.get_npu_stream
+        self.get_current_stream = torch.txda.current_stream
+        self.get_current_device = torch.txda.current_device
+        self.set_current_device = torch.txda.set_device
+        atexit.register(torch.txda.cleanup_device)
 
     @staticmethod
     def is_active():
-        return True
-
-    def get_npu_device(self):
-        return "cpu"
-
-    def set_npu_device(self, device):
-        # CPU doesn't have a device to set
-        assert device == "cpu"
-        return
-
-    def get_npu_stream(self, device):
-        return None
+        try:
+            #import torch
+            #return torch.txda.is_available()
+            return True
+        except ImportError:
+            return False
 
     def get_current_target(self):
         capability = 1
         warp_size = 16
-        return GPUTarget("cpu", capability, warp_size)
+        return GPUTarget("txda", capability, warp_size)
+
+    def get_active_torch_device(self):
+        # import torch
+        # torch.txda.init_device()
+        return torch.device("txda", self.get_current_device())
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench
+
+    def get_device_interface(self):
+        import torch
+        return torch.txda

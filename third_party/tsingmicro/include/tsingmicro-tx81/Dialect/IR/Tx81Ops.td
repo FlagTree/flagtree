@@ -65,7 +65,7 @@ def RdmaOp : Tx81Op<"rdma", [
     ins
     MemRefOrInt:$source,                 // The source address in DDR
     MemRefOrInt:$target,                 // The target address in SPM
-    Variadic<Index>:$shape,      // HHWC shape
+    Variadic<Index>:$shape,      // NHWC shape
     Variadic<Index>:$strides,    // 3 dim strides
     I32Attr:$fmt
   );
@@ -99,7 +99,7 @@ def WdmaOp : Tx81Op<"wdma", [
     ins
     MemRefOrInt:$source,                 // The source address in DDR
     MemRefOrInt:$target,                 // The target address in SPM
-    Variadic<Index>:$shape,      // HHWC shape
+    Variadic<Index>:$shape,      // NHWC shape
     Variadic<Index>:$strides,    // 3 dim strides
     I32Attr:$fmt
   );
@@ -189,9 +189,9 @@ def GemmOp : Tx81Op<"gemm", []> {
     MemRefOrInt:$src_a,          // Input matrix A addr in SPM
     MemRefOrInt:$src_b,          // Input matrix B addr in SPM
     MemRefOrInt:$src_bias,       // The address of bias in SPM
-    // Zeroes buffer which can be used to fill $dst
+    // Output and initial zeroes buffer
     // FIXME: Whether need add side effect to source operands?
-    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$zeroes,
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$dst,
     I32ArrayAttr:$dims,   // The dimensions of M, K, N
     BoolAttr:$en_psum,        // Enable psum? TODO: Production sum?
     MemRefOrInt:$psum_addr,      // The address of psum in SPM, TODO: psum?
@@ -199,7 +199,7 @@ def GemmOp : Tx81Op<"gemm", []> {
     BoolAttr:$trans_src_b,  // Should matrix B be transposed
     I32Attr:$batch_src_a,  // The batch of matrix A
     I32Attr:$batch_src_b,  // The batch of matrix B
-    BoolAttr:$en_leaky_relu,// Enable LeakyRelu or normal Relu
+    I32Attr:$relu_mode,    // Enable LeakyRelu or normal Relu or none
     BoolAttr:$en_bias,      // Enable bias add
     BoolAttr:$en_neg_scale, // Enable negative axis scale
     MemRefOrInt:$src_neg_scale,    // The address of negative scale data in SPM
@@ -211,14 +211,30 @@ def GemmOp : Tx81Op<"gemm", []> {
   );
 
   // Output matrix C addr in SPM
-  let results = (outs Variadic<I64>:$dst);
+  let results = (outs Variadic<I64>:$output);
 }
 
 // =============================================================================
 // 4.10. TsmArith
 // =============================================================================
 
-def AbsVVOp : Tx81Op<"absvv", [Pure, Elementwise]> {}
+class UnaryOp<string mnemonic, list<Trait> traits = []> :
+    Tx81Op<mnemonic, traits # [Elementwise]> {
+  let arguments = (ins
+    MemRefOrInt:$input,              // Input vector address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$out,  // Out vector address
+    MemRefOrInt:$elem_count,      // Number of input elements
+    I16Attr:$fmt              // The data format of src & dst
+  );
+  let results = (outs Variadic<I64>:$dst);
+}
+
+def AbsVVOp : UnaryOp<"absvv"> {
+  let summary = "Absolute value of input vector";
+}
+def SqrtVVOp : UnaryOp<"sqrtvv", [Pure, Elementwise]> {}
+def RsqrtVVOp : UnaryOp<"rsqrtvv", [Pure, Elementwise]> {}
+def NegVVOp : UnaryOp<"negvv", [Pure, Elementwise]> {}
 def RecipVVOp : Tx81Op<"recipvv", [Pure, Elementwise]> {}
 def SquareVVOp : Tx81Op<"squarevv", [Pure, Elementwise]> {}
 
@@ -241,6 +257,8 @@ def AddVVOp : BinaryVVOp<"addvv"> {
 def SubVVOp : BinaryVVOp<"subvv">;
 def MulVVOp : BinaryVVOp<"mulvv">;
 def DivVVOp : BinaryVVOp<"divvv">;
+def MaxVVOp : BinaryVVOp<"maxvv">;
+def MinVVOp : BinaryVVOp<"minvv">;
 
 class BinaryVSOp<string mnemonic, list<Trait> traits = []> :
     Tx81Op<mnemonic, traits # [Elementwise]> {
@@ -265,38 +283,97 @@ def DivVSOp : BinaryVSOp<"divvs">;
 // ...
 
 // =============================================================================
+// 4.11. TsmRelation
+// =============================================================================
+
+class BoolRelationVVOp<string mnemonic, list<Trait> traits = []> :
+    Tx81Op<mnemonic, traits # [Elementwise]> {
+  let arguments = (ins
+    MemRefOrInt:$input0,              // First input vector address
+    MemRefOrInt:$input1,              // Second vector address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$out,  // Out vector address
+    MemRefOrInt:$elem_count,      // Number of input elements
+    I16Attr:$fmt              // The data format of src & dst
+  );
+  let results = (outs Variadic<I64>:$dst);
+}
+
+def BoolEqualVV : BoolRelationVVOp<"boolequalvv"> {
+  let summary = "compare two input value, if equal, return true";
+}
+
+def BoolUnEqualVV : BoolRelationVVOp<"boolunequalvv"> {
+  let summary = "compare two input value, if unequal, return true";
+}
+
+def BoolGreaterEqualVV : BoolRelationVVOp<"boolgreatrequalvv"> {
+  let summary = "compare two input value, if src0 >= src1, return true";
+}
+
+def BoolGreaterVV : BoolRelationVVOp<"boolgreatervv"> {
+  let summary = "compare two input value, if src0 > src1, return true";
+}
+
+def BoolLessEqualVV : BoolRelationVVOp<"boollessequalvv"> {
+  let summary = "compare two input value, if src0 <= src1, return true";
+}
+
+def BoolLessThenVV : BoolRelationVVOp<"boollessthenvv"> {
+  let summary = "compare two input value, if src0 < src1, return true";
+}
+
+// ...
+// =============================================================================
+// 4.12. TsmLogic
+// =============================================================================
+
+class BinaryLogicVVOp<string mnemonic, list<Trait> traits = []> :
+    Tx81Op<mnemonic, traits # [Elementwise]> {
+  let arguments = (ins
+    MemRefOrInt:$input0,              // First input vector address
+    MemRefOrInt:$input1,              // Second vector address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$out,  // Out vector address
+    MemRefOrInt:$elem_count,      // Number of input elements
+    I16Attr:$fmt              // The data format of src & dst
+  );
+  let results = (outs Variadic<I64>:$dst);
+}
+
+def AndVV : BinaryLogicVVOp<"andvv"> {
+  let summary = "And operation on elements at the same position. If the element is not 0, it is represented as 1.";
+}
+
+def OrVV : BinaryLogicVVOp<"orvv"> {
+  let summary = "OR operation on elements at the same position. If the element is not 0, it is represented as 1.";
+}
+
+def XorVV : BinaryLogicVVOp<"xorvv"> {
+  let summary = "XOR operation on elements at the same position. If the element is not 0, it is represented as 1.";
+}
+
+// =============================================================================
 // 4.13. TsmTranscendental
 // =============================================================================
 
-class TranscendentalOp<string mnemonic, list<Trait> traits> :
-    Tx81Op<mnemonic, traits> {
-  let arguments = (ins
-    MemRefOrInt:$src,              // Input vector address
-    I32Attr:$elem_count,   // Number of input elements
-    I16Attr:$fmt           // The data format of src & dst
-  );
-  let results = (outs I64:$dst);
-}
-
-def Log2 : TranscendentalOp<"log2", []> {
+def Log2Op : UnaryOp<"log2", []> {
   let summary = "Logarithm based 2";
 }
-def Ln : TranscendentalOp<"ln", []> {
+def LnOp : UnaryOp<"ln", []> {
   let summary = "Logarithm based e";
 }
-def Pow2 : TranscendentalOp<"pow2", []> {
+def Pow2Op : UnaryOp<"pow2", []> {
   let summary = "2 ** x";
 }
-def Exp : TranscendentalOp<"exp", []> {
+def ExpOp : UnaryOp<"exp", []> {
   let summary = "Exponential with high precision";
 }
-def Explp : TranscendentalOp<"explp", []> {
+def ExplpOp : UnaryOp<"explp", []> {
   let summary = "Exponential with low precision";
 }
-def Sin : TranscendentalOp<"sin", []> {
+def SinOp : UnaryOp<"sin", []> {
   let summary = "Sine";
 }
-def Cos : TranscendentalOp<"cos", []> {
+def CosOp : UnaryOp<"cos", []> {
   let summary = "Cosine";
 }
 
@@ -558,18 +635,32 @@ def CountOp : Tx81Op<"count", [Pure]> {
   let results = (outs MemRefOrInt:$dst);
 }
 
-def MemsetOp : Tx81Op<"memset", []> {
+def MemsetOp : Tx81Op<"memset", [
+    AttrSizedOperandSegments,
+    PredOpTrait<"Constrain shape to 4d.",
+      CPred<"cast<tx::MemsetOp>($_op).getShape().size() == 4">>,
+    PredOpTrait<"Constrain strides to 3d.",
+      CPred<"cast<tx::MemsetOp>($_op).getStrides().size() == 3">>
+      ]> {
   let summary = "Write given `value` to range of address on SPM(sram)";
 
   let arguments = (
     ins
-    MemRefOrInt:$src,           // SPM address to be memset
-    I32:$value,         // Value to be written
-    AnySignlessIntegerOrIndex:$elem_count,
-    I32ArrayAttr:$strides,
-    I32ArrayAttr:$iterations,
+    MemRefOrInt:$src,            // SPM address to be memset
+    I32:$value,                  // Value to be written
+    Variadic<Index>:$shape,      // NHWC shape
+    Variadic<Index>:$strides,    // 3 dim strides
     I16Attr:$fmt
   );
+
+  let builders = [
+    OpBuilder<(ins "MemRefType":$resultType,
+      "Value":$source, "Value":$value,
+      "ArrayRef<Value>":$shape,
+      "ArrayRef<Value>":$strides,
+      "IntegerAttr":$fmt
+    )>
+  ];
 
   // The address updated by memset in SPM
   let results = (outs MemRefOrInt:$dst);
@@ -634,8 +725,7 @@ def Lut16Op : Tx81Op<"lut16", []> {
   let summary = "16-bit lookup table";
 
   let arguments = (ins
-    // FIXME: AnyVector is not defined
-    // AnyVector:$src,            // Vector offset with respect to LUT
+    MemRefOrInt:$src,            // Vector offset with respect to LUT
     UI64:$lut16,
     I32Attr:$src_elem_count,   // Number of elements in vector offset
     I32Attr:$lut_elem_count    // Number of elements in LUT
@@ -648,8 +738,7 @@ def Lut32Op : Tx81Op<"lut32", []> {
   let summary = "32-bit lookup table";
 
   let arguments = (ins
-    // FIXME: AnyVector is not defined
-    // AnyVector:$src,            // Vector offset with respect to LUT
+    MemRefOrInt:$src,            // Vector offset with respect to LUT
     UI64:$lut32,
     I32Attr:$src_elem_count,   // Number of elements in vector offset
     I32Attr:$lut_elem_count    // Number of elements in LUT

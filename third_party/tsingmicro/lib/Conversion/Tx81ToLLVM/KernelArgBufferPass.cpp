@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "tsingmicro-tx81/Conversion/Tx81ToLLVM/KernelArgBufferPass.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -20,10 +21,19 @@
 
 using namespace mlir;
 
+namespace mlir {
+namespace triton {
+#define GEN_PASS_CLASSES
+#include "tsingmicro-tx81/Conversion/Tx81ToLLVM/KernelArgBufferPass.h.inc"
+} // namespace triton
+} // namespace mlir
+
 namespace {
 
 class KernelArgBufferPass
-    : public PassWrapper<KernelArgBufferPass, OperationPass<ModuleOp>> {
+    : public mlir::triton::KernelArgBufferPassBase<KernelArgBufferPass> {
+  using KernelArgBufferPassBase<KernelArgBufferPass>::KernelArgBufferPassBase;
+
 public:
   StringRef getArgument() const final { return "kernel-arg-buffer"; }
   StringRef getDescription() const final {
@@ -37,135 +47,32 @@ public:
   void runOnOperation() override;
 
 private:
-  // Identifies if a function should be processed
-  bool isKernelFunction(func::FuncOp func);
-
-  // Creates a new function with a single void* argument
-  func::FuncOp createBufferizedFunction(OpBuilder &builder,
-                                        func::FuncOp originalFunc);
-
-  // Rewrites the function body to use the argument buffer
-  void rewriteFunctionBody(func::FuncOp originalFunc, func::FuncOp newFunc);
+  // Insert load op to get real kernel args from new buffered argument
+  // Side effect: calculate offset and create ops
+  Value insertKernelArgLoad(OpBuilder &builder, Location loc, Value argsBuffer,
+                            Type argType, int64_t &currentOffset);
 };
 
-bool KernelArgBufferPass::isKernelFunction(func::FuncOp func) {
-  // For this example, we'll identify kernel functions by their name
-  // containing "_kernel". In a real implementation, you might use attributes
-  // or more sophisticated detection.
-  return func.getName().contains("_kernel");
-}
+Value KernelArgBufferPass::insertKernelArgLoad(OpBuilder &builder, Location loc,
+                                               Value argsBuffer, Type argType,
+                                               int64_t &currentOffset) {
+  // Get pointer to the current position in args buffer
+  auto offsetValue = builder.create<LLVM::ConstantOp>(
+      loc, builder.getI64Type(), builder.getI64IntegerAttr(currentOffset));
 
-func::FuncOp
-KernelArgBufferPass::createBufferizedFunction(OpBuilder &builder,
-                                              func::FuncOp originalFunc) {
-  // Create a new function type with a single void* argument
-  auto voidPtrType = LLVM::LLVMPointerType::get(builder.getContext());
-  auto newFuncType =
-      FunctionType::get(originalFunc.getContext(), {voidPtrType},
-                        originalFunc.getFunctionType().getResults());
+  // NOTE: GEPOp need distinguish the scalar and ptr type. So here ptr + offset
+  Value elementPtr =
+      builder.create<LLVM::PtrToIntOp>(loc, builder.getI64Type(), argsBuffer);
+  elementPtr = builder.create<LLVM::AddOp>(loc, builder.getI64Type(),
+                                           elementPtr, offsetValue);
+  elementPtr = builder.create<LLVM::IntToPtrOp>(
+      loc, LLVM::LLVMPointerType::get(builder.getContext()), elementPtr);
 
-  // Create the new function with the same name but new type
-  auto newFunc = func::FuncOp::create(originalFunc.getLoc(),
-                                      originalFunc.getName(), newFuncType);
+  // Increment offset. Assume all args are 8 bytes
+  currentOffset += sizeof(int64_t);
 
-  // Copy over all attributes except those related to the function type
-  for (const auto &attr : originalFunc->getAttrs()) {
-    if (attr.getName() != "function_type" && attr.getName() != "arg_attrs" &&
-        attr.getName() != "res_attrs") {
-      newFunc->setAttr(attr.getName(), attr.getValue());
-    }
-  }
-
-  return newFunc;
-}
-
-void KernelArgBufferPass::rewriteFunctionBody(func::FuncOp originalFunc,
-                                              func::FuncOp newFunc) {
-  if (originalFunc.empty())
-    return;
-
-  Block &oldEntryBlock = originalFunc.getBlocks().front();
-  Block &newEntryBlock = newFunc.getBlocks().front();
-
-  OpBuilder builder(&newEntryBlock, newEntryBlock.begin());
-  Location loc = originalFunc.getLoc();
-
-  Value argsBuffer = newEntryBlock.getArgument(0);
-  SmallVector<Value, 8> extractedArgs;
-
-  // Offset tracking for buffer access
-  int64_t currentOffset = 0;
-  // Size of scalar values in bytes (specified as 8 bytes)
-  const int64_t scalarSize = 8;
-
-  // Process each original argument
-  for (auto argIndex : llvm::seq<unsigned>(0, originalFunc.getNumArguments())) {
-    Type argType = originalFunc.getArgument(argIndex).getType();
-    Value loadedArg;
-
-    // Handle pointer types (like uint64_t*)
-    if (auto ptrType = dyn_cast<LLVM::LLVMPointerType>(argType)) {
-      // For pointer types, we load the pointer value itself from the buffer
-      auto offsetValue = builder.create<LLVM::ConstantOp>(
-          loc, builder.getI64Type(), builder.getI64IntegerAttr(currentOffset));
-
-      // Get pointer to the current position in args buffer
-      auto elementPtr = builder.create<LLVM::GEPOp>(
-          loc, LLVM::LLVMPointerType::get(builder.getContext()), argsBuffer,
-          ArrayRef<Value>{offsetValue});
-
-      // Cast to pointer-to-pointer type
-      auto castedPtr = builder.create<LLVM::BitcastOp>(
-          loc, LLVM::LLVMPointerType::get(ptrType), elementPtr);
-
-      // Load the pointer
-      loadedArg = builder.create<LLVM::LoadOp>(loc, castedPtr);
-
-      // Increment offset (pointers are 8 bytes)
-      currentOffset += scalarSize;
-    }
-    // Handle scalar types (like int64_t, int)
-    else {
-      auto offsetValue = builder.create<LLVM::ConstantOp>(
-          loc, builder.getI64Type(), builder.getI64IntegerAttr(currentOffset));
-
-      // Get pointer to the current position in args buffer
-      auto elementPtr = builder.create<LLVM::GEPOp>(
-          loc, LLVM::LLVMPointerType::get(builder.getContext()), argsBuffer,
-          ArrayRef<Value>{offsetValue});
-
-      // Cast to appropriate pointer type
-      auto castedPtr = builder.create<LLVM::BitcastOp>(
-          loc, LLVM::LLVMPointerType::get(argType), elementPtr);
-
-      // Load the scalar value
-      loadedArg = builder.create<LLVM::LoadOp>(loc, castedPtr);
-
-      // Increment offset (all scalars use 8 bytes as specified)
-      currentOffset += scalarSize;
-    }
-
-    extractedArgs.push_back(loadedArg);
-  }
-
-  // Clone the original function body, replacing uses of old arguments
-  auto &oldRegion = originalFunc.getBody();
-  auto &newRegion = newFunc.getBody();
-
-  // Move operations from old entry block to new entry block
-  for (auto &op : oldEntryBlock.getOperations()) {
-    if (&op == &oldEntryBlock.back() && op.hasTrait<OpTrait::IsTerminator>()) {
-      builder.clone(op);
-    } else {
-      auto clonedOp = builder.clone(op);
-
-      // Replace uses of old arguments with new extracted values
-      for (unsigned i = 0; i < originalFunc.getNumArguments(); ++i) {
-        Value oldArg = oldEntryBlock.getArgument(i);
-        clonedOp->replaceUsesOfWith(oldArg, extractedArgs[i]);
-      }
-    }
-  }
+  // Load the real kernel arg value
+  return builder.create<LLVM::LoadOp>(loc, argType, elementPtr);
 }
 
 void KernelArgBufferPass::runOnOperation() {
@@ -173,38 +80,64 @@ void KernelArgBufferPass::runOnOperation() {
   OpBuilder builder(module.getContext());
 
   // Collect functions to process
-  SmallVector<func::FuncOp, 4> kernelFuncs;
-  for (auto func : module.getOps<func::FuncOp>()) {
-    if (isKernelFunction(func)) {
-      kernelFuncs.push_back(func);
-    }
+  SmallVector<LLVM::LLVMFuncOp, 4> kernelFuncs;
+  for (auto func : module.getOps<LLVM::LLVMFuncOp>()) {
+    kernelFuncs.push_back(func);
   }
+  // NOTE: We move this pass before tx81-to-llvm pass.
+  // So we assume the func op must be only one and must be the triton kernel
+  assert(kernelFuncs.size() == 1 && "Only one kernel function expected");
 
   // Process each kernel function
+  // TODO: Delete the for loop if the assert is always true for all examples
   for (auto func : kernelFuncs) {
     // Create new function with bufferized signature
     builder.setInsertionPointAfter(func);
-    auto newFunc = createBufferizedFunction(builder, func);
+    // Save the old block arguments
+    SmallVector<BlockArgument> blockArguments =
+        llvm::to_vector<8>(func.getArguments());
+    auto numArguments = blockArguments.size();
 
-    // Add entry block to the new function
-    newFunc.addEntryBlock();
+    // New bufferized arg type
+    auto voidPtrType = LLVM::LLVMPointerType::get(builder.getContext());
 
-    // Rewrite function body to use the argument buffer
-    rewriteFunctionBody(func, newFunc);
+    // New bufferized function type
+    auto newFuncType = LLVM::LLVMFunctionType::get(
+        func.getFunctionType().getReturnType(), voidPtrType);
+    func.setFunctionType(newFuncType);
+    SmallVector<DictionaryAttr> newArgAttrs({DictionaryAttr()});
+    func.setAllArgAttrs(newArgAttrs);
 
-    // Replace the old function with the new one
-    func.erase();
+    // Add the new bufferized argument
+    Location loc = func.getLoc();
+    Block &entryBlock = func.getBlocks().front();
+    entryBlock.insertArgument((unsigned)0, voidPtrType, func.getLoc());
+
+    OpBuilder builder(&entryBlock, entryBlock.begin());
+    // Get the bufferized argument
+    Value argsBuffer = entryBlock.getArgument(0);
+
+    // Offset tracking for buffer access
+    int64_t currentOffset = 0;
+
+    // Process each original argument
+    for (auto argIndex : llvm::seq<unsigned>(0, numArguments)) {
+      auto oldArg = blockArguments[argIndex];
+      Type argType = oldArg.getType();
+      Value loadedArg = insertKernelArgLoad(builder, func.getLoc(), argsBuffer,
+                                            argType, currentOffset);
+
+      if (blockArguments[argIndex].use_empty())
+        continue;
+      oldArg.replaceAllUsesWith(loadedArg);
+    }
+    // Remove the old arguments when replace the use-chain
+    entryBlock.eraseArguments(1, numArguments);
   }
 }
 
 } // namespace
 
-std::unique_ptr<Pass> createKernelArgBufferPass() {
+std::unique_ptr<Pass> triton::createKernelArgBufferPass() {
   return std::make_unique<KernelArgBufferPass>();
 }
-
-// Pass registration
-namespace {
-#define GEN_PASS_REGISTRATION
-#include "KernelArgBufferPass.h.inc"
-} // namespace

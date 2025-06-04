@@ -24,7 +24,19 @@ void __Memset(uint64_t *dst, uint32_t value, uint32_t elem_count, uint32_t s0,
                                0,
                            }};
 
-  St_StrideIteration si = {s0, i0, s1, i1, s2, i2};
+  // TODO: Use real stride and iteration, now accumulate all data to elem_count
+  int stride0 = 0;
+  int stride1 = 0;
+  int stride2 = 0;
+
+  int iteration0 = 1;
+  int iteration1 = 1;
+  int iteration2 = 1;
+
+  elem_count *= i0 * i1 * i2;
+
+  St_StrideIteration si = {stride0,    iteration0, stride1,
+                           iteration1, stride1,    iteration2};
   cmd->Memset(&inst, (uint64_t)dst, value, elem_count, &si, (Data_Format)fmt);
 
   // Dispatch the command to accelerator

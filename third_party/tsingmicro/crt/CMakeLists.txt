@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
+set(TARGET Tx81)
 # Set TARGET from environment variable
 if(NOT DEFINED TARGET)
   if(DEFINED ENV{CRT_TARGET})
@@ -9,11 +10,11 @@ if(NOT DEFINED TARGET)
   endif()
 endif()
 
-if(NOT DEFINED LIB_C_ROOT)
-  if(DEFINED ENV{LIB_C_ROOT})
-    set(LIB_C_ROOT $ENV{LIB_C_ROOT})
+if(NOT DEFINED XUANTIE_NAME)
+  if(DEFINED ENV{XUANTIE_NAME})
+    set(XUANTIE_NAME $ENV{XUANTIE_NAME})
   else()
-    message(FATAL_ERROR "LIB_C_ROOT environment variable is not defined")
+    message(FATAL_ERROR "XUANTIE_NAME environment variable is not defined")
   endif()
 endif()
 
@@ -23,6 +24,14 @@ if(NOT DEFINED LLVM_SYSPATH)
     set(LLVM_SYSPATH $ENV{LLVM_SYSPATH})
   else()
     message(FATAL_ERROR "LLVM_SYSPATH environment variable is not defined")
+  endif()
+endif()
+
+if(NOT DEFINED TX8_HOME)
+  if(DEFINED ENV{TX8_HOME})
+    set(TX8_HOME $ENV{TX8_HOME})
+  else()
+    message(FATAL_ERROR "TX8_HOME environment variable is not defined")
   endif()
 endif()
 
@@ -39,7 +48,8 @@ set(CMAKE_CXX_COMPILER ${LLVM_SYSPATH}/bin/clang++)
 # Define standard include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include/${TARGET})
-include_directories(${LIB_C_ROOT}/include)
+include_directories(${TX8_HOME}/include)
+include_directories(${TX8_HOME}/${XUANTIE_NAME}/riscv64-unknown-elf/include)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 # Set build type default
@@ -68,12 +78,6 @@ add_library(${VENDOR_RUNTIME_LIB} STATIC ${VENDOR_SOURCES})
 target_compile_options(${VENDOR_RUNTIME_LIB} PRIVATE ${RISCV_COMPILE_OPTIONS})
 target_link_options(${VENDOR_RUNTIME_LIB} PRIVATE --target=${RISCV_TRIPLE})
 
-# Set properties for the library
-set_target_properties(${VENDOR_RUNTIME_LIB} PROPERTIES
-  POSITION_INDEPENDENT_CODE ON
-  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-)
-
 # Setup compiler and environment for RISC-V compilation
 if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   # Use the existing Clang installation with target triple
@@ -99,15 +103,3 @@ else()
     COMMAND ${CMAKE_COMMAND} -E echo "Building ${VENDOR_RUNTIME_LIB} for RISC-V target"
   )
 endif()
-
-# Install targets
-install(TARGETS ${VENDOR_RUNTIME_LIB}
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin
-)
-
-# Install headers (optional)
-file(GLOB_RECURSE VENDOR_HEADERS Target/lib/${TARGET}/*.h)
-install(FILES ${VENDOR_HEADERS} DESTINATION include/${TARGET})
-install(FILES Target/lib/${TARGET}/libkcorert.a DESTINATION lib/${TARGET})

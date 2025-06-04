@@ -20,12 +20,16 @@ namespace mlir {
 class ModuleOp;
 class Pass;
 
+namespace triton {
 /// Creates a pass that transforms kernel functions by replacing multiple
 /// arguments with a single void* buffer argument.
 std::unique_ptr<Pass> createKernelArgBufferPass();
 
-#define GEN_PASS_DECL_KERNELARGBUFFERPASS
-#include "KernelArgBufferPass.h.inc"
+#define GEN_PASS_REGISTRATION
+#define GEN_PASS_DECL
+#include "tsingmicro-tx81/Conversion/Tx81ToLLVM/KernelArgBufferPass.h.inc"
+
+} // namespace triton
 } // namespace mlir
 
 #endif // MLIR_KERNEL_ARG_BUFFER_PASS_H

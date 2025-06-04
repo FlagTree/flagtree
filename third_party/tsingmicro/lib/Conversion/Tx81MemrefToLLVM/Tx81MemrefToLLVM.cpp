@@ -20,9 +20,11 @@ using namespace mlir;
 #define GEN_PASS_CLASSES
 #include "tsingmicro-tx81/Conversion/Tx81MemrefToLLVM/Passes.h.inc"
 
-namespace {
+// Used for allocate spm memory
+uint64_t spmPointer = 0x10000;
 
-// Used to kcore load/store data from/to spm
+namespace {
+// Used for kcore load/store data from/to spm
 const int64_t spmMappingOffset = 0x30400000;
 
 //===----------------------------------------------------------------------===//
@@ -37,8 +39,6 @@ struct TsmMemRefAllocOpLowering : public AllocLikeOpLLVMLowering {
   std::tuple<Value, Value>
   allocateBufferFromSPM(ConversionPatternRewriter &rewriter, Location loc,
                         Operation *op) const {
-    static uint64_t spmPointer = 0x10000;
-
     // create GEPOp for spm address.
     MemRefType memRefType = getMemRefResultType(op);
     Value spmOffsetOp = rewriter.create<LLVM::ConstantOp>(
@@ -99,28 +99,42 @@ struct MemrefLoadOrStoreOpLowering : public ConvertOpToLLVMPattern<MemrefOp> {
     Value ptrValue =
         rewriter.create<LLVM::PtrToIntOp>(op.getLoc(), intPtrType, dataPtr);
 
-    // FIXME: Can only need create once since offset is a const op?
-    auto spmMemoryOffset = rewriter.create<LLVM::ConstantOp>(
-        op.getLoc(), rewriter.getI64Type(),
-        rewriter.getI64IntegerAttr(spmMappingOffset));
-    auto spmMemoryAddr = rewriter.create<LLVM::AddOp>(
-        op.getLoc(), rewriter.getI64Type(),
-        SmallVector<Value>({ptrValue, spmMemoryOffset}));
+    // Workaround: Should add memory space analysis pass.
+    Operation *opBase = op;
+    if (!opBase->hasAttr("isSpm")) {
+      return rewriter.notifyMatchFailure(
+          op, "Load/Store should have isSpm attribute.");
+    }
+    int isSpm =
+        cast<IntegerAttr>(opBase->getAttr("isSpm")).getValue().getSExtValue();
 
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        rewriter.getContext(),
-        *ConvertToLLVMPattern::getTypeConverter()->getMemRefAddressSpace(type));
-    auto spmMemoryAddrPtr =
-        rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), ptrTy, spmMemoryAddr);
+    Value adjustedPtr = dataPtr;
+    if (isSpm) {
+      auto spmMemoryOffset = rewriter.create<LLVM::ConstantOp>(
+          op.getLoc(), rewriter.getI64Type(),
+          rewriter.getI64IntegerAttr(spmMappingOffset));
+      auto spmMemoryAddr = rewriter.create<LLVM::AddOp>(
+          op.getLoc(), rewriter.getI64Type(),
+          SmallVector<Value>({ptrValue, spmMemoryOffset}));
+
+      auto ptrTy = LLVM::LLVMPointerType::get(
+          rewriter.getContext(),
+          *ConvertToLLVMPattern::getTypeConverter()->getMemRefAddressSpace(
+              type));
+      auto spmMemoryAddrPtr =
+          rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), ptrTy, spmMemoryAddr);
+
+      adjustedPtr = spmMemoryAddrPtr;
+    }
 
     // Wether need memoryspace cast
     if constexpr (std::is_same<MemrefOp, memref::LoadOp>()) {
 
-      rewriter.replaceOpWithNewOp<LLVM::LoadOp>(
-          op, op.getType(), spmMemoryAddrPtr, 0, false, op.getNontemporal());
+      rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, op.getType(), adjustedPtr,
+                                                0, false, op.getNontemporal());
     } else {
       rewriter.replaceOpWithNewOp<LLVM::StoreOp>(
-          op, adaptor.getValue(), dataPtr, 0, false, op.getNontemporal());
+          op, adaptor.getValue(), adjustedPtr, 0, false, op.getNontemporal());
     }
 
     return success();
@@ -199,7 +213,7 @@ private:
 
     // Create descriptor.
     Location loc = castOp.getLoc();
-    MemRefDescriptor desc(*descriptor);
+    auto desc = MemRefDescriptor::poison(rewriter, loc, llvmTargetDescriptorTy);
 
     // Set allocated and aligned pointers.
     Value allocatedPtr, alignedPtr;

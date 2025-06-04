@@ -43,8 +43,55 @@ public:
                     mk::MagicKernelDialect, tx::Tx81Dialect>();
   }
 
+  bool isOperandMemorySpaceSPM(Value operand) {
+    Operation *lastOp = operand.getDefiningOp();
+    Operation *op = lastOp;
+
+    do {
+      if (isa<memref::AllocOp>(op))
+        return true;
+      else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+        // Here we assume that yieldResults (inner loop region) and
+        // loopResults (outer loop region) correspond one-to-one to obtain the
+        // inner loop region definingOp of the outer loop region value.
+        // FIXME:  Need reference the standard loop analysis to refactor this.
+
+        auto yieldResults = forOp.getYieldedValues();
+        mlir::ResultRange loopResults = forOp.getLoopResults().value();
+        assert(yieldResults.size() == loopResults.size());
+
+        auto idx = std::distance(
+            loopResults.begin(),
+            std::find(loopResults.begin(), loopResults.end(), operand));
+        operand = yieldResults[idx];
+
+      } else {
+        operand = op->getOperand(0);
+      }
+      lastOp = op;
+      op = operand.getDefiningOp();
+    } while (op);
+    return false;
+  }
+
   void runOnOperation() override {
     auto moduleOp = getOperation();
+
+    // Use to memory::CopyOp to tx dialect op
+    moduleOp->walk([&](Operation *op) {
+      if (isa<memref::CopyOp>(op)) {
+        auto copyOp = cast<memref::CopyOp>(op);
+        op->setAttr("srcSpm",
+                    IntegerAttr::get(IntegerType::get(op->getContext(), 32),
+                                     llvm::APInt(32, isOperandMemorySpaceSPM(
+                                                         copyOp.getSource()))));
+        op->setAttr("dstSpm",
+                    IntegerAttr::get(IntegerType::get(op->getContext(), 32),
+                                     llvm::APInt(32, isOperandMemorySpaceSPM(
+                                                         copyOp.getTarget()))));
+      }
+    });
+
     RewritePatternSet patterns(&getContext());
     ConversionTarget target(getContext());
 
@@ -66,6 +113,22 @@ public:
     if (failed(applyPartialConversion(moduleOp, target, std::move(patterns)))) {
       signalPassFailure();
     }
+
+    // linalg::linalgOpToLoops will generate memref::LoadOp/memref::StoreOp
+    // before and after the arith calculation.
+    // Use to check whether add spm mapping offset in
+    // memref::LoadOp/memref::StoreOp lowering
+    moduleOp->walk([&](Operation *op) {
+      if (isa<memref::LoadOp, memref::StoreOp>(op)) {
+        bool isSpm = isa<memref::LoadOp>(op)
+                         ? isOperandMemorySpaceSPM(op->getOperand(0))
+                         : isOperandMemorySpaceSPM(op->getOperand(1));
+
+        op->setAttr("isSpm",
+                    IntegerAttr::get(IntegerType::get(op->getContext(), 32),
+                                     llvm::APInt(32, isSpm)));
+      }
+    });
   }
 };
 

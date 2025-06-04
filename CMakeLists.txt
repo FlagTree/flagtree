@@ -364,6 +364,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
       LLVMXPUCodeGen
       LLVMXPUAsmParser
     )
+  elseif(FLAGTREE_BACKEND STREQUAL "tsingmicro")
+    list(APPEND TRITON_LIBRARIES
+	  # riscv
+      LLVMRISCVCodeGen
+      LLVMRISCVAsmParser
+    )
   endif()
 
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64

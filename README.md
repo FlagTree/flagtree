@@ -43,6 +43,17 @@ export FLAGTREE_BACKEND=xpu
 python3 -m pip install . --no-build-isolation -v
 ```
 ```shell
+# tsingmicro
+# Recommended: Use the Docker image (xxGB) https://xxxx
+mkdir -p ~/.flagtree/tsingmicro; cd ~/.flagtree/tsingmicro
+wget https://github.com/FlagTree/flagtree/releases/download/xxxx
+wget https://github.com/FlagTree/flagtree/releases/download/xxxx
+cd ${YOUR_CODE_DIR}/flagtree/
+./third_party/tsingmicro/scripts/install.sh
+./third_party/tsingmicro/scripts/build_tsingmicro.sh
+./third_party/tsingmicro/scripts/run_tsingmicro.sh third_party/tsingmicro/examples/test_vec_add.py
+```
+```shell
 # mthreads
 # Recommended: Use the Dockerfile flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.10-mthreads
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads

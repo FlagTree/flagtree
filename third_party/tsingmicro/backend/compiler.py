@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes
+from triton.runtime.cache import get_cache_manager
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -13,43 +14,68 @@ import functools
 from pathlib import Path
 
 
-def _get_ztc_opt_path() -> str:
-    path = os.getenv("ZTC_OPT_PATH", "")
-    if path == "":
-        raise Exception("ZTC_OPT_PATH is not set.")
-    return path
-
-
-def _get_vendor_runtime_path() -> str:
-    path = os.getenv("LIB_VENDOR_RUNTIME_PATH", "")
-    if path == "":
-        raise Exception("LIB_VENDOR_RUNTIME_PATH is not set.")
-    return path
+def _get_tsm_opt_path() -> str:
+    return os.path.join(os.path.dirname(__file__), "bin", "tsingmicro-opt")
 
 
 def _get_llvm_bin_path(bin_name: str) -> str:
-    path = os.getenv("LLVM_BINARY_DIR", "")
+    path = os.getenv("LLVM_SYSPATH", "")
     if path == "":
-        raise Exception("LLVM_BINARY_DIR is not set.")
-    return os.path.join(path, bin_name)
+        raise Exception("LLVM_SYSPATH is not set.")
+    return os.path.join(path, "bin", bin_name)
 
 
-# The riscv c header files and libraries path.
-def _get_libc_root() -> str:
-    path = os.getenv("LIB_C_ROOT", "")
+def _get_tx8_path(sub_name: str) -> str:
+    path = os.getenv("TX8_HOME", "")
     if path == "":
-        raise Exception("LIB_C_ROOT is not set.")
-    return path
+        raise Exception("TX8_HOME is not set.")
+    return os.path.join(path, sub_name)
 
 
 def _dump_ir_if_needed(files):
-    path = os.getenv("ZTC_DUMP_PATH", "")
+    path = os.getenv("TRITON_DUMP_PATH", "")
     if not path:
         return
 
     os.makedirs(path, exist_ok=True)
     for f in files:
         shutil.copy(f, os.path.join(path, os.path.basename(f)))
+
+
+# Build a accelerator controller ELF
+def compile_accelerator():
+    # TODO : cache mechanism
+    # name = "npu_" + name
+    # key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    # cache = get_cache_manager(key)
+    # cache_path = cache.get_file(f"{name}.so")
+
+    # if cache_path is None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # FIXME: Hardcoded path
+        #dst_path = os.path.join(tmpdir, f"{name}.so")
+        dst_path = "/tmp/kernel.so"
+        libc_lib = os.path.join(_get_tx8_path("Xuantie-900-gcc-elf-newlib-x86_64-V2.10.2"), "riscv64-unknown-elf",
+                                "lib", "rv64imafdc", "lp64d")
+        libvr_path = os.path.join(os.path.dirname(__file__), "lib")
+        clang_path = _get_llvm_bin_path("clang")
+        lld_path = _get_llvm_bin_path("ld.lld")
+        tx8_lib = _get_tx8_path("lib")
+        subprocess.check_call([
+            clang_path, "-shared", "--target=riscv64-unknown-linux-gnu", "-march=rv64imafdc", "-O2",
+            f"-fuse-ld={lld_path}", "-nostdlib", "-nostartfiles", "-Wl,--allow-shlib-undefined", "-mabi=lp64d",
+            "-Wl,--no-dynamic-linker",
+            # FIXME: Hardcoded path
+            "/tmp/kernel.o", f"-L{libvr_path}", f"-L{libc_lib}", f"-L{tx8_lib}", "-Wl,--whole-archive",
+            "-linstr_tx81",  # Tx81 intrinsic API
+            "-lvr",  # Wrapper API of Tx81 intrinsic
+            "-Wl,--no-whole-archive", "-lm", "-o", dst_path
+        ])
+
+        _dump_ir_if_needed([dst_path])
+        with open(dst_path, 'rb') as f:
+            so = f.read()
+        return so
 
 
 def _ttir_to_coreir(mod):
@@ -59,10 +85,10 @@ def _ttir_to_coreir(mod):
         src_path = os.path.join(tmpdir, "tt.mlir")
         dst_path = os.path.join(tmpdir, "core.mlir")
         Path(src_path).write_text(ttir_code)
-        ztc_opt_path = _get_ztc_opt_path()
+        tsm_opt_path = _get_tsm_opt_path()
         _dump_ir_if_needed([src_path])
         subprocess.check_call([
-            ztc_opt_path, src_path, "--triton-to-core-dialects", "--one-shot-bufferize",
+            tsm_opt_path, src_path, "--triton-to-core-dialects", "--one-shot-bufferize=allow-return-allocs-from-loops",
             #"--mlir-print-debuginfo",
             "-o", dst_path
         ])
@@ -81,10 +107,10 @@ def _coreir_to_mkir(mod):
         src_path = os.path.join(tmpdir, "core.mlir")
         dst_path = os.path.join(tmpdir, "mk.mlir")
         Path(src_path).write_text(coreir_code)
-        ztc_opt_path = _get_ztc_opt_path()
+        tsm_opt_path = _get_tsm_opt_path()
         _dump_ir_if_needed([src_path])
         subprocess.check_call([
-            ztc_opt_path, src_path, "--core-dialects-to-mk",
+            tsm_opt_path, src_path, "--core-dialects-to-mk",
             #"--mlir-print-debuginfo",
             "-o", dst_path
         ])
@@ -103,12 +129,12 @@ def _coreir_to_txir(mod):
         src_path = os.path.join(tmpdir, "core.mlir")
         dst_path = os.path.join(tmpdir, "tx.mlir")
         Path(src_path).write_text(coreir_code)
-        ztc_opt_path = _get_ztc_opt_path()
+        tsm_opt_path = _get_tsm_opt_path()
         _dump_ir_if_needed([src_path])
         subprocess.check_call([
-            ztc_opt_path, src_path, "--expand-strided-metadata", "--mk-to-tx81",
+            tsm_opt_path, src_path, "--expand-strided-metadata",
             "--lower-affine",  # convert affine.load to memref.load, need exec before tx81-to-llvm since we will support spm offset to memref.load
-            "--cse",  # unused memref.subview/memref.reinterpret
+            "--mk-to-tx81", "--cse",  # unused memref.subview/memref.reinterpret
             #"--mlir-print-debuginfo",
             "-o", dst_path
         ])
@@ -120,28 +146,49 @@ def _optimize_txir(txir: str):
     return txir
 
 
-def _txir_to_llir(mod):
+def _txir_to_llir(mod, metadata):
     txir_code = str(mod)
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "tx.mlir")
         llvmir_path = os.path.join(tmpdir, "ll.mlir")
         llir_path = os.path.join(tmpdir, "ll.ir")
         Path(src_path).write_text(txir_code)
-        ztc_opt_path = _get_ztc_opt_path()
+        tsm_opt_path = _get_tsm_opt_path()
         _dump_ir_if_needed([src_path])
         # Tx81 and core dialects to LLVM-MLIR
-        subprocess.check_call([
-            ztc_opt_path, src_path, "--tx81-memref-to-llvm", "--tx81-to-llvm", "--convert-scf-to-cf",
-            "--convert-math-to-llvm", "--convert-func-to-llvm", "--convert-cf-to-llvm",
-            # Use tx81-memref-to-llvm custom pass for now.
-            # "--finalize-memref-to-llvm",
-            "--convert-arith-to-llvm",  # need exec last since arith.const conversion
+        args = [
+            tsm_opt_path, src_path,
+            # Use tx81-memref-to-llvm to replace "--finalize-memref-to-llvm".
+            "--tx81-memref-to-llvm", "--convert-scf-to-cf", "--convert-math-to-llvm",
+            "--convert-cf-to-llvm",  # need exec before "convert-func-to-llvm"
+            "--convert-func-to-llvm",  # need exec before "kernel-arg-buffer", otherwise un-rank memref will translate to int(rank) + ptr
+        ]
+
+        args.append(
+            "--kernel-arg-buffer"
+        )  # need exec before "tx81-to-llvm" which will declare other func. We want only replace the triton kernel
+
+        # other pass
+        args += [
+            "--tx81-to-llvm", "--convert-arith-to-llvm",  # need exec last since arith.const conversion
             # Remove all unrealized casts created
             "--reconcile-unrealized-casts", "--canonicalize",
             #"--mlir-print-debuginfo",
             "-o", llvmir_path
-        ])
+        ]
+
+        subprocess.check_call(args)
+
         _dump_ir_if_needed([llvmir_path])
+
+        llvm_file = os.getenv("CUSTOMIZED_IR", "")
+        if (llvm_file != ""):
+            llvmir_path = os.getenv("TRITON_DUMP_PATH", "")
+
+            if not llvmir_path:
+                return
+
+            llvmir_path = os.path.join(llvmir_path, llvm_file)
 
         # LLVM-MLIR to LLVM-IR
         mlir_translate_path = _get_llvm_bin_path("mlir-translate")
@@ -205,18 +252,18 @@ def _llir_to_bin(llir: str, metadata):
         Path(src_path).write_text(llir)
         clang_path = _get_llvm_bin_path("clang++")
         subprocess.check_call([
-            clang_path, src_path, "-O2", "-c", "-fPIC", "--target=riscv64-unknown-elf", "-march=rv64imafdc", "-o",
+            clang_path, src_path, "-O2", "-c", "-fPIC", "--target=riscv64-unknown-linux-gnu", "-march=rv64imafdc", "-o",
             dst_path
         ])
 
         _dump_ir_if_needed([dst_path])
-        with open(dst_path, 'rb') as f:
-            so = f.read()
-        return so
+
+        # compile kernel and intrinsic wrapper to shared library
+        return compile_accelerator()
 
 
 @dataclass(frozen=True)
-class CPUOptions:
+class TXDAOptions:
     debug: bool = False
     arch: str = None
     num_warps: int = 0
@@ -229,6 +276,7 @@ class CPUOptions:
     shared: bool = False
     allow_fp8e4nv: bool = False
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
+    sanitize_overflow: bool = True
 
     def __post_init__(self):
         pass
@@ -238,11 +286,11 @@ class CPUOptions:
         return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 
-class CPUBackend(BaseBackend):
+class TXDABackend(BaseBackend):
 
     @staticmethod
     def supports_target(target: GPUTarget):
-        return target.backend == 'cpu'
+        return target.backend == 'txda'
 
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
@@ -250,10 +298,10 @@ class CPUBackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         args = {'arch': self.target.arch}
-        args.update({k: opts[k] for k in CPUOptions.__dataclass_fields__.keys() if k in opts})
-        return CPUOptions(**args)
+        args.update({k: opts[k] for k in TXDAOptions.__dataclass_fields__.keys() if k in opts})
+        return TXDAOptions(**args)
 
-    def get_codegen_implementation(self):
+    def get_codegen_implementation(self, options):
         codegen_fns = {"min_dot_size": lambda lhsType, rhsType: (1, 1, 1)}
         return codegen_fns
 
@@ -265,7 +313,6 @@ class CPUBackend(BaseBackend):
                 metadata.cluster_dims[1], metadata.cluster_dims[2], metadata.name)
 
     # Our compilation pipeline isn't in python like nvidia or amd, no need to load
-    # dialects. See `ztc.cc`
     def load_dialects(self, ctx):
         return
 
@@ -288,7 +335,7 @@ class CPUBackend(BaseBackend):
         stages["coreir"] = lambda src, metadata: _optimize_coreir(_ttir_to_coreir(src))
         # stages["mkir"] = lambda src, metadata: _optimize_mkir(_coreir_to_mkir(src))
         stages["txir"] = lambda src, metadata: _optimize_txir(_coreir_to_txir(src))
-        stages["llir"] = lambda src, metadata: _optimize_llir(_txir_to_llir(src))
+        stages["llir"] = lambda src, metadata: _optimize_llir(_txir_to_llir(src, metadata))
         stages["so"] = lambda src, metadata: _llir_to_bin(src, metadata)
 
     @functools.lru_cache()

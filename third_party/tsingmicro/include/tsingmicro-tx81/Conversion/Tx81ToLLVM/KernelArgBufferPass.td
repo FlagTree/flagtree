@@ -25,7 +25,7 @@ def KernelArgBufferPass : Pass<"kernel-arg-buffer", "ModuleOp"> {
     Where the args buffer contains pointers to arg1 and arg2, followed by the scalar
     values size, gridX, and x. Each scalar value occupies 8 bytes in the buffer.
   }];
-  let constructor = "mlir::createKernelArgBufferPass()";
+  let constructor = "mlir::triton::createKernelArgBufferPass()";
   let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::func::FuncDialect"];
 }
 

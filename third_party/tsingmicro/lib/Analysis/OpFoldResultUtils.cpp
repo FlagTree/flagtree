@@ -16,13 +16,8 @@
 namespace mlir {
 
 std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
-  // Check if ofr is an Attribute
-  if (auto attr = dyn_cast<Attribute>(ofr)) {
-    // Check if it's specifically an IntegerAttr
-    if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
-      return intAttr.getInt();
-    }
-  }
+  if (isa<Attribute>(ofr) && isa<IntegerAttr>(cast<Attribute>(ofr)))
+    return dyn_cast<IntegerAttr>(cast<Attribute>(ofr)).getInt();
 
   return std::nullopt;
 }

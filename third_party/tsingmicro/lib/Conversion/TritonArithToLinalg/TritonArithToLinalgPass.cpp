@@ -150,7 +150,8 @@ public:
         });
 
     if (pidsToFuncArgs) {
-      target.addIllegalOp<triton::GetProgramIdOp, triton::GetNumProgramsOp>();
+      target
+          .addIllegalOp</*triton::GetProgramIdOp,*/ triton::GetNumProgramsOp>();
     }
 
     if (addptrToLinalg) {

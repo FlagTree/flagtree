@@ -20,6 +20,9 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+// Declear spmPointer.
+extern uint64_t spmPointer;
+
 namespace mlir {
 namespace triton {
 
