@@ -51,6 +51,26 @@ cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
 ```
+```shell
+# ascend
+# manually download LLVM
+cd ${YOUR_LLVM_DOWNLOAD_DIR}
+# if the output of `uname -a` is x64 or x86_64
+wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-x64.tar.gz
+tar -zxvf llvm-b5cc222d-ubuntu-x64.tar.gz
+export LLVM_BUILD_DIR=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-b5cc222d-ubuntu-x64
+# if the output of `uname -a` is aarch64
+wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz
+tar -zxvf llvm-b5cc222d-ubuntu-arm64.tar.gz
+export LLVM_BUILD_DIR=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-b5cc222d-ubuntu-arm64
+# build
+cd ${YOUR_CODE_DIR}/flagtree/python
+export LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include
+export LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib
+export LLVM_SYSPATH=$LLVM_BUILD_DIR
+export FLAGTREE_BACKEND=ascend
+python3 -m pip install . --no-build-isolation -v
+```
 
 To build with default backends (nvidia, amd, triton_shared):
 ```shell
