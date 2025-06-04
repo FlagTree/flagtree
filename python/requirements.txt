@@ -4,3 +4,4 @@ wheel
 GitPython
 pytest
 scipy
+pybind11
