@@ -4,9 +4,9 @@ on:
   schedule:
     - cron: '0 21 * * *'
   push:
-    branches: [ "main" ]
+    branches: [ "main", "triton_v3.3.x" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "triton_v3.3.x" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -15,19 +15,18 @@ concurrency:
 jobs:
   nv-build-and-test:
     runs-on: nv-jiuding
-    if: ${{ github.repository == 'FlagTree/flagtree' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: FlagTree Build on NVIDIA-A100
+      - name: FlagTree Build
         shell: bash
         run: |
           source ~/env.sh
           cd python
-          MAX_JOBS=20 pip3.11 install . --no-build-isolation
+          MAX_JOBS=32 pip3.11 install . --no-build-isolation
 
-      - name: FlagTree Test on NVIDIA-A100
+      - name: FlagTree Test
         shell: bash
         run: |
           pytest -s python/test/unit
