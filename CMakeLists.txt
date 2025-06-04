@@ -38,7 +38,6 @@ endif()
 project(triton)
 include(CTest)
 
-
 if (FLAGTREE_BACKEND STREQUAL "ascend")
   set(TRITON_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
   set(PATCHED_TRITON_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ascend/triton_patch")
@@ -60,7 +59,7 @@ endif()
 
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
-option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" ON)
+option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 if(FLAGTREE_BACKEND)
   option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" OFF)
   option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" OFF)
@@ -69,6 +68,7 @@ else()
   option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 endif()
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
+
 # Ensure Python3 vars are set correctly
 # used conditionally in this file and by lit tests
 
@@ -92,7 +92,7 @@ if(TRITON_BUILD_UT)
   include(AddTritonUnitTest)
 endif()
 
-#Compiler flags
+# Compiler flags
 set(BACKEND_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/${FLAGTREE_BACKEND}/include)
 if(FLAGTREE_BACKEND AND EXISTS "${BACKEND_INCLUDE_DIR}")
   include_directories(${BACKEND_INCLUDE_DIR})
@@ -165,7 +165,6 @@ function(add_triton_object name)
       target_link_libraries(${name} PUBLIC ${ARG_LINK_LIBS})
     endif()
   endif()
-
 endfunction(add_triton_object)
 
 set_property(GLOBAL PROPERTY TRITON_LIBS "")
@@ -201,7 +200,6 @@ else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
 endif()
 
-
 include_directories(".")
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -230,7 +228,6 @@ if (FLAGTREE_BACKEND STREQUAL "ascend")
   add_subdirectory(${PATCHED_TRITON_ROOT_DIR}/include)
   add_subdirectory(${PATCHED_TRITON_ROOT_DIR}/lib)
 endif()
-
 
 # find_package(PythonLibs REQUIRED)
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -425,18 +422,16 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
-
   if(FLAGTREE_BACKEND STREQUAL "cambricon")
     add_library(triton SHARED)
   else()
     if(FLAGTREE_BACKEND STREQUAL "ascend")
-      set(IR_SRC ${PATCHED_PYTHON_SRC_PATH}/ir.cc)
+      set(PYTHON_IR_SRC_PATH ${PATCHED_PYTHON_SRC_PATH})
     else()
-      set(IR_SRC ${PYTHON_SRC_PATH}/ir.cc)
+      set(PYTHON_IR_SRC_PATH ${PYTHON_SRC_PATH})
     endif()
-    add_library(triton SHARED
-                ${PYTHON_SRC_PATH}/main.cc
-                ${IR_SRC}
+    add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
+                ${PYTHON_IR_SRC_PATH}/ir.cc
                 ${PYTHON_SRC_PATH}/passes.cc
                 ${PYTHON_SRC_PATH}/interpreter.cc
                 ${PYTHON_SRC_PATH}/llvm.cc)
