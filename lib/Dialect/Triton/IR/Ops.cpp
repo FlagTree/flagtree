@@ -42,12 +42,31 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                 cache, evict, isVolatile);
 }
 
+// implementatio with flagtree_hints
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   CacheModifier cache, EvictionPolicy evict, bool isVolatile,
+                   mlir::StringAttr flagtree_hints) {
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
+                /*boundaryCheck=*/ArrayRef<int32_t>{}, /*padding=*/std::nullopt,
+                cache, evict, isVolatile, flagtree_hints);
+}
+
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    ArrayRef<int32_t> boundaryCheck,
                    std::optional<PaddingOption> padding, CacheModifier cache,
                    EvictionPolicy evict, bool isVolatile) {
   LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, boundaryCheck,
                 padding, cache, evict, isVolatile);
+}
+
+// implementatio with flagtree_hints
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   ArrayRef<int32_t> boundaryCheck,
+                   std::optional<PaddingOption> padding, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   mlir::StringAttr flagtree_hints) {
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, boundaryCheck,
+                padding, cache, evict, isVolatile, flagtree_hints);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
@@ -58,12 +77,33 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                 /*padding=*/std::nullopt, cache, evict, isVolatile);
 }
 
+// implementatio with flagtree_hints
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, CacheModifier cache, EvictionPolicy evict,
+                   bool isVolatile, mlir::StringAttr flagtree_hints) {
+  LoadOp::build(builder, state, ptr, mask, /*other=*/{},
+                /*boundaryCheck=*/ArrayRef<int32_t>{},
+                /*padding=*/std::nullopt, cache, evict, isVolatile,
+                flagtree_hints);
+}
+
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    Value mask, Value other, CacheModifier cache,
                    EvictionPolicy evict, bool isVolatile) {
   LoadOp::build(builder, state, ptr, mask, other,
                 /*boundaryCheck=*/ArrayRef<int32_t>{},
                 /*padding=*/std::nullopt, cache, evict, isVolatile);
+}
+
+// implementatio with flagtree_hints
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   mlir::StringAttr flagtree_hints) {
+  LoadOp::build(builder, state, ptr, mask, other,
+                /*boundaryCheck=*/ArrayRef<int32_t>{},
+                /*padding=*/std::nullopt, cache, evict, isVolatile,
+                flagtree_hints);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
@@ -77,6 +117,21 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
   LoadOp::build(builder, state, ptr, mask, other,
                 builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
                 evict, isVolatile);
+}
+
+// implementatio with flagtree_hints
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, ArrayRef<int32_t> boundaryCheck,
+                   std::optional<PaddingOption> padding, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   mlir::StringAttr flagtree_hints) {
+  auto paddingAttr =
+      padding.has_value()
+          ? PaddingOptionAttr::get(builder.getContext(), padding.value())
+          : PaddingOptionAttr();
+  LoadOp::build(builder, state, ptr, mask, other,
+                builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
+                evict, isVolatile, flagtree_hints);
 }
 
 // load(ptr, splat(1), ...)        -> load(ptr, ...)

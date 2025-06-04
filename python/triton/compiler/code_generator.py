@@ -1095,23 +1095,50 @@ class CodeGenerator(ast.NodeVisitor):
             return tuple(results)
 
     def visit_Call(self, node):
+        # 1. Get the called function object
         fn = _unwrap_if_constexpr(self.visit(node.func))
+
+        # 2. Check if it's a statically implemented function
         static_implementation = self.statically_implemented_functions.get(fn)
         if static_implementation is not None:
             return static_implementation(self, node)
 
+        # 3. Process keyword and positional arguments
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
+        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+
+        # 4. Get current line number and hints
+        line_num = node.lineno
+        function_def = self.jit_fn.parse()
+        line_flagtree_hints = getattr(function_def.body[0], 'line_flagtree_hints', {})
+        flagtree_hints = line_flagtree_hints.get(line_num)
+
+        # 5. Handle JIT function calls
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
+
+        # 6. Handle built-in functions or calls with special context
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
             extra_kwargs = {"_builder": self.builder}
             sig = inspect.signature(fn)
             if '_generator' in sig.parameters:
                 extra_kwargs['_generator'] = self
             try:
-                return fn(*args, **extra_kwargs, **kws)
+                # Special handling for tl.load with hints
+                if fn.__name__ == "load" and flagtree_hints is not None:
+                    print(f"[FLAGTREE] tl.load at line {line_num} has annotation {flagtree_hints}")
+                    if 'flagtree_hints' not in kws:
+                        kws['flagtree_hints'] = ""
+                    if flagtree_hints not in kws['flagtree_hints']:
+                        kws['flagtree_hints'] = flagtree_hints
+
+                ret = fn(*args, **extra_kwargs, **kws)
+                # builtin functions return plain tuples for readability
+                if isinstance(ret, tuple):
+                    ret = language.tuple(ret)
+                return ret
             except Exception as e:
                 # Normally when we raise a CompilationError, we raise it as
                 # `from None`, because the original fileline from the exception
@@ -1121,6 +1148,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # be in core.py.
                 raise CompilationError(self.jit_fn.src, node, None) from e
 
+        # 7. Handle calls from built-in namespace
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         return fn(*args, **kws)

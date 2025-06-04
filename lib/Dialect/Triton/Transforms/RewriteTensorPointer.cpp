@@ -312,7 +312,8 @@ public:
     if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
       auto newResult = builder.create<triton::LoadOp>(
           loadOp.getLoc(), newPtr, newMask, newOther, loadOp.getCache(),
-          loadOp.getEvict(), loadOp.getIsVolatile());
+          loadOp.getEvict(), loadOp.getIsVolatile(),
+          loadOp.getFlagtreeHintsAttr());
       op->getResult(0).replaceAllUsesWith(newResult);
       if (op->getAttr("async_task_id"))
         newResult->setAttr("async_task_id", op->getAttr("async_task_id"));
