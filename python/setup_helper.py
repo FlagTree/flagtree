@@ -373,3 +373,7 @@ cache.store(
     pre_hock=lambda: check_env('LLVM_BUILD_DIR'),
     post_hock=set_llvm_env,
 )
+
+# tsingmicro
+if flagtree_backend == "tsingmicro":
+    set_env({"TRITON_BUILD_PROTON": "OFF"})

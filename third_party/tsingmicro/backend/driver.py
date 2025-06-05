@@ -17,25 +17,23 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.driver import GPUDriver
 from triton.backends.compiler import GPUTarget
 
-import torch
-from torch.utils import cpp_extension, rename_privateuse1_backend, generate_methods_for_privateuse1_backend
 
-module = cpp_extension.load(
-    name="txda",
-    sources=[os.path.dirname(__file__) + "/txda_device.cpp"],
-    #runtime include path
-    extra_include_paths=[""],
-    #runtime *.so path
-    extra_ldflags=[""],
-    extra_cflags=["-g"],
-    verbose=True,
-)
-
-torch.utils.rename_privateuse1_backend("txda")
-
-torch._register_device_module("txda", module)
-
-generate_methods_for_privateuse1_backend(for_storage=True)
+def extend_torch():
+    import torch
+    from torch.utils import cpp_extension, rename_privateuse1_backend, generate_methods_for_privateuse1_backend
+    module = cpp_extension.load(
+        name="txda",
+        sources=[os.path.dirname(__file__) + "/txda_device.cpp"],
+        #runtime include path
+        extra_include_paths=[""],
+        #runtime *.so path
+        extra_ldflags=[""],
+        extra_cflags=["-g"],
+        verbose=True,
+    )
+    torch.utils.rename_privateuse1_backend("txda")
+    torch._register_device_module("txda", module)
+    generate_methods_for_privateuse1_backend(for_storage=True)
 
 
 def _get_tx8_path(bin_name: str) -> str:
@@ -709,8 +707,10 @@ class TXDADriver(GPUDriver):
 
     def __init__(self):
         super().__init__()
+        extend_torch()
         self.utils = TXDAUtils()
         self.launcher_cls = TXDALauncher
+        import torch
         # Needs to overwrite GPUDriver base methods
         self.get_current_stream = torch.txda.current_stream
         self.get_current_device = torch.txda.current_device
@@ -732,7 +732,7 @@ class TXDADriver(GPUDriver):
         return GPUTarget("txda", capability, warp_size)
 
     def get_active_torch_device(self):
-        # import torch
+        import torch
         # torch.txda.init_device()
         return torch.device("txda", self.get_current_device())
 
