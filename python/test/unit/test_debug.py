@@ -4,6 +4,7 @@ import torch
 import triton.language as tl
 import triton
 
+
 @pytest.mark.skip(reason="flagtree")
 @pytest.mark.parametrize('cond, opt_flag, env_var', [
     (cond, opt_flag, env_var) for cond in [True, False] \
