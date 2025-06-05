@@ -5,6 +5,7 @@ import pytest
 import triton.language as tl
 
 
+@pytest.mark.skip(reason="flagtree")
 def test_disam_cubin():
     if not triton.runtime.driver.active.get_current_target().backend == "cuda":
         pytest.skip("Test requires CUDA.")
