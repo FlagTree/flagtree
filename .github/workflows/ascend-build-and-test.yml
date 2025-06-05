@@ -20,6 +20,7 @@ jobs:
       - name: FlagTree Build on Ascend
         shell: bash
         run: |
+          export FLAGTREE_BACKEND=ascend
           source ~/env.sh
           cd python
           MAX_JOBS=32 python3.9 -m pip install . --no-build-isolation
