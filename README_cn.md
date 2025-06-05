@@ -54,6 +54,13 @@ python3 -m pip install . --no-build-isolation -v
 ```shell
 # ascend
 # 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu20.04-python3.9-ascend
+# 在 https://www.hiascend.com/developer/download/community/result?module=cann
+# 注册账号后下载对应平台的 cann-toolkit、cann-kernels，这里以 AArch64 架构的 A3 处理器为例展示如何安装
+chmod +x Ascend-cann-toolkit_8.2.RC1.alpha002_linux-aarch64.run
+./Ascend-cann-toolkit_8.2.RC1.alpha002_linux-aarch64.run --install
+chmod +x Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run
+./Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run --install
+# 编译安装
 mkdir -p ~/.flagtree/ascend; cd ~/.flagtree/ascend
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
