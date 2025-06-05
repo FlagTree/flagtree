@@ -53,21 +53,10 @@ python3 -m pip install . --no-build-isolation -v
 ```
 ```shell
 # ascend
-# 自行下载 LLVM
-cd ${YOUR_LLVM_DOWNLOAD_DIR}
-# 如果 `uname -a` 的输出是 x64 或 x86_64
-wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-x64.tar.gz
-tar -zxvf llvm-b5cc222d-ubuntu-x64.tar.gz
-export LLVM_BUILD_DIR=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-b5cc222d-ubuntu-x64
-# 如果 `uname -a` 的输出是 aarch64
+# 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu20.04-python3.9-ascend
+mkdir -p ~/.flagtree/ascend; cd ~/.flagtree/ascend
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz
-tar -zxvf llvm-b5cc222d-ubuntu-arm64.tar.gz
-export LLVM_BUILD_DIR=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-b5cc222d-ubuntu-arm64
-# 编译安装
 cd ${YOUR_CODE_DIR}/flagtree/python
-export LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include
-export LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib
-export LLVM_SYSPATH=$LLVM_BUILD_DIR
 export FLAGTREE_BACKEND=ascend
 python3 -m pip install . --no-build-isolation -v
 ```
