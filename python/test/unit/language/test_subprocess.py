@@ -19,20 +19,23 @@ def is_interpreter():
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("func_type, data_type",
-                         [(fn, data_type)
-                          for fn in ["device_print", "device_print_scalar"]
-                          for data_type in torch_types] + [("print", "int32"), ("static_print", "int32"),
-                                                           ("no_arg_print", "int32"), ("print_no_arg", "int32"),
-                                                           ("device_print_large", "int32"),
-                                                           ("print_multiple_args", "int32"),
-                                                           ("device_print_multiple_args", "int32"),
-                                                           ("device_print_hex", "int16"), ("device_print_hex", "int32"),
-                                                           ("device_print_hex", "int64"),
-                                                           ("device_print_pointer", "int32"),
-                                                           ("device_print_negative", "int32"),
-                                                           ("device_print_uint", "uint32"),  # TODO: flagtree
-                                                           ])
+@pytest.mark.parametrize("func_type, data_type", [(fn, data_type)
+                                                  for fn in ["device_print", "device_print_scalar"]
+                                                  for data_type in torch_types] + [
+                                                      ("print", "int32"),
+                                                      ("static_print", "int32"),
+                                                      ("no_arg_print", "int32"),
+                                                      ("print_no_arg", "int32"),
+                                                      ("device_print_large", "int32"),
+                                                      ("print_multiple_args", "int32"),
+                                                      ("device_print_multiple_args", "int32"),
+                                                      ("device_print_hex", "int16"),
+                                                      ("device_print_hex", "int32"),
+                                                      ("device_print_hex", "int64"),
+                                                      ("device_print_pointer", "int32"),
+                                                      ("device_print_negative", "int32"),
+                                                      # ("device_print_uint", "uint32"),  # TODO: flagtree
+                                                  ])
 def test_print(func_type: str, data_type: str, device: str):
     proc = subprocess.run(
         [sys.executable, print_path, "test_print", func_type, data_type, device],
