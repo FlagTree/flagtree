@@ -52,6 +52,16 @@ export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
 ```
 ```shell
+# aipu (arm npu)
+# Recommended: Use Ubuntu 20.04
+mkdir -p ~/.flagtree/aipu; cd ~/.flagtree/aipu
+wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-x64.tar.gz
+cd ${YOUR_CODE_DIR}/flagtree/
+git checkout -b triton_v3.3.x origin/triton_v3.3.x
+export FLAGTREE_BACKEND=aipu
+python3 -m pip install . --no-build-isolation -v
+```
+```shell
 # tsingmicro
 # Recommended: Use Ubuntu 20.04
 mkdir -p ~/.flagtree/tsingmicro; cd ~/.flagtree/tsingmicro

@@ -375,6 +375,15 @@ cache.store(
     post_hock=set_llvm_env,
 )
 
+# aipu
+cache.store(
+    file="aipu-llvm-a66376b0-ubuntu-x64",
+    condition=("aipu" == flagtree_backend),
+    url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-x64.tar.gz",
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
+    post_hock=set_llvm_env,
+)
+
 # tsingmicro
 cache.store(
     file="tsingmicro-llvm21-glibc2.35-glibcxx3.4.30-x64",
