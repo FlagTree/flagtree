@@ -22,8 +22,9 @@ python3 -m pip install . --no-build-isolation -v
 
 自动下载依赖库的速度可能受限于网络环境，编译前可自行下载至缓存目录 ~/.flagtree（可通过环境变量 FLAGTREE_CACHE_DIR 修改），无需自行设置 LLVM_BUILD_DIR 等环境变量。
 各后端完整编译命令如下：
+
+[iluvatar](/third_party/iluvatar/)
 ```shell
-# iluvatar
 # 推荐使用镜像 Ubuntu 20.04
 mkdir -p ~/.flagtree/iluvatar; cd ~/.flagtree/iluvatar
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatar-llvm18-x86_64.tar.gz
@@ -32,8 +33,8 @@ cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=iluvatar
 python3 -m pip install . --no-build-isolation -v
 ```
+[xpu (klx)](/third_party/xpu/)
 ```shell
-# xpu (klx)
 # 推荐使用镜像（22GB）https://su.bcebos.com/klx-sdk-release-public/xpytorch/docker/ubuntu2004_v030/ubuntu_2004_x86_64_v30.tar
 # 联系 kunlunxin-support@baidu.com 可获取进一步支持
 mkdir -p ~/.flagtree/xpu; cd ~/.flagtree/xpu
@@ -43,13 +44,49 @@ cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=xpu
 python3 -m pip install . --no-build-isolation -v
 ```
+[mthreads](https://github.com/FlagTree/flagtree/tree/main/third_party/mthreads/)
 ```shell
-# mthreads
 # 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.10-mthreads
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
+python3 -m pip install . --no-build-isolation -v
+```
+[aipu (arm npu)](https://github.com/FlagTree/flagtree/tree/triton_v3.3.x/third_party/aipu/)
+```shell
+# 推荐使用镜像 Ubuntu 20.04
+mkdir -p ~/.flagtree/aipu; cd ~/.flagtree/aipu
+wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-x64.tar.gz
+cd ${YOUR_CODE_DIR}/flagtree/
+git checkout -b triton_v3.3.x origin/triton_v3.3.x
+export FLAGTREE_BACKEND=aipu
+python3 -m pip install . --no-build-isolation -v
+```
+[tsingmicro](https://github.com/FlagTree/flagtree/tree/triton_v3.3.x/third_party/tsingmicro/)
+```shell
+# 推荐使用镜像 Ubuntu 20.04
+mkdir -p ~/.flagtree/tsingmicro; cd ~/.flagtree/tsingmicro
+wget https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.35-glibcxx3.4.30-x64.tar.gz
+cd ${YOUR_CODE_DIR}/flagtree/
+git checkout -b triton_v3.3.x origin/triton_v3.3.x
+export FLAGTREE_BACKEND=tsingmicro
+python3 -m pip install . --no-build-isolation -v
+```
+[ascend](https://github.com/FlagTree/flagtree/tree/triton_v3.2.x/third_party/ascend/)
+```shell
+# 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu20.04-python3.9-ascend
+# 在 https://www.hiascend.com/developer/download/community/result?module=cann
+# 注册账号后下载对应平台的 cann-toolkit、cann-kernels，这里以 AArch64 架构的 A3 处理器为例展示如何安装
+chmod +x Ascend-cann-toolkit_8.2.RC1.alpha002_linux-aarch64.run
+./Ascend-cann-toolkit_8.2.RC1.alpha002_linux-aarch64.run --install
+chmod +x Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run
+./Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run --install
+# 编译安装
+mkdir -p ~/.flagtree/ascend; cd ~/.flagtree/ascend
+wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz
+cd ${YOUR_CODE_DIR}/flagtree/python
+export FLAGTREE_BACKEND=ascend
 python3 -m pip install . --no-build-isolation -v
 ```
 
