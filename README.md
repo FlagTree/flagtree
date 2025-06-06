@@ -22,8 +22,9 @@ python3 -m pip install . --no-build-isolation -v
 
 Automatic dependency library downloads may be limited by network conditions. You can manually download to the cache directory ~/.flagtree (modifiable via the FLAGTREE_CACHE_DIR environment variable). No need to manually set LLVM environment variables such as LLVM_BUILD_DIR.
 Complete build commands for each backend:
+
+[iluvatar](/third_party/iluvatar/)
 ```shell
-# iluvatar
 # Recommended: Use Ubuntu 20.04
 mkdir -p ~/.flagtree/iluvatar; cd ~/.flagtree/iluvatar
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatar-llvm18-x86_64.tar.gz
@@ -32,18 +33,19 @@ cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=iluvatar
 python3 -m pip install . --no-build-isolation -v
 ```
+[xpu (klx)](/third_party/xpu/)
 ```shell
-# xpu (klx)
 # Recommended: Use the Docker image (22GB) https://su.bcebos.com/klx-sdk-release-public/xpytorch/docker/ubuntu2004_v030/ubuntu_2004_x86_64_v30.tar
+# Contact kunlunxin-support@baidu.com for support
 mkdir -p ~/.flagtree/xpu; cd ~/.flagtree/xpu
-wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm18-ubuntu2004_x86_64.tar
+wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar.gz
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/xre-Linux-x86_64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=xpu
 python3 -m pip install . --no-build-isolation -v
 ```
+[mthreads](https://github.com/FlagTree/flagtree/tree/main/third_party/mthreads/)
 ```shell
-# mthreads
 # Recommended: Use the Dockerfile flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.10-mthreads
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
@@ -51,8 +53,8 @@ cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
 ```
+[ascend](https://github.com/FlagTree/flagtree/tree/triton_v3.2.x/third_party/ascend/)
 ```shell
-# ascend
 # Recommended: Use the Dockerfile flagtree/dockerfiles/Dockerfile-ubuntu20.04-python3.9-ascend
 # After registering an account at https://www.hiascend.com/developer/download/community/result?module=cann,
 # download the cann-toolkit and cann-kernels for the corresponding platform.
@@ -65,6 +67,7 @@ chmod +x Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run
 mkdir -p ~/.flagtree/ascend; cd ~/.flagtree/ascend
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
+git checkout -b triton_v3.2.x origin/triton_v3.2.x
 export FLAGTREE_BACKEND=ascend
 python3 -m pip install . --no-build-isolation -v
 ```
