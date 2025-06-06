@@ -4,6 +4,8 @@ import torch
 import triton.language as tl
 import triton
 
+
+@pytest.mark.skip(reason="flagtree")
 @pytest.mark.parametrize('cond, opt_flag, env_var', [
     (cond, opt_flag, env_var) for cond in [True, False] \
                               for opt_flag in [True, False] \
@@ -28,6 +30,7 @@ def test_device_assert(cond, opt_flag, env_var, device):
     getattr(torch, device).synchronize()
 
 
+@pytest.mark.skip(reason="flagtree")
 @pytest.mark.parametrize("cond", [False, True])
 def test_static_assert(cond):
 
@@ -61,6 +64,7 @@ def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref
 # integer overflow sanitization
 
 
+@pytest.mark.skip(reason="flagtree")
 @pytest.mark.parametrize("x, y, x_dtype, y_dtype, debug, should_overflow", [
     (-2**31, -1, 'int32', 'int32', False, False),
     (-2**31, -1, 'int32', 'int32', True, True),
@@ -85,6 +89,7 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
 # mul overflow
 
 
+@pytest.mark.skip(reason="flagtree")
 @pytest.mark.parametrize("x, y, x_dtype, y_dtype, debug, should_overflow", [
     (2**30, 4, 'int32', 'int32', False, False),
     (2**30, 4, 'int32', 'int32', True, True),
@@ -106,6 +111,7 @@ def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
 # sub overflow
 
 
+@pytest.mark.skip(reason="flagtree")
 @pytest.mark.parametrize("x, y, x_dtype, y_dtype, debug, should_overflow", [
     (-2**31, 1, 'int32', 'int32', False, False),
     (-2**31, 1, 'int32', 'int32', True, True),

@@ -39,7 +39,6 @@ flagtree_backend_info = {
 }
 
 set_llvm_env = lambda path: set_env({
-    'LLVM_BUILD_DIR': path,
     'LLVM_INCLUDE_DIRS': Path(path) / "include",
     'LLVM_LIBRARY_DIR': Path(path) / "lib",
     'LLVM_SYSPATH': path,
@@ -388,7 +387,7 @@ cache.store(
     file="iluvatar-llvm18-x86_64",
     condition=("iluvatar" == flagtree_backend),
     url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatar-llvm18-x86_64.tar.gz",
-    pre_hock=lambda: check_env('LLVM_BUILD_DIR'),
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
@@ -397,7 +396,7 @@ cache.store(
     file="XTDK-llvm18-ubuntu2004_x86_64",
     condition=("xpu" == flagtree_backend),
     url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm18-ubuntu2004_x86_64.tar",
-    pre_hock=lambda: check_env('LLVM_BUILD_DIR'),
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
@@ -408,10 +407,10 @@ cache.store(file="xre-Linux-x86_64", condition=("xpu" == flagtree_backend),
 cache.store(
     files=("clang", "xpu-xxd", "xpu3-crt.xpu", "xpu-kernel.t", "ld.lld", "llvm-readelf", "llvm-objdump",
            "llvm-objcopy"), condition=("xpu" == flagtree_backend),
-    copy_src_path=f"{os.environ.get('LLVM_BUILD_DIR','')}/bin", copy_dst_path="third_party/xpu/backend/xpu3/bin")
+    copy_src_path=f"{os.environ.get('LLVM_SYSPATH','')}/bin", copy_dst_path="third_party/xpu/backend/xpu3/bin")
 
 cache.store(files=("libclang_rt.builtins-xpu3.a", "libclang_rt.builtins-xpu3s.a"),
-            condition=("xpu" == flagtree_backend), copy_src_path=f"{os.environ.get('LLVM_BUILD_DIR','')}/lib/linux",
+            condition=("xpu" == flagtree_backend), copy_src_path=f"{os.environ.get('LLVM_SYSPATH','')}/lib/linux",
             copy_dst_path="third_party/xpu/backend/xpu3/lib/linux")
 
 cache.store(files=("include", "so"), condition=("xpu" == flagtree_backend),
@@ -423,15 +422,15 @@ cache.store(
     condition=("mthreads" == flagtree_backend),
     url=
     "https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz",
-    pre_hock=lambda: check_env('LLVM_BUILD_DIR'),
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
 # ascend
 cache.store(
-    file="ascend-llvm-b5cc222d-ubuntu-x64.tar.gz",
+    file="ascend-llvm-b5cc222d-ubuntu-arm64",
     condition=("ascend" == flagtree_backend),
-    url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-x64.tar.gz",
+    url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
