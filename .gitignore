@@ -26,6 +26,8 @@ third_party/cambricon/
 third_party/iluvatar/iluvatarTritonPlugin.so
 third_party/triton_shared/
 third_party/xpu/backend/xpu3
+third_party/tsingmicro/backend/lib
+third_party/tsingmicro/backend/bin
 
 # Proton
 python/triton/profiler

@@ -29,6 +29,9 @@ elseif(FLAGTREE_BACKEND STREQUAL "mthreads")
 elseif(FLAGTREE_BACKEND STREQUAL "aipu")
   add_definitions(-D__NVIDIA__)
   add_definitions(-D__AMD__)
+elseif(FLAGTREE_BACKEND STREQUAL "tsingmicro")
+  set(CMAKE_C_COMPILER clang)
+  set(CMAKE_CXX_COMPILER clang++)
 endif()
 set(FLAGTREE_PLUGIN "$ENV{FLAGTREE_PLUGIN}")
 if(FLAGTREE_PLUGIN)
@@ -204,7 +207,7 @@ include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
 # link_directories(${LLVM_LIBRARY_DIR})
-if (FLAGTREE_BACKEND MATCHES "^(cambricon|aipu)$")
+if (FLAGTREE_BACKEND MATCHES "^(cambricon|aipu|tsingmicro)$")
   include_directories(${PROJECT_SOURCE_DIR}/include)
   include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
   add_subdirectory(include)
@@ -364,6 +367,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
       LLVMXPUCodeGen
       LLVMXPUAsmParser
     )
+  elseif(FLAGTREE_BACKEND STREQUAL "tsingmicro")
+    list(APPEND TRITON_LIBRARIES
+	  # riscv
+      LLVMRISCVCodeGen
+      LLVMRISCVAsmParser
+    )
   endif()
 
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
@@ -446,7 +455,7 @@ find_package(Threads REQUIRED)
 
 add_subdirectory(third_party/f2reduce)
 
-if(NOT FLAGTREE_BACKEND OR FLAGTREE_BACKEND STREQUAL "aipu")
+if(NOT FLAGTREE_BACKEND OR FLAGTREE_BACKEND MATCHES "^(aipu|tsingmicro)$")
   add_subdirectory(bin)
   add_subdirectory(test)
 endif()

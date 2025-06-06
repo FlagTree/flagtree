@@ -432,6 +432,7 @@ class CMakeBuild(build_ext):
         thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
         thirdparty_cmake_args += self.get_pybind11_cmake_args()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
+        ext_base_dir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
         # create build directories
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
@@ -471,6 +472,7 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld",
                 "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld",
                 "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld",
+                f"-DCMAKE_INSTALL_PREFIX={ext_base_dir}",
             ]
 
         # Note that asan doesn't work with binaries that use the GPU, so this is
@@ -512,6 +514,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
+        subprocess.check_call(["cmake", "--install", "."], cwd=cmake_dir)
 
 
 nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
@@ -597,7 +600,7 @@ download_and_copy(
 )
 
 if helper.flagtree_backend:
-    if helper.flagtree_backend == "aipu":
+    if helper.flagtree_backend in ("aipu", "tsingmicro"):
         backends = [
             *BackendInstaller.copy(helper.default_backends + helper.extend_backends),
             *BackendInstaller.copy_externals(),

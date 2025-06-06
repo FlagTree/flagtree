@@ -1,0 +1,2 @@
+add_subdirectory(LinalgToMK)
+add_subdirectory(CoreDialectsToMK)

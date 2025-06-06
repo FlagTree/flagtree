@@ -1,0 +1,5 @@
+add_subdirectory(TritonToLinalg)
+add_subdirectory(TritonToStructured)
+add_subdirectory(TritonArithToLinalg)
+add_subdirectory(StructuredToMemref)
+add_subdirectory(TritonToCoreDialects)
