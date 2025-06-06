@@ -43,23 +43,22 @@ export FLAGTREE_BACKEND=xpu
 python3 -m pip install . --no-build-isolation -v
 ```
 ```shell
-# tsingmicro
-# Recommended: Use the Docker image (xxGB) https://xxxx
-mkdir -p ~/.flagtree/tsingmicro; cd ~/.flagtree/tsingmicro
-wget https://github.com/FlagTree/flagtree/releases/download/xxxx
-wget https://github.com/FlagTree/flagtree/releases/download/xxxx
-cd ${YOUR_CODE_DIR}/flagtree/
-./third_party/tsingmicro/scripts/install.sh
-./third_party/tsingmicro/scripts/build_tsingmicro.sh
-./third_party/tsingmicro/scripts/run_tsingmicro.sh third_party/tsingmicro/examples/test_vec_add.py
-```
-```shell
 # mthreads
 # 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.10-mthreads
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
+python3 -m pip install . --no-build-isolation -v
+```
+```shell
+# tsingmicro
+# 推荐使用镜像 Ubuntu 20.04
+mkdir -p ~/.flagtree/tsingmicro; cd ~/.flagtree/tsingmicro
+wget https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.35-glibcxx3.4.30-x64.tar.gz
+cd ${YOUR_CODE_DIR}/flagtree/
+git checkout -b triton_v3.3.x origin/triton_v3.3.x
+export FLAGTREE_BACKEND=tsingmicro
 python3 -m pip install . --no-build-isolation -v
 ```
 
