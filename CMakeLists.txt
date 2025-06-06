@@ -26,6 +26,9 @@ elseif(FLAGTREE_BACKEND STREQUAL "mthreads")
   set(CMAKE_C_COMPILER clang)
   set(CMAKE_CXX_COMPILER clang++)
   set(ENV{FLAGTREE_PLUGIN} $ENV{FLAGTREE_BACKEND})
+elseif(FLAGTREE_BACKEND STREQUAL "aipu")
+  add_definitions(-D__NVIDIA__)
+  add_definitions(-D__AMD__)
 endif()
 set(FLAGTREE_PLUGIN "$ENV{FLAGTREE_PLUGIN}")
 if(FLAGTREE_PLUGIN)
@@ -201,7 +204,7 @@ include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
 # link_directories(${LLVM_LIBRARY_DIR})
-if (FLAGTREE_BACKEND STREQUAL "cambricon")
+if (FLAGTREE_BACKEND MATCHES "^(cambricon|aipu)$")
   include_directories(${PROJECT_SOURCE_DIR}/include)
   include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
   add_subdirectory(include)
@@ -263,10 +266,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
   if (TRITON_BUILD_PROTON)
     add_definitions(-D__PROTON__)
     add_subdirectory(third_party/proton)
-    # We always build proton dialect
-    list(APPEND TRITON_PLUGIN_NAMES "proton")
-    add_subdirectory(third_party/proton/dialect)
   endif()
+  # We always build proton dialect
+  list(APPEND TRITON_PLUGIN_NAMES "proton")
+  add_subdirectory(third_party/proton/dialect)
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
@@ -443,7 +446,7 @@ find_package(Threads REQUIRED)
 
 add_subdirectory(third_party/f2reduce)
 
-if(NOT FLAGTREE_BACKEND)
+if(NOT FLAGTREE_BACKEND OR FLAGTREE_BACKEND STREQUAL "aipu")
   add_subdirectory(bin)
   add_subdirectory(test)
 endif()

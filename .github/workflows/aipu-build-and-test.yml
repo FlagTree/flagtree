@@ -1,18 +1,18 @@
-name: Iluvatar-Build-And-Test
+name: AIPU-Build-And-Test
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "triton_v3.3.x" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "triton_v3.3.x" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  iluvatar-build-and-test:
-    runs-on: iluvatar
+  aipu-build-and-test:
+    runs-on: aipu
     steps:
       - name: Checkout code (attempt 1)
         id: checkout1
@@ -45,15 +45,18 @@ jobs:
         if: success()
         run: echo "Checkout completed successfully"
 
-      - name: FlagTree Build on Iluvatar
+      - name: FlagTree Build on AIPU
         shell: bash
         run: |
-          export FLAGTREE_BACKEND=iluvatar
           source ~/env.sh
+          source ~/env_setup.sh
+          export FLAGTREE_BACKEND=aipu
           cd python
-          MAX_JOBS=32 pip3 install . --no-build-isolation
+          python3.10 -m pip install . --no-build-isolation -v
 
-      - name: FlagTree Test on Iluvatar
+      - name: FlagTree Test on AIPU
         shell: bash
         run: |
-          CUDA_VISIBLE_DEVICES=15 pytest -s third_party/iluvatar/python/test/unit
+          source ~/env_setup.sh
+          python3.10 third_party/aipu/python/test/test_01_vector_add.py
+          python3.10 third_party/aipu/python/test/test_02_fused_softmax.py

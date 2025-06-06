@@ -20,7 +20,7 @@ jobs:
           source ~/env.sh
           export FLAGTREE_BACKEND=metax
           cd python
-          MAX_JOBS=20 pip3 install . --no-build-isolation
+          MAX_JOBS=32 pip3 install . --no-build-isolation
 
       - name: FlagTree Test on Metax
         shell: bash

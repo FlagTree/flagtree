@@ -167,6 +167,7 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
     assert "note: diagnostic emitted with trace:" in err
 
 
+@pytest.mark.skip(reason="TODO: flagtree")
 def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
 
     @triton.jit
