@@ -10,13 +10,13 @@ from pathlib import Path
 import hashlib
 from dataclasses import dataclass
 
+flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
+flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 use_triton_shared = False
-necessary_third_party = ["flir"]
+necessary_third_party = ["" if flagtree_backend == "tsingmicro" else "flir"]
 default_backends = ["nvidia", "amd"]
 extend_backends = []
 ext_sourcedir = "triton/_C/"
-flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
-flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 
 
 @dataclass
@@ -284,7 +284,8 @@ class CommonUtils:
                       "so we couldn't compile triton_shared\n")
 
         third_partys = []
-        third_partys.append(flagtree_backend_info["flir"])
+        if flagtree_backend != "tsingmicro":
+            third_partys.append(flagtree_backend_info["flir"])
         if os.environ.get("USE_TRITON_SHARED", "ON") == "ON":
             third_partys.append(flagtree_backend_info["triton_shared"])
         else:
@@ -307,7 +308,8 @@ def handle_flagtree_backend():
         extend_backends.append(flagtree_backend)
         if "editable_wheel" in sys.argv and flagtree_backend not in ("aipu", "tsingmicro"):
             ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
-    default_backends.append("flir")
+    if flagtree_backend != "tsingmicro":
+        default_backends.append("flir")
     if use_triton_shared:
         default_backends.append("triton_shared")
 
@@ -375,5 +377,5 @@ cache.store(
 )
 
 # tsingmicro
-if flagtree_backend == "tsingmicro":
-    set_env({"TRITON_BUILD_PROTON": "OFF"})
+#if flagtree_backend == "tsingmicro":
+#    set_env({"TRITON_BUILD_PROTON": "OFF"})
