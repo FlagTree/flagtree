@@ -1,0 +1,31 @@
+FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/ascend-pytorch:24.0.0-A1-2.1.0-ubuntu20.04
+
+RUN apt-get update && \
+    apt-get install zip unzip git vim zstd libzstd-dev && \
+    apt-get install zlib1g zlib1g-dev libxml2 libxml2-dev && \
+    apt-get install clang lld
+
+RUN pip3 install -U pip && \
+    pip3 install numpy && \
+    pip3 install decorator && \
+    pip3 install sympy==1.4 && \
+    pip3 install cffi==1.12.3 && \
+    pip3 install pyyaml && \
+    pip3 install pathlib2 && \
+    pip3 install protobuf attrs attr && \
+    pip3 install scipy && \
+    pip3 install requests psutil absl-py && \
+    pip3 install ninja cmake wheel pybind11 && \
+    pip3 install setuptools==75.1.0 && \
+    pip3 install attrs==24.2.0 numpy==1.26.4 scipy==1.13.1 decorator==5.1.1 psutil==6.0.0 && \
+    pip3 install pytest==8.3.2 pytest-xdist==3.6.1 pyyaml torch==2.3.1 torchvision==0.18.1 torch-npu==2.3.1.post2 && \
+    pip3 install scikit-build==0.18.1 scikit_build_core==0.11.1 && \
+    pip3 install pre-commit torch_npu==2.6.0rc1 && \
+    rm -rf /root/.cache/pip
+
+ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/hdf5/serial:$LD_LIBRARY_PATH
+
+RUN if [ ! -d "/lib64" ]; \
+    then \
+        mkdir /lib64 && ln -sf /lib/ld-linux-aarch64.so.1 /lib64/ld-linux-aarch64.so.1; \
+    fi

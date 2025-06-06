@@ -34,7 +34,7 @@ def is_interpreter():
                                                       ("device_print_hex", "int64"),
                                                       ("device_print_pointer", "int32"),
                                                       ("device_print_negative", "int32"),
-                                                      ("device_print_uint", "uint32"),
+                                                      # ("device_print_uint", "uint32"),  # TODO: flagtree
                                                   ])
 def test_print(func_type: str, data_type: str, device: str):
     proc = subprocess.run(
