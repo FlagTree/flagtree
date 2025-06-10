@@ -51,10 +51,10 @@ jobs:
           source ~/env.sh
           export FLAGTREE_BACKEND=tsingmicro
           cd python
-          python3.10 -m pip install . --no-build-isolation -v
+          python3 -m pip install . --no-build-isolation -v
 
       - name: FlagTree Test on Tsingmicro
         shell: bash
         run: |
           source ~/env.sh
-          python3.10 -c 'import triton; print(triton.__path__)'
+          python3 -c 'import triton; print(triton.__path__)'
