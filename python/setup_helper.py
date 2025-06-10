@@ -386,10 +386,10 @@ cache.store(
 
 # tsingmicro
 cache.store(
-    file="tsingmicro-llvm21-glibc2.35-glibcxx3.4.30-x64",
+    file="tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-x64",
     condition=("tsingmicro" == flagtree_backend),
     url=
-    "https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.35-glibcxx3.4.30-x64.tar.gz",
+    "https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-x64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
