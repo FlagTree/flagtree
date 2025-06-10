@@ -44,6 +44,7 @@ void init_triton_aipu_passes_convert(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_linalg_to_affine_loops",
                      createConvertLinalgToAffineLoopsPass);
   ADD_PASS_WRAPPER_0("add_lower_affine", createLowerAffinePass);
+  ADD_PASS_WRAPPER_0("add_triton_to_ptr", triton::createTritonToPtrPass);
 
   m.def("add_affine_vectorize", [](mlir::PassManager &pm, int64_t vecsize) {
     affine::AffineVectorizeOptions vectorize_options;
