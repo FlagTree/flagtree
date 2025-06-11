@@ -67,7 +67,7 @@ python3 -m pip install . --no-build-isolation -v
 ```shell
 # Recommended: Use Ubuntu 20.04
 mkdir -p ~/.flagtree/tsingmicro; cd ~/.flagtree/tsingmicro
-wget https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.35-glibcxx3.4.30-x64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-x64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/
 git checkout -b triton_v3.3.x origin/triton_v3.3.x
 export FLAGTREE_BACKEND=tsingmicro
