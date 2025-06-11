@@ -100,6 +100,7 @@ class AIPUBackend(BaseBackend):
         pm.enable_debug()
         # add pass here
         aipu.passes.convert.add_triton_to_linalg_pipeline(pm)
+        aipu.passes.convert.add_triton_to_ptr(pm)
         pm.run(mod)
         return mod
 
