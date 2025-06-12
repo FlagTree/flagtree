@@ -1,5 +1,6 @@
 import os
 import shutil
+from pathlib import Path
 
 
 def insert_at_file_start(filepath, import_lines):
@@ -49,10 +50,10 @@ def append_at_file_end(filepath, import_lines):
 
 def post_install():
     import site
-    install_dir = site.getsitepackages()
+    install_dir = site.getsitepackages()[0]
     install_dir = os.path.join(install_dir, "triton")
     init_path = os.path.join(install_dir, "__init__.py")
-    patched_content = f"""
+    patched_content = """
 import sys
 from .triton_patch.language import _utils as ascend_utils
 sys.modules['triton.language._utils'] = ascend_utils
@@ -69,7 +70,7 @@ sys.modules['triton.testing'] = ascend_testing
 """
     insert_at_file_start(init_path, patched_content)
 
-    content_to_append = f"""
+    content_to_append = """
 from .triton_patch.language.core import dot, gather, insert, subview
 from .triton_patch.language.standard import flip
 from .triton_patch.language.math import umulhi, exp, exp2, log, log2, cos, sin, sqrt, sqrt_rn, rsqrt, div_rn, erf, tanh, floor, ceil
@@ -150,3 +151,56 @@ def get_ascend_patch_package_dir(backends):
     package_dir["triton/triton_patch/compiler"] = f"{triton_patch_root_rel_dir}/compiler"
     package_dir["triton/triton_patch/runtime"] = f"{triton_patch_root_rel_dir}/runtime"
     return package_dir
+
+
+def get_extra_install_packages():
+    return [
+        "triton/triton_patch",
+        "triton/triton_patch/language",
+        "triton/triton_patch/compiler",
+        "triton/triton_patch/runtime",
+    ]
+
+
+def precompile_hock(*args, **kargs):
+    third_party_base_dir = Path(kargs['third_party_base_dir'])
+    ascend_path = Path(third_party_base_dir) / "ascend"
+    patch_path = Path(ascend_path) / "triton_patch"
+    project_path = Path(third_party_base_dir) / "triton_ascend"
+    if os.path.exists(ascend_path):
+        shutil.rmtree(ascend_path)
+    if not os.path.exists(project_path):
+        raise RuntimeError(f"{project_path} can't be found. It might be due to a network issue")
+    ascend_src_path = Path(project_path) / "ascend"
+    patch_src_path = Path(project_path) / "triton_patch"
+    shutil.copytree(ascend_src_path, ascend_path, dirs_exist_ok=True)
+    shutil.copytree(patch_src_path, patch_path, dirs_exist_ok=True)
+    shutil.rmtree(project_path)
+    patched_code = """  set(triton_abs_dir "${TRITON_ROOT_DIR}/include/triton/Dialect/Triton/IR") """
+    src_code = """set(triton_abs_dir"""
+
+    filepath = Path(patch_path) / "include" / "triton" / "Dialect" / "Triton" / "IR" / "CMakeLists.txt"
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w+t', delete=False) as tmp_file:
+            with open(filepath, 'r') as file:
+                lines = file.readlines()
+                for line in lines:
+                    if src_code in line:
+                        tmp_file.writelines(patched_code)
+                    else:
+                        tmp_file.writelines(line)
+        backup_path = str(filepath) + '.bak'
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        shutil.move(filepath, backup_path)
+        shutil.move(tmp_file.name, filepath)
+        print(f"[INFO]: {filepath} is patched")
+        return True
+    except PermissionError:
+        print(f"[ERROR]: No permission to write to {filepath}!")
+    except FileNotFoundError:
+        print(f"[ERROR]: {filepath} does not exist!")
+    except Exception as e:
+        print(f"[ERROR]: Unknown error: {str(e)}")
+    return False

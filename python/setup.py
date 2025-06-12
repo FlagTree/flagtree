@@ -28,7 +28,7 @@ from wheel.bdist_wheel import bdist_wheel
 
 import pybind11
 
-import setup_helper as helper
+from setup_tools import setup_helper as helper
 
 
 @dataclass
@@ -611,7 +611,7 @@ class plugin_install(install):
     def run(self):
         add_links()
         install.run(self)
-        helper.post_install(self)
+        helper.post_install()
 
 
 class plugin_develop(develop):
@@ -619,7 +619,7 @@ class plugin_develop(develop):
     def run(self):
         add_links()
         develop.run(self)
-        helper.post_install(self)
+        helper.post_install()
 
 
 class plugin_bdist_wheel(bdist_wheel):
@@ -627,7 +627,7 @@ class plugin_bdist_wheel(bdist_wheel):
     def run(self):
         add_links()
         bdist_wheel.run(self)
-        helper.post_install(self)
+        helper.post_install()
 
 
 class plugin_egginfo(egg_info):
@@ -635,7 +635,7 @@ class plugin_egginfo(egg_info):
     def run(self):
         add_links()
         egg_info.run(self)
-        helper.post_install(self)
+        helper.post_install()
 
 
 package_data_tools = helper.get_package_data_tools()

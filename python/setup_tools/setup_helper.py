@@ -8,35 +8,18 @@ from io import BytesIO
 import urllib.request
 from pathlib import Path
 import hashlib
-from dataclasses import dataclass
 from distutils.sysconfig import get_python_lib
+from . import utils
 
-use_triton_shared = False
-necessary_third_party = ["triton_shared"]
-default_backends = ["nvidia", "amd"]
 extend_backends = []
+default_backends = ["nvidia", "amd"]
 plugin_backends = ["cambricon", "ascend"]
 ext_sourcedir = "triton/_C/"
 flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
 flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend"}
-
-
-@dataclass
-class FlagTreeBackend:
-    name: str
-    url: str
-    tag: str
-
-
-flagtree_backend_info = {
-    "triton_shared":
-    FlagTreeBackend(name="triton_shared", url="https://github.com/microsoft/triton-shared.git",
-                    tag="380b87122c88af131530903a702d5318ec59bb33"),
-    "cambricon":
-    FlagTreeBackend(name="cambricon", url="https://github.com/Cambricon/triton-linalg.git",
-                    tag="00f51c2e48a943922f86f03d58e29f514def646d"),
-}
+flagtree_backends = utils.flagtree_backends
+backend_utils = utils.activate(flagtree_backend)
 
 set_llvm_env = lambda path: set_env({
     'LLVM_INCLUDE_DIRS': Path(path) / "include",
@@ -51,43 +34,68 @@ def get_device_name():
 
 def get_extra_packages():
     packages = []
-    if flagtree_backend == 'ascend':
-        packages = [
-            "triton/triton_patch",
-            "triton/triton_patch/language",
-            "triton/triton_patch/compiler",
-            "triton/triton_patch/runtime",
-        ]
+    try:
+        packages = backend_utils.get_extra_install_packages()
+    except Exception:
+        packages = []
     return packages
 
 
 def get_package_data_tools():
     package_data = ["compile.h", "compile.c"]
-    if flagtree_backend == 'xpu':
-        package_data += ["compile_xpu.h", "compile_xpu.c"]
+    try:
+        package_data += backend_utils.get_package_data_tools()
+    except Exception:
+        package_data
     return package_data
 
 
-def post_install(self):
+def git_clone(lib, lib_path):
+    import git
+    MAX_RETRY = 4
+    print(f"Clone {lib.name} into {lib_path} ...")
+    retry_count = MAX_RETRY
+    while (retry_count):
+        try:
+            repo = git.Repo.clone_from(lib.url, lib_path)
+            if lib.tag is not None:
+                repo.git.checkout(lib.tag)
+            sub_triton_path = Path(lib_path) / "triton"
+            if os.path.exists(sub_triton_path):
+                shutil.rmtree(sub_triton_path)
+            print(f"successfully clone {lib.name} into {lib_path} ...")
+            return True
+        except Exception:
+            retry_count -= 1
+            print(f"\n[{MAX_RETRY - retry_count}] retry to clone {lib.name} to  {lib_path}")
+    return False
 
-    def get_module(module_path):
-        import importlib.util
-        import os
-        module_path = os.path.abspath(module_path)
-        spec = importlib.util.spec_from_file_location("module", module_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
 
-    def ascend():
-        utils = get_module("../third_party/ascend/utils.py")
-        utils.post_install()
+def download_flagtree_third_party(name, condition, required=False, hock=None):
+    if not condition:
+        return
+    backend = None
+    for _backend in flagtree_backends:
+        if _backend.name is name:
+            backend = _backend
+            break
+    if backend is None:
+        return backend
+    third_party_base_dir = Path(os.path.dirname(os.path.dirname(__file__))) / "third_party"
+    lib_path = Path(third_party_base_dir) / backend.name
+    if not os.path.exists(lib_path):
+        succ = git_clone(lib=backend, lib_path=lib_path)
+        if not succ and required:
+            raise RuntimeError("Bad network ! ")
+    else:
+        print(f'Found third_party {backend.name} at {lib_path}\n')
+    if callable(hock):
+        hock(third_party_base_dir=third_party_base_dir, backend=backend)
 
-    code = f"{flagtree_backend}()"
-    try:
-        exec(code, globals(), locals())
-    except:  #noqa: E722
-        pass
+
+def post_install():
+
+    backend_utils.post_install()
 
 
 class FlagTreeCache:
@@ -304,54 +312,6 @@ class CommonUtils:
             package_dict["triton/triton_patch/runtime"] = f"{triton_patch_root_rel_dir}/runtime"
         return package_dict
 
-    @staticmethod
-    def download_third_party():
-        import git
-        MAX_RETRY = 4
-        global use_triton_shared, flagtree_backend
-        third_party_base_dir = Path(os.path.dirname(os.path.dirname(__file__))) / "third_party"
-
-        def git_clone(lib, lib_path):
-            global use_triton_shared
-            print(f"Clone {lib.name} into {lib_path} ...")
-            retry_count = MAX_RETRY
-            while (retry_count):
-                try:
-                    repo = git.Repo.clone_from(lib.url, lib_path)
-                    repo.git.checkout(lib.tag)
-                    if lib.name in flagtree_backend_info:
-                        sub_triton_path = Path(lib_path) / "triton"
-                        if os.path.exists(sub_triton_path):
-                            shutil.rmtree(sub_triton_path)
-                    print(f"successfully clone {lib.name} into {lib_path} ...")
-                    return
-                except Exception:
-                    retry_count -= 1
-                    print(f"\n[{MAX_RETRY - retry_count}] retry to clone {lib.name} to  {lib_path}")
-
-            print(f"Unable to clone third_party {lib.name}")
-            if lib.name in necessary_third_party:
-                use_triton_shared = False
-                print("\n\ttriton_shared is compiled by default, but for "
-                      "some reason we couldn't download triton_shared\n"
-                      "as third_party (most likely for network reasons), "
-                      "so we couldn't compile triton_shared\n")
-
-        third_partys = []
-        if os.environ.get("USE_TRITON_SHARED", "ON") == "ON" and not flagtree_backend:
-            third_partys.append(flagtree_backend_info["triton_shared"])
-        else:
-            use_triton_shared = False
-        if flagtree_backend in flagtree_backend_info:
-            third_partys.append(flagtree_backend_info[flagtree_backend])
-
-        for lib in third_partys:
-            lib_path = Path(third_party_base_dir) / lib.name
-            if not os.path.exists(lib_path):
-                git_clone(lib=lib, lib_path=lib_path)
-            else:
-                print(f'Found third_party {lib.name} at {lib_path}\n')
-
 
 def handle_flagtree_backend():
     global ext_sourcedir
@@ -360,8 +320,6 @@ def handle_flagtree_backend():
         extend_backends.append(flagtree_backend)
         if "editable_wheel" in sys.argv and flagtree_backend != "ascend":
             ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
-    if use_triton_shared and not flagtree_backend:
-        default_backends.append("triton_shared")
 
 
 def set_env(env_dict: dict):
@@ -373,8 +331,15 @@ def check_env(env_val):
     return os.environ.get(env_val, '') != ''
 
 
-CommonUtils.download_third_party()
+download_flagtree_third_party("triton_shared", condition=(not flagtree_backend))
+
+download_flagtree_third_party("triton_ascend", condition=(flagtree_backend == "ascend"),
+                              hock=utils.ascend.precompile_hock, required=True)
+
+download_flagtree_third_party("cambricon", condition=(flagtree_backend == "cambricon"), required=True)
+
 handle_flagtree_backend()
+
 cache = FlagTreeCache()
 
 # iluvatar
