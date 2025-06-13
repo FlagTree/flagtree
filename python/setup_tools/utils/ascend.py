@@ -3,6 +3,24 @@ import shutil
 from pathlib import Path
 
 
+def get_backend_cmake_args(*args, **kargs):
+    build_ext = kargs['build_ext']
+    src_ext_path = build_ext.get_ext_fullpath("triton-adapter-opt")
+    src_ext_path = os.path.abspath(os.path.dirname(src_ext_path))
+    return [
+        "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=" + src_ext_path,
+    ]
+
+
+def install_extension(*args, **kargs):
+    build_ext = kargs['build_ext']
+    src_ext_path = build_ext.get_ext_fullpath("triton-adapter-opt")
+    src_ext_path = os.path.join(os.path.abspath(os.path.dirname(src_ext_path)), "triton-adapter-opt")
+    python_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    dst_ext_path = os.path.join(python_root_dir, "triton/backends/ascend/triton-adapter-opt")
+    shutil.copy(src_ext_path, dst_ext_path)
+
+
 def get_package_dir():
     package_dict = {}
     triton_patch_root_rel_dir = "../third_party/ascend/triton_patch/python/triton_patch"
