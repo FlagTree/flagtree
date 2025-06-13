@@ -72,6 +72,13 @@ def git_clone(lib, lib_path):
     return False
 
 
+def dir_rollback(deep, base_path):
+    while (deep):
+        base_path = os.path.dirname(base_path)
+        deep -= 1
+    return Path(base_path)
+
+
 def download_flagtree_third_party(name, condition, required=False, hock=None):
     if not condition:
         return
@@ -82,15 +89,16 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
             break
     if backend is None:
         return backend
-    third_party_base_dir = Path(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))) / "third_party"
-    prelib_path = Path(third_party_base_dir) / name
-    lib_path = Path(third_party_base_dir) / _backend.name
+    base_dir = dir_rollback(3, __file__) / "third_party"
+    prelib_path = Path(base_dir) / name
+    lib_path = Path(base_dir) / _backend.name
+
     if not os.path.exists(prelib_path) and not os.path.exists(lib_path):
         succ = git_clone(lib=backend, lib_path=prelib_path)
         if not succ and required:
             raise RuntimeError("Bad network ! ")
         if callable(hock):
-            hock(third_party_base_dir=third_party_base_dir, backend=backend)
+            hock(third_party_base_dir=base_dir, backend=backend)
     else:
         print(f'Found third_party {backend.name} at {lib_path}\n')
 
