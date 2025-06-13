@@ -3,6 +3,16 @@ import shutil
 from pathlib import Path
 
 
+def get_package_dir():
+    package_dict = {}
+    triton_patch_root_rel_dir = "../third_party/ascend/triton_patch/python/triton_patch"
+    package_dict["triton/triton_patch"] = f"{triton_patch_root_rel_dir}"
+    package_dict["triton/triton_patch/language"] = f"{triton_patch_root_rel_dir}/language"
+    package_dict["triton/triton_patch/compiler"] = f"{triton_patch_root_rel_dir}/compiler"
+    package_dict["triton/triton_patch/runtime"] = f"{triton_patch_root_rel_dir}/runtime"
+    return package_dict
+
+
 def insert_at_file_start(filepath, import_lines):
     import tempfile
     try:

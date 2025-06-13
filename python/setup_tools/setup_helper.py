@@ -17,6 +17,7 @@ plugin_backends = ["cambricon", "ascend"]
 ext_sourcedir = "triton/_C/"
 flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
 flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
+offline_build = os.getenv("FLAGTREE_PLUGIN", "OFF")
 device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend"}
 flagtree_backends = utils.flagtree_backends
 backend_utils = utils.activate(flagtree_backend)
@@ -76,26 +77,29 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
         return
     backend = None
     for _backend in flagtree_backends:
-        if _backend.name is name:
+        if _backend.name in name:
             backend = _backend
             break
     if backend is None:
         return backend
-    third_party_base_dir = Path(os.path.dirname(os.path.dirname(__file__))) / "third_party"
-    lib_path = Path(third_party_base_dir) / backend.name
-    if not os.path.exists(lib_path):
-        succ = git_clone(lib=backend, lib_path=lib_path)
+    third_party_base_dir = Path(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))) / "third_party"
+    prelib_path = Path(third_party_base_dir) / name
+    lib_path = Path(third_party_base_dir) / _backend.name
+    if not os.path.exists(prelib_path) and not os.path.exists(lib_path):
+        succ = git_clone(lib=backend, lib_path=prelib_path)
         if not succ and required:
             raise RuntimeError("Bad network ! ")
+        if callable(hock):
+            hock(third_party_base_dir=third_party_base_dir, backend=backend)
     else:
         print(f'Found third_party {backend.name} at {lib_path}\n')
-    if callable(hock):
-        hock(third_party_base_dir=third_party_base_dir, backend=backend)
 
 
 def post_install():
-
-    backend_utils.post_install()
+    try:
+        backend_utils.post_install()
+    except Exception:
+        pass
 
 
 class FlagTreeCache:
@@ -287,10 +291,10 @@ class CommonUtils:
     def skip_package_dir(package):
         if 'backends' in package or 'profiler' in package:
             return True
-        if flagtree_backend in ['cambricon']:
-            if package not in ['triton', 'triton/_C']:
-                return True
-        return False
+        try:
+            return backend_utils.skip_package_dir(package)
+        except Exception:
+            return False
 
     @staticmethod
     def get_package_dir(packages):
@@ -304,12 +308,10 @@ class CommonUtils:
                 pair = (package, f"{backend_triton_path}{package}")
                 connection.append(pair)
             package_dict.update(connection)
-        if flagtree_backend == "ascend":
-            triton_patch_root_rel_dir = "../third_party/ascend/triton_patch/python/triton_patch"
-            package_dict["triton/triton_patch"] = f"{triton_patch_root_rel_dir}"
-            package_dict["triton/triton_patch/language"] = f"{triton_patch_root_rel_dir}/language"
-            package_dict["triton/triton_patch/compiler"] = f"{triton_patch_root_rel_dir}/compiler"
-            package_dict["triton/triton_patch/runtime"] = f"{triton_patch_root_rel_dir}/runtime"
+        try:
+            package_dict.update(backend_utils.get_package_dir())
+        except Exception:
+            pass
         return package_dict
 
 
