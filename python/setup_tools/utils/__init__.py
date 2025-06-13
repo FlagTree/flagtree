@@ -25,6 +25,8 @@ flagtree_backends = (
 
 
 def activate(backend, suffix=".py"):
+    if not backend:
+        return
     module_path = Path(os.path.dirname(__file__)) / backend
     module_path = str(module_path) + suffix
     spec = importlib.util.spec_from_file_location("module", module_path)
