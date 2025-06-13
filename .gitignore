@@ -58,7 +58,6 @@ ptxas
 third_party/nvidia/backend/include
 third_party/nvidia/backend/lib/cupti
 
-
 # Docs
 docs/_build/
 docs/python-api/generated/

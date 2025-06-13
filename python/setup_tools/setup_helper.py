@@ -276,12 +276,13 @@ class CommonUtils:
 
     @staticmethod
     def unlink():
-        cur_path = os.path.dirname(__file__)
+        cur_path = dir_rollback(2, __file__)
         if "editable_wheel" in sys.argv:
             installation_dir = cur_path
         else:
             installation_dir = get_python_lib()
         backends_dir_path = Path(installation_dir) / "triton" / "backends"
+        # raise RuntimeError(backends_dir_path)
         if not os.path.exists(backends_dir_path):
             return
         for name in os.listdir(backends_dir_path):
