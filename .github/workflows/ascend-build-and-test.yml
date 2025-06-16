@@ -29,4 +29,4 @@ jobs:
         shell: bash
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          python3.9 third_party/ascend/python/tutorials/01-vector-add.py
+          python3.9 third_party/tests/ascend/vector-add.py
