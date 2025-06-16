@@ -5,9 +5,9 @@
 #include <c10/util/ArrayRef.h>
 
 #include <torch/csrc/Device.h>
-#include <torch/csrc/autograd/autograd_not_implemented_fallback.h>
 #include <torch/csrc/jit/serialization/pickler.h>
 #include <torch/extension.h>
+#include <torch/csrc/autograd/autograd_not_implemented_fallback.h>
 
 #include <ATen/EmptyTensor.h>
 #include <ATen/InferSize.h>
@@ -329,7 +329,7 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("aten::fill_.Scalar", &fill_scalar_aipu);
 }
 
-// Register AutogradPrivateUse1 for those operators that have no dispatches
+// Register the autograd dispatch key for those operators that have no dispatches
 TORCH_LIBRARY_IMPL(aten, AutogradPrivateUse1, m) {
   m.impl("isfinite", torch::autograd::autogradNotImplementedFallback());
 }

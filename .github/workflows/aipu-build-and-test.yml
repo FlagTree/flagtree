@@ -52,7 +52,7 @@ jobs:
           source ~/env_setup.sh
           export FLAGTREE_BACKEND=aipu
           cd python
-          python3.10 -m pip install . --no-build-isolation -v
+          MAX_JOBS=64 python3.10 -m pip install . --no-build-isolation -v
 
       - name: FlagTree Test on AIPU
         shell: bash
