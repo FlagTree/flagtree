@@ -1,2 +1,0 @@
-[WARN]: tec0's vfp_ctrl is disabled, then decode fp inst exception.
-[WARN]: tec0 decode fp instruction exception jump from pc=0x00007280 to new pc=0x00005030.
