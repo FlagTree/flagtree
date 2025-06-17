@@ -73,7 +73,7 @@ git checkout -b triton_v3.3.x origin/triton_v3.3.x
 export FLAGTREE_BACKEND=tsingmicro
 python3 -m pip install . --no-build-isolation -v
 ```
-[ascend](https://github.com/FlagTree/flagtree/tree/triton_v3.2.x/third_party/ascend/)
+[ascend](https://github.com/FlagTree/flagtree/blob/triton_v3.2.x/python/setup_tools/setup_helper.py)
 ```shell
 # 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu20.04-python3.9-ascend
 # 在 https://www.hiascend.com/developer/download/community/result?module=cann
