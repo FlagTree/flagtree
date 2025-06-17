@@ -10,8 +10,8 @@ FlagTree 继承前一版本的能力，持续集成新的后端，拓展对 Trit
 
 * 新增多后端支持
 
-目前支持的后端包括 iluvatar、xpu (klx)、mthreads、__metax__、__aipu__(arm npu)、__ascend__ npu & cpu、__tsingmicro__、cambricon，其中 __加粗__ 为本次新增。
-各新增后端保持前一版本的能力：跨平台编译与快速验证、高差异度模块插件化、CI/CD、质量管理能力。
+目前支持的后端包括 iluvatar、xpu (klx)、mthreads、__metax__、__aipu__(arm npu)、__ascend__ npu & cpu、__tsingmicro__、cambricon，其中 __加粗__ 为本次新增。 <br>
+各新增后端保持前一版本的能力：跨平台编译与快速验证、高差异度模块插件化、CI/CD、质量管理能力。 <br>
 
 * 两种编译路径支持
 
@@ -31,6 +31,6 @@ FlagTree 继承前一版本的能力，持续集成新的后端，拓展对 Trit
 
 ### Looking ahead
 
-GPGPU 后端代码将作整合，将后端差异化改动与 TritonGPU 解耦；非 GPGPU 后端将在 FLIR 基础上横向整合，对通用 Pass 进行统一设计。
-为后端厂商提供 Triton 适配版本升级指南：3.0 -> 3.1 -> 3.2 -> 3.3。
-CI/CD 将添加 FlagGems 算子库功能测试。
+GPGPU 后端代码将作整合，将后端差异化改动与 TritonGPU 解耦；非 GPGPU 后端将在 FLIR 基础上横向整合，对通用 Pass 进行统一设计。 <br>
+为后端厂商提供 Triton 适配版本升级指南：3.0 -> 3.1 -> 3.2 -> 3.3。 <br>
+CI/CD 将添加 FlagGems 算子库功能测试。 <br>
