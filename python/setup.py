@@ -29,7 +29,7 @@ from wheel.bdist_wheel import bdist_wheel
 import pybind11
 
 from build_helpers import get_base_dir, get_cmake_dir
-import setup_helper as helper
+from setup_tools import setup_helper as helper
 
 
 @dataclass
@@ -400,7 +400,6 @@ class CMakeBuild(build_ext):
         cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
         if (cmake_major, cmake_minor) < (3, 18):
             raise RuntimeError("CMake >= 3.18.0 is required")
-
         for ext in self.extensions:
             self.build_extension(ext)
 
@@ -432,7 +431,6 @@ class CMakeBuild(build_ext):
         thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
         thirdparty_cmake_args += self.get_pybind11_cmake_args()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
-        ext_base_dir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
         # create build directories
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
@@ -449,6 +447,7 @@ class CMakeBuild(build_ext):
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
+        cmake_args += helper.get_backend_cmake_args(build_ext=self)
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
@@ -472,7 +471,6 @@ class CMakeBuild(build_ext):
                 "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld",
                 "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld",
                 "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld",
-                f"-DCMAKE_INSTALL_PREFIX={ext_base_dir}",
             ]
 
         # Note that asan doesn't work with binaries that use the GPU, so this is
@@ -515,6 +513,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
         subprocess.check_call(["cmake", "--install", "."], cwd=cmake_dir)
+        helper.install_extension(build_ext=self)
 
 
 nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
@@ -652,6 +651,7 @@ class plugin_install(install):
     def run(self):
         add_links()
         install.run(self)
+        helper.post_install()
 
 
 class plugin_develop(develop):
@@ -659,6 +659,7 @@ class plugin_develop(develop):
     def run(self):
         add_links()
         develop.run(self)
+        helper.post_install()
 
 
 class plugin_bdist_wheel(bdist_wheel):
@@ -666,6 +667,7 @@ class plugin_bdist_wheel(bdist_wheel):
     def run(self):
         add_links()
         bdist_wheel.run(self)
+        helper.post_install()
 
 
 class plugin_egginfo(egg_info):
@@ -673,6 +675,7 @@ class plugin_egginfo(egg_info):
     def run(self):
         add_links()
         egg_info.run(self)
+        helper.post_install()
 
 
 # TODO: package_data_tools
