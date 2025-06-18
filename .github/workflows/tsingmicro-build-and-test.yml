@@ -58,3 +58,5 @@ jobs:
         run: |
           source ~/env.sh
           python3.11 -c 'import triton; print(triton.__path__)'
+          /usr/local/lib/python3.11/dist-packages/triton/backends/tsingmicro/bin/tsingmicro-opt --version
+          /usr/local/lib/python3.11/dist-packages/triton/backends/tsingmicro/bin/tsingmicro-llvm-opt --version

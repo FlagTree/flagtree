@@ -400,6 +400,7 @@ class CMakeBuild(build_ext):
         cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
         if (cmake_major, cmake_minor) < (3, 18):
             raise RuntimeError("CMake >= 3.18.0 is required")
+
         for ext in self.extensions:
             self.build_extension(ext)
 

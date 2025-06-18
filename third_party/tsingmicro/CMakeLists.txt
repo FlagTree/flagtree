@@ -6,6 +6,7 @@ if(NOT DEFINED TX8_HOME)
   endif()
 endif()
 
+set(TSM_BACKEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/backend)
 set(XUANTIE_NAME Xuantie-900-gcc-elf-newlib-x86_64-V2.10.2)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
