@@ -78,6 +78,19 @@ add_library(${VENDOR_RUNTIME_LIB} STATIC ${VENDOR_SOURCES})
 target_compile_options(${VENDOR_RUNTIME_LIB} PRIVATE ${RISCV_COMPILE_OPTIONS})
 target_link_options(${VENDOR_RUNTIME_LIB} PRIVATE --target=${RISCV_TRIPLE})
 
+if (DEFINED TSM_BACKEND_DIR)
+  set_target_properties(${VENDOR_RUNTIME_LIB} PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    ARCHIVE_OUTPUT_DIRECTORY ${TSM_BACKEND_DIR}/lib
+  )
+else ()
+  # Set properties for the library
+  set_target_properties(${VENDOR_RUNTIME_LIB} PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+  )
+endif ()
+
 # Setup compiler and environment for RISC-V compilation
 if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   # Use the existing Clang installation with target triple
@@ -103,3 +116,15 @@ else()
     COMMAND ${CMAKE_COMMAND} -E echo "Building ${VENDOR_RUNTIME_LIB} for RISC-V target"
   )
 endif()
+
+# Install targets
+install(TARGETS ${VENDOR_RUNTIME_LIB}
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+# Install headers (optional)
+file(GLOB_RECURSE VENDOR_HEADERS Target/lib/${TARGET}/*.h)
+install(FILES ${VENDOR_HEADERS} DESTINATION include/${TARGET})
+install(FILES Target/lib/${TARGET}/libkcorert.a DESTINATION lib/${TARGET})

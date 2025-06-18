@@ -5,6 +5,12 @@ get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
 add_llvm_executable(tsingmicro-opt tsingmicro-opt.cpp PARTIAL_SOURCES_INTENDED)
 
+if (DEFINED TSM_BACKEND_DIR)
+  set(TSM_BIN_OUT ${TSM_BACKEND_DIR}/bin)
+else ()
+  set(TSM_BIN_OUT ${CMAKE_BINARY_DIR}/bin)
+endif ()
+
 # TODO: what's this?
 llvm_update_compile_flags(tsingmicro-opt)
 target_link_libraries(tsingmicro-opt PRIVATE
@@ -21,6 +27,9 @@ target_link_libraries(tsingmicro-opt PRIVATE
   MLIROptLib
   MLIRPass
   MLIRTransforms
+)
+set_target_properties(tsingmicro-opt PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${TSM_BIN_OUT}
 )
 
 mlir_check_all_link_libraries(tsingmicro-opt)
@@ -43,6 +52,9 @@ target_link_libraries(tsingmicro-reduce PRIVATE
   MLIRPass
   MLIRTransforms
 )
+set_target_properties(tsingmicro-reduce PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${TSM_BIN_OUT}
+)
 
 mlir_check_all_link_libraries(tsingmicro-reduce)
 
@@ -63,6 +75,9 @@ target_link_libraries(tsingmicro-lsp PRIVATE
   MLIRLspServerLib
   MLIRPass
   MLIRTransforms
+)
+set_target_properties(tsingmicro-lsp PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${TSM_BIN_OUT}
 )
 
 mlir_check_all_link_libraries(tsingmicro-lsp)
@@ -86,3 +101,7 @@ target_link_libraries(tsingmicro-llvm-opt PRIVATE
   LLVMCodeGen
   )
 export_executable_symbols_for_plugins(tsingmicro-llvm-opt)
+
+set_target_properties(tsingmicro-llvm-opt PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${TSM_BIN_OUT}
+)
