@@ -30,10 +30,11 @@ set_llvm_env = lambda path: set_env({
 
 
 def install_extension(*args, **kargs):
-    try:
-        backend_utils.install_extension(*args, **kargs)
-    except Exception:
-        pass
+    backend_utils.install_extension(*args, **kargs)
+    # try:
+    #     backend_utils.install_extension(*args, **kargs)
+    # except Exception:
+    #     pass
 
 
 def get_backend_cmake_args(*args, **kargs):
