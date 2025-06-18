@@ -127,4 +127,3 @@ install(TARGETS ${VENDOR_RUNTIME_LIB}
 # Install headers (optional)
 file(GLOB_RECURSE VENDOR_HEADERS Target/lib/${TARGET}/*.h)
 install(FILES ${VENDOR_HEADERS} DESTINATION include/${TARGET})
-install(FILES Target/lib/${TARGET}/libkcorert.a DESTINATION lib/${TARGET})
