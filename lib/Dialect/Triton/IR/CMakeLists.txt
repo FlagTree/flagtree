@@ -17,6 +17,5 @@ add_triton_library(TritonIR
   MLIRIR
   MLIRArithDialect
   MLIRMathDialect
-  MLIRMathExtDialect
   MLIRSCFDialect
 )
