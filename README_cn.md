@@ -110,10 +110,15 @@ unset LLVM_BUILD_DIR LLVM_INCLUDE_DIRS LLVM_LIBRARY_DIR LLVM_SYSPATH
 
 ## 运行测试
 
-安装完成后可以在后端目录下运行测试：
+安装完成后可以在设备支持的环境下运行测试：
 ```shell
+# nvidia
+cd python/test
+python3 -m pytest -s
+# other backends
 cd third_party/backendxxx/python/test
 python3 -m pytest -s
+python3 test_xxx.py
 ```
 
 ## 关于贡献
