@@ -245,6 +245,9 @@ class CodeGenerator():
         elif op_name == "arith.select":
             self.gen_select(op)
         # Math Dialect
+        elif op_name == "mathext.fmod":
+            fmod = lambda x, y: T.call_extern(_get_type(op.result), "fmod", x, y)
+            self.gen_binary(op, fmod)
         elif op_name == "math.powf":
             self.gen_binary(op, S.pow)
         elif op_name == "math.tanh":
