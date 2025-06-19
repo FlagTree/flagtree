@@ -112,10 +112,15 @@ unset LLVM_BUILD_DIR LLVM_INCLUDE_DIRS LLVM_LIBRARY_DIR LLVM_SYSPATH
 
 ## Running tests
 
-After installation, you can run tests in the backend directory:
+After installation, you can run tests:
 ```shell
+# nvidia
+cd python/test
+python3 -m pytest -s
+# other backends
 cd third_party/backendxxx/python/test
 python3 -m pytest -s
+python3 test_xxx.py
 ```
 
 ## Contributing
