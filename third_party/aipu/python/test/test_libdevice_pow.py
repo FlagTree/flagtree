@@ -1,7 +1,6 @@
 import torch
 import triton
 import triton.language as tl
-from triton.language.extra.aipu import libdevice
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -19,7 +18,6 @@ def test_kernel(
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
     y = tl.load(y_ptr + offsets, mask=mask)
-    #z = libdevice.pow(x, y)
     z = tl.extra.aipu.libdevice.pow(x, y)
     tl.store(y_ptr + offsets, z, mask=mask)
 
