@@ -121,10 +121,10 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
         succ = git_clone(lib=backend, lib_path=prelib_path)
         if not succ and required:
             raise RuntimeError("Bad network ! ")
-        if callable(hock):
-            hock(third_party_base_dir=base_dir, backend=backend)
     else:
         print(f'Found third_party {backend.name} at {lib_path}\n')
+    if callable(hock):
+        hock(third_party_base_dir=base_dir, backend=backend, default_backends=default_backends)
 
 
 def post_install():
