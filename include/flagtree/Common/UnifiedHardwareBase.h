@@ -4,7 +4,7 @@
 #include <optional> 
 
 namespace mlir {
-
+namespace flagtree {
 //this is the unified hardware abstraction for hardware
 //to determined if these abstraction is specified, using std::optional is needed
 //using in passes: if(uh_flagtree->xxx()){...}
@@ -21,7 +21,7 @@ public:
 
 };
 
-
+} // namespace flagtree
 } // namespace mlir
 
 #endif // UNIFIED_HARDWARE_BASE_H

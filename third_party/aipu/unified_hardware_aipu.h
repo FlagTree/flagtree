@@ -3,22 +3,20 @@
 
 #include <optional> 
 
-#include "triton/flagtree/Common/UnifiedHardwareBase.h"
+#include "flagtree/Common/UnifiedHardwareBase.h"
 
 namespace mlir {
-
 namespace aipu {
 
-class UnifiedHardwareAIPU final : public mlir::UnifiedHardware {
+class UnifiedHardwareAIPU final : public mlir::flagtree::UnifiedHardware {
     
     //DMA
     std::optional<int> getAllocSpaceForDMATag() const override{
-        return 11;
+        return std::optional<int>(11);
     }
 };
 
 } // namespace aipu
-
 } // namespace mlir
 
 #endif // UNIFIED_HARDWARE_AIPU_H

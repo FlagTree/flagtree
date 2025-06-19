@@ -22,6 +22,8 @@
 #include "triton-shared/Conversion/TritonToLinalg/TritonToLinalg.h"
 #include "triton-shared/Conversion/TritonToLinalgExperimental/TritonToLinalgExperimental.h"
 
+#include "unified_hardware_aipu.h"
+
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -69,6 +71,7 @@ void init_triton_aipu(py::module &&m) {
   init_triton_aipu_common(m.def_submodule("common"));
   auto passes = m.def_submodule("passes");
   init_triton_aipu_passes_convert(passes.def_submodule("convert"));
+
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     using namespace mlir;
@@ -88,4 +91,9 @@ void init_triton_aipu(py::module &&m) {
     context.loadAllAvailableDialects();
   });
   // register passes here
+
+  //flagtree
+  py::class_<mlir::aipu::UnifiedHardwareAIPU>(m, "UnifiedHardwareAIPU")
+        .def(py::init<>());
+  
 }
