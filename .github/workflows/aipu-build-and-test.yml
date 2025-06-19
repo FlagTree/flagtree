@@ -60,3 +60,5 @@ jobs:
           source ~/env_setup.sh
           python3.10 third_party/aipu/python/test/test_01_vector_add.py
           python3.10 third_party/aipu/python/test/test_02_fused_softmax.py
+          python3.10 third_party/aipu/python/test/test_libdevice_fmod.py
+          python3.10 third_party/aipu/python/test/test_libdevice_pow.py

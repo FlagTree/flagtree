@@ -807,6 +807,7 @@ def create_binary_op_wrapper(func_name, dtypes):
     return binary_op
 
 
+fmod = create_binary_op_wrapper("fmod", ["fp32", "fp16"])
 pow = create_binary_op_wrapper("powf", ["fp32", "fp16"])
 tanh = create_unary_op_wrapper("tanh", ["fp32", "fp16"])
 erf = create_unary_op_wrapper("erf", ["fp32", "fp16"])
