@@ -248,17 +248,7 @@ class CodeGenerator():
 
     def dispatch(self, op, stage):
         op_name = "func.func" if isinstance(op, func.FuncOp) else op.name
-        # Extern Call
-        if "extern_call" in op.attributes:
-            func_name = op.attributes["extern_call"].value
-            if func_name == "fmod":
-                fmod = lambda x, y: T.call_extern(_get_type(op.result), "fmod", x, y)
-                self.gen_binary(op, fmod)
-            if func_name == "div_rz":
-                self.ib.emit(tir.call_extern("void", "__vset_rounding_mode_rtz"))
-                self.gen_binary(op, T.Div)
-                self.ib.emit(tir.call_extern("void", "__vset_rounding_mode_rtn"))
-            return
+
         # Memref Dialect
         if op_name == "memref.reinterpret_cast":
             self.gen_memref_reinterpret_cast(op)
@@ -356,6 +346,14 @@ class CodeGenerator():
         elif op_name == "math.trunc":
             trunc = lambda x: T.call_extern(_get_type(op.result), "trunc", x)
             self.gen_unary(op, trunc)
+        # MathExt Dialect
+        elif op_name == "mathext.fmod":
+            fmod = lambda x, y: T.call_extern(_get_type(op.result), "fmod", x, y)
+            self.gen_binary(op, fmod)
+        elif op_name == "mathext.div_rz":
+            self.ib.emit(tir.call_extern("void", "__vset_rounding_mode_rtz"))
+            self.gen_binary(op, T.Div)
+            self.ib.emit(tir.call_extern("void", "__vset_rounding_mode_rtn"))
         # Func Dialect
         elif op_name == "func.return":
             self.gen_func_return(op)
