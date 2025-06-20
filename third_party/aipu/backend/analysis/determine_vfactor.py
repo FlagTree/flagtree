@@ -16,15 +16,23 @@ def determine_vectorization_factor(module, target_bitwidth=256, debug=False):
     """
     min_width = target_bitwidth
 
+    def _get_width(value):
+        elem_type = (value.type.element_type if hasattr(value.type, 'element_type') else value.type)
+        elem_width = 32 if isinstance(elem_type, ir.IndexType) else elem_type.width
+        # Except bool dtype
+        if elem_width == 1:
+            return None
+        return elem_width
+
     def walk_callback(op):
         nonlocal min_width
         if op.name == "affine.for":
             all_ops = (_op for region in op.regions for block in region.blocks for _op in block.operations)
             for _op in all_ops:
-                for result in _op.results:
-                    elem_type = (result.type.element_type if hasattr(result.type, 'element_type') else result.type)
-                    elem_width = 32 if isinstance(elem_type, ir.IndexType) else elem_type.width
-                    min_width = min(min_width, elem_width)
+                items = _op.results or _op.operands
+                for item in items:
+                    if width := _get_width(item):
+                        min_width = min(min_width, width)
 
         return ir.WalkResult.ADVANCE
 

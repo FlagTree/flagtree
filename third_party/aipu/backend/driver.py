@@ -49,7 +49,7 @@ class AIPULauncher(object):
 
     # TODO(aipu-teams): This is just a temporary solution for now, because the real driver interface is not ready yet.
     # These code will be refactor later.
-    def __call__(self, gridX, gridY, gridZ, stream, function, *args):
+    def __call__(self, gridx_size, gridy_size, gridz_size, stream, function, *args):
         try:
             from flag_gems.utils.tensor_wrapper import StridedBuffer
         except ImportError:
@@ -74,10 +74,10 @@ class AIPULauncher(object):
                 np_args[i] = arr.astype(np.int8)
                 bool_index.append(i)
 
-        tail_args = [gridX, gridY, gridZ, 0, 0, 0]
+        tail_args = [gridx_size, gridy_size, gridz_size, 0, 0, 0]
         tec_num = 4
 
-        for i in range((gridX + tec_num - 1) // tec_num):
+        for i in range((gridx_size * gridy_size * gridz_size + tec_num - 1) // tec_num):
             tail_args[3] = i
             ex(*(np_args + tail_args))
 
@@ -136,8 +136,12 @@ class AIPUDriver(DriverBase):
             torch.utils.generate_methods_for_privateuse1_backend(for_storage=True)
         return torch.aipu.is_available()
 
+    # TODO(aipu-teams): Support bechmarker later.
     def get_benchmarker(self):
-        from triton.testing import do_bench
+
+        def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+            return [float("inf"), float("inf"), float("inf")]
+
         return do_bench
 
     def get_empty_cache_for_benchmark(self):

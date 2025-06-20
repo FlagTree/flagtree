@@ -98,7 +98,7 @@ class AIPUBackend(BaseBackend):
     def make_linalg(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        # add pass here
+        # Add pass here.
         aipu.passes.convert.add_triton_to_linalg_pipeline(pm)
         pm.run(mod)
         return mod
@@ -109,8 +109,14 @@ class AIPUBackend(BaseBackend):
         ctx.allow_unregistered_dialects = True
         pm = PassManager("builtin.module", ctx)
         mod = Module.parse(aipu.common.generic_print(mod), ctx)
-        # add pass here
-        pm.add("func.func(linalg-fuse-elementwise-ops)")
+
+        # Add pass here.
+        linalg_generic_size = analysis.get_linalg_generic_size(mod)
+        # Affine loop fusion run failed when dealing with ir which owns more than 50 loops.
+        # So here fuse the loop in linalg.
+        if linalg_generic_size > 50:
+            pm.add("func.func(linalg-fuse-elementwise-ops)")
+        pm.add("scf-loop-bufferization-preprocessing")
         pm.add("one-shot-bufferize")
         pm.add("func.func(convert-bool-arg-to-i8)")
         pm.add("func.func(convert-linalg-to-affine-loops)")
@@ -119,10 +125,20 @@ class AIPUBackend(BaseBackend):
 
         pm = PassManager("builtin.module", ctx)
         vfactor = analysis.determine_vectorization_factor(mod, metadata["vector_register_bits"])
-        pm.add(f"func.func(affine-super-vectorize{{virtual-vector-size={vfactor}}})")
+        if vfactor > 1:
+            pm.add(f"func.func(affine-super-vectorize{{virtual-vector-size={vfactor}}})")
         pm.add("func.func(lower-affine)")
+
+        # Optimize pass.
+        pm.add("func.func(canonicalize)")
+        pm.add("func.func(cse)")
+        pm.add("func.func(reconcile-unrealized-casts)")
         pm.run(mod.operation)
+
+        # Post aipu pass.
         transform.binding_tid(mod, ctx)
+        transform.canonical_const_dtype(mod, ctx)
+
         ex = codegenAIPU(mod)
         metadata["name"] = ex._func_name
         metadata["shared"] = 1
