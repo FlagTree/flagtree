@@ -11,6 +11,8 @@
 
 #include <ATen/EmptyTensor.h>
 #include <ATen/InferSize.h>
+#include <ATen/core/GeneratorForPrivateuseone.h>
+#include <ATen/native/CPUFallback.h>
 #include <ATen/native/DispatchStub.h>
 #include <ATen/native/DistributionTemplates.h>
 #include <ATen/native/cpu/DistributionTemplates.h>
@@ -228,9 +230,29 @@ Tensor aipu_copy_from(const Tensor &self, const Tensor &dst,
   auto status = aipu_memcpy(aipu_ctx_, dst.data_ptr(), self.data_ptr(),
                             self.nbytes(), kind);
   AIPU_DRIVER_HANDLE_ERROR(status);
-  return self;
+  return dst;
 }
+Tensor aipu_copy_from_and_resize(const Tensor &self, const Tensor &dst) {
+  if (self.sizes() != dst.sizes()) {
+    auto new_dst =
+        custom_empty_symint(self.sizes(), self.scalar_type(), c10::nullopt,
+                            c10::nullopt, c10::nullopt, c10::nullopt);
+    auto kind = AIPU_MEMCPY_HOST_TO_DEVICE;
+    if (StrStartsWith(self.device().str(), "aipu")) {
+      kind = AIPU_MEMCPY_DEVICE_TO_HOST;
+      if (StrStartsWith(dst.device().str(), "aipu")) {
+        kind = AIPU_MEMCPY_DEVICE_TO_DEVICE;
+      }
+    }
+    auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
+    auto status = aipu_memcpy(aipu_ctx_, new_dst.data_ptr(), self.data_ptr(),
+                              self.nbytes(), kind);
+    AIPU_DRIVER_HANDLE_ERROR(status);
 
+    return new_dst;
+  }
+  return aipu_copy_from(self, dst, false);
+}
 template <template <typename> class RND>
 Tensor &random_kernel(Tensor &self, double cond1, double cond2,
                       c10::optional<Generator> gen) {
@@ -323,11 +345,29 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
   m.impl("aten::uniform_", &random_kernel<uniform_real_distribution>);
   m.impl("aten::normal_", &random_kernel<normal_distribution>);
   m.impl("aten::_copy_from", &aipu_copy_from);
+  m.impl("aten::_copy_from_and_resize", &aipu_copy_from_and_resize);
   m.impl("aten::random_.from",
          &random_from_to_kernel<uniform_int_from_to_distribution>);
   m.impl("aten::_local_scalar_dense", &_local_scalar_dense_aipu);
   m.impl("aten::fill_.Scalar", &fill_scalar_aipu);
 }
+
+void custom_cpu_fallback(const c10::OperatorHandle &op,
+                         torch::jit::Stack *stack) {
+  at::native::cpu_fallback(op, stack);
+}
+
+TORCH_LIBRARY_IMPL(_, PrivateUse1, m) {
+  m.fallback(torch::CppFunction::makeFromBoxedFunction<&custom_cpu_fallback>());
+}
+
+at::Generator make_custom_generator(c10::DeviceIndex device_index) {
+  return at::detail::getDefaultCPUGenerator();
+}
+
+REGISTER_GENERATOR_PRIVATEUSE1(make_custom_generator)
+
+C10_REGISTER_GUARD_IMPL(PrivateUse1, c10::impl::AIPUGuardImpl)
 
 // Register the autograd dispatch key for operators that have no dispatches
 TORCH_LIBRARY_IMPL(aten, AutogradPrivateUse1, m) {
@@ -352,6 +392,7 @@ struct _DeviceGuard {
 
 struct _Device {
   _Device(c10::Device device) { idx = device.index(); }
+  _Device(int index) { idx = index; }
 
   int idx = 0;
   int prev_idx = -1;
@@ -375,6 +416,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::class_<_Device>(m, "device", py::module_local())
       .def(py::init(
           [](c10::Device device) { return std::make_unique<_Device>(device); }))
+      .def(py::init([](int index) { return std::make_unique<_Device>(index); }))
       .def("__enter__", [](_Device &self) { ; })
       .def("__exit__",
            [](_Device &self, pybind11::object type, pybind11::object value,

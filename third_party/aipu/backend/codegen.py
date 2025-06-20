@@ -32,6 +32,7 @@ _CMPF_MAPPING = {
     13: T.NE,
 }
 _MEMORY_SCOPE_MAPPING = {
+    -1: "local",
     4: "lsram",
     8: "shared",
     11: "alloc_event",
@@ -88,14 +89,34 @@ def _convert_vector_type(type):
     raise RuntimeError(f"not scalar type {type}")
 
 
+def _compute_strides(shape):
+    """compute tensor strides with given shape"""
+    strides = [1]
+    for dim_size in reversed(shape[1:]):
+        strides.append(strides[-1] * dim_size)
+    return list(reversed(strides))
+
+
+def _is_scalar_type(ty):
+    return isinstance(ty, (mlir_ir.IndexType, mlir_ir.IntegerType, mlir_ir.FloatType))
+
+
+def _is_vector_type(ty):
+    return isinstance(ty, mlir_ir.VectorType)
+
+
+def _is_pointer_type(ty):
+    return isinstance(ty, (mlir_ir.MemRefType, mlir_ir.UnrankedMemRefType))
+
+
 def _get_type(value):
     ty = value.type
 
-    if isinstance(ty, (mlir_ir.IndexType, mlir_ir.IntegerType, mlir_ir.FloatType)):
+    if _is_scalar_type(ty):
         return _convert_scalar_type(ty)
-    elif isinstance(ty, mlir_ir.VectorType):
+    elif _is_vector_type(ty):
         return _convert_vector_type(ty)
-    elif isinstance(ty, (mlir_ir.MemRefType, mlir_ir.UnrankedMemRefType)):
+    elif _is_pointer_type(ty):
         e_dtype = _convert_scalar_type(ty.element_type)
         return ir.PointerType(ir.PrimType(e_dtype))
 
@@ -110,6 +131,12 @@ def _get_shape(value):
         return [1]
 
     raise RuntimeError(f"Cannot parse shape {ty}")
+
+
+def _get_buffer(ptr):
+    if isinstance(ptr, tir.Buffer):
+        return ptr
+    return _get_buffer(ptr.buffer)
 
 
 class CodeGenerator():
@@ -128,6 +155,19 @@ class CodeGenerator():
         self.after_args = None
         self.yeild_args = None
 
+    def _get_associated_dtype(self, op):
+        # Find the associated_dtype of the bool arg.
+        try:
+            owner = op.operands[0].owner
+            associated_dtype = self.get_operand(owner, 0).dtype
+            while associated_dtype.startswith("bool"):
+                owner = owner.operands[0].owner
+                associated_dtype = self.get_operand(owner, 0).dtype
+        except IndexError:
+            associated_dtype = "int32"
+        finally:
+            return associated_dtype
+
     def create_var_name(self):
         var_name = "var_" + str(self.name_idx)
         self.name_idx += 1
@@ -141,6 +181,9 @@ class CodeGenerator():
     def get_operand(self, op, idx):
         return self.get_or_create_var(op.operands[idx])
 
+    def get_list_value(self, list_value):
+        return [self.get_or_create_var(i) for i in list_value]
+
     def get_or_create_var(self, value):
         if value in self.mlir_to_tir_mapping:
             return self.mlir_to_tir_mapping[value]
@@ -153,6 +196,18 @@ class CodeGenerator():
             var = T.Var(self.create_var_name(), value_type)
         self.mlir_to_tir_mapping[value] = var
         return var
+
+    def get_offsets_sizes_strides(self, op):
+
+        def _get_static_or_dynamic_value(static_v, dynamic_v):
+            dynamic_v = list(dynamic_v)
+            return [self.get_or_create_var(dynamic_v.pop(0)) if v < 0 else v for v in static_v]
+
+        offsets = _get_static_or_dynamic_value(op.static_offsets, op.offsets)
+        sizes = _get_static_or_dynamic_value(op.static_sizes, op.sizes)
+        strides = _get_static_or_dynamic_value(op.static_strides, op.strides)
+
+        return offsets, sizes, strides
 
     def for_range(self, begin, end, step, kind="serial"):
         self.ib._seq_stack.append([])
@@ -193,6 +248,7 @@ class CodeGenerator():
 
     def dispatch(self, op, stage):
         op_name = "func.func" if isinstance(op, func.FuncOp) else op.name
+
         # Memref Dialect
         if op_name == "memref.reinterpret_cast":
             self.gen_memref_reinterpret_cast(op)
@@ -210,6 +266,12 @@ class CodeGenerator():
             self.gen_dma_start(op)
         elif op_name == "memref.dma_wait":
             self.gen_dma_wait(op)
+        elif op_name == "memref.cast":
+            self.gen_memref_cast(op)
+        elif op_name == "memref.expand_shape":
+            self.gen_memref_expand_shape(op)
+        elif op_name == "memref.collapse_shape":
+            self.gen_memref_collapse_shape(op)
         # Arith Dialect
         elif op_name == "arith.constant":
             self.gen_arith_constant(op)
@@ -235,6 +297,9 @@ class CodeGenerator():
             self.gen_binary(op, T.bitwise_xor)
         elif op_name in ("arith.remsi", "arith.remui"):
             self.gen_binary(op, T.Mod)
+        elif op_name in ("arith.remf", ):
+            remainder = lambda x, y: T.call_extern(_get_type(op.result), "remainder", x, y)
+            self.gen_binary(op, remainder)
         elif op_name == "arith.cmpi":
             self.gen_binary(op, _CMPI_MAPPING[op.predicate.value])
         elif op_name == "arith.cmpf":
@@ -244,14 +309,24 @@ class CodeGenerator():
             self.gen_arith_cast(op)
         elif op_name == "arith.select":
             self.gen_select(op)
+        elif op_name in ("arith.shrsi", "arith.shrui"):
+            self.gen_binary(op, T.shift_right)
+        elif op_name == "arith.shli":
+            self.gen_binary(op, T.shift_left)
+        elif op_name in ("arith.mulsi_extended", "arith.mului_extended"):
+            self.gen_arith_mul_extended(op)
         # Math Dialect
         elif op_name == "mathext.fmod":
             fmod = lambda x, y: T.call_extern(_get_type(op.result), "fmod", x, y)
             self.gen_binary(op, fmod)
         elif op_name == "math.powf":
             self.gen_binary(op, S.pow)
+        elif op_name == "math.rsqrt":
+            self.gen_unary(op, S.rsqrt)
         elif op_name == "math.tanh":
             self.gen_unary(op, S.tanh)
+        elif op_name == "math.exp2":
+            self.gen_unary(op, S.exp2)
         elif op_name == "math.exp":
             self.gen_unary(op, S.exp)
         elif op_name == "math.absf":
@@ -266,6 +341,19 @@ class CodeGenerator():
             self.gen_unary(op, S.erf)
         elif op_name == "math.log":
             self.gen_unary(op, S.log)
+        elif op_name == "math.floor":
+            self.gen_unary(op, S.floor)
+        elif op_name == "math.trunc":
+            trunc = lambda x: T.call_extern(_get_type(op.result), "trunc", x)
+            self.gen_unary(op, trunc)
+        # MathExt Dialect
+        elif op_name == "mathext.fmod":
+            fmod = lambda x, y: T.call_extern(_get_type(op.result), "fmod", x, y)
+            self.gen_binary(op, fmod)
+        elif op_name == "mathext.div_rz":
+            self.ib.emit(tir.call_extern("void", "__vset_rounding_mode_rtz"))
+            self.gen_binary(op, T.Div)
+            self.ib.emit(tir.call_extern("void", "__vset_rounding_mode_rtn"))
         # Func Dialect
         elif op_name == "func.return":
             self.gen_func_return(op)
@@ -311,88 +399,120 @@ class CodeGenerator():
         result = op.result
         arg = self.get_operand(op, 0)
         dtype = _get_type(result).element_type.dtype
-        offset = 0
-        if len(op.operands) == 2:
-            offset = self.get_operand(op, 1)
+        offsets, sizes, strides = self.get_offsets_sizes_strides(op)
 
-        buffer = T.Buffer((-1, ), elem_offset=offset, data=arg.base, dtype=dtype)
+        buffer = T.Buffer(sizes, elem_offset=offsets[0], data=arg.base, dtype=dtype, strides=strides)
         self.mlir_to_tir_mapping[result] = buffer
 
     def gen_memref_load(self, op):
         result = op.result
-        buffer = self.get_operand(op, 0)
-        index = [0]
-        if len(op.operands) >= 2:
-            index = [self.get_operand(op, i) for i in range(1, len(op.operands))]
-        self.emit_let(T.BufferLoad(buffer, index), result)
+        buffer = _get_buffer(self.get_operand(op, 0))
+        indices = self.get_list_value(op.indices) or [0]
+
+        self.emit_let(T.BufferLoad(buffer, indices), result)
 
     def gen_memref_store(self, op):
         value = self.get_operand(op, 0)
-        buffer = self.get_operand(op, 1)
+        buffer = _get_buffer(self.get_operand(op, 1))
+        indices = self.get_list_value(op.indices) or [0]
 
-        index = [0]
-        if len(op.operands) >= 3:
-            index = [self.get_operand(op, i) for i in range(2, len(op.operands))]
-        self.ib.emit(tir.BufferStore(buffer, value, index))
+        self.ib.emit(tir.BufferStore(buffer, value, indices))
 
     def gen_memref_alloc(self, op):
         result = op.result
         dtype = _get_type(result).element_type.dtype
         shape = _get_shape(result)
-        # set default memory space: lsram
-        scope_value = result.type.memory_space.value if result.type.memory_space else 4
+        scope_value = result.type.memory_space.value if result.type.memory_space else -1
+
         if scope_value == 11:
-            event = S.alloc_events(1)
-            self.mlir_to_tir_mapping[result] = event
+            self.emit_let(S.alloc_events(1), op.result)
         else:
             buf = self.ib.allocate(dtype, shape, scope=_MEMORY_SCOPE_MAPPING[scope_value])
+            buf._buffer.strides = _compute_strides(shape)
             self.mlir_to_tir_mapping[result] = buf._buffer
 
     def gen_dma_start(self, op):
         #  currently, we only support one event, skip stride
-        src = self.get_operand(op, 0)
-        src = src.buffer if isinstance(src, tir.Pointer) else src
-        dst = self.get_operand(op, 2)
-        dst = dst.buffer if isinstance(dst, tir.Pointer) else dst
+        src = _get_buffer(self.get_operand(op, 0))
+        dst = _get_buffer(self.get_operand(op, 2))
         src_index = self.get_operand(op, 1)
         dst_index = self.get_operand(op, 3)
         num_elements = self.get_operand(op, 4)
         event = self.get_operand(op, 5)
+
         self.ib.emit(S.async_dma_copy(dst.addr_of(dst_index), src.addr_of(src_index), num_elements, event=event))
 
     def gen_dma_wait(self, op):
         # currently, we only support one event
         event = self.get_operand(op, 0)
+
         self.ib.emit(S.wait_events(event))
 
     def gen_memref_copy(self, op):
         src = self.get_operand(op, 0)
         dst = self.get_operand(op, 1)
-        width = src.shape[0]
+        shape = src.shape
 
-        dma_copy = S.dma_copy(dst, src, width)
+        if len(shape) == 1:
+            dma_copy = S.dma_copy(dst, src, shape[0])
+        else:
+            if not len(shape) == 2:
+                raise RuntimeError(f"only suport 1d/2d DMA copy, but got shape={shape}")
+            dma_copy = S.dma_copy(dst, src, width=src.shape[1], src_stride=src.strides[0], times=src.shape[0],
+                                  dst_stride=dst.strides[0])
+
         self.ib.emit(dma_copy)
 
     def gen_memref_subview(self, op):
         result = op.result
-        arg0 = self.get_operand(op, 0)
-        buffer = arg0.buffer if isinstance(arg0, tir.Pointer) else arg0
-        size = self.get_operand(op, 1)
+        buffer = _get_buffer(self.get_operand(op, 0))
+        offsets, sizes, strides = self.get_offsets_sizes_strides(op)
 
-        subview = T.Buffer(size, elem_offset=buffer.elem_offset, data=buffer.data, dtype=buffer.dtype)
+        buf_strides = buffer.strides
+        if len(strides) != len(buf_strides):
+            buf_strides = _compute_strides(buffer.shape)
+        update_strides = [buf_strides[i] * strides[i] for i in range(len(strides))]
+        update_offset = buffer.elem_offset + sum(off * stride for off, stride in zip(offsets, buf_strides))
+
+        subview = T.Buffer(sizes, elem_offset=update_offset, data=buffer.data, dtype=buffer.dtype,
+                           strides=update_strides)
         self.mlir_to_tir_mapping[result] = subview
+
+    def gen_memref_expand_shape(self, op):
+        result = op.result
+        inp_buf = _get_buffer(self.get_operand(op, 0))
+        out_shape = list(op.static_output_shape)
+
+        expanded_buffer = T.Buffer(out_shape, elem_offset=inp_buf.elem_offset, data=inp_buf.data, dtype=inp_buf.dtype,
+                                   strides=_compute_strides(out_shape))
+        self.mlir_to_tir_mapping[result] = expanded_buffer
+
+    def gen_memref_collapse_shape(self, op):
+        result = op.result
+        inp_buf = _get_buffer(self.get_operand(op, 0))
+        out_shape = result.type.shape
+
+        out_buffer = T.Buffer(out_shape, elem_offset=inp_buf.elem_offset, data=inp_buf.data, dtype=inp_buf.dtype,
+                              strides=_compute_strides(out_shape))
+        self.mlir_to_tir_mapping[result] = out_buffer
+
+    def gen_memref_cast(self, op):
+        result = op.result
+        arg = self.get_operand(op, 0)
+        dtype = _get_type(result).element_type.dtype
+
+        self.mlir_to_tir_mapping[result] = arg.as_ptr(dtype)
 
     def gen_arith_constant(self, op):
 
         def _create_const_expr(op):
             ty = op.result.type
             dtype = _get_type(op.result)
-            # scalar
-            if isinstance(ty, (mlir_ir.IndexType, mlir_ir.IntegerType, mlir_ir.FloatType)):
+
+            if _is_scalar_type(ty):
                 value = bool(op.value) if dtype == "bool" else op.literal_value
                 return tir.const(value, dtype)
-            # vector
-            if isinstance(ty, mlir_ir.VectorType):
+            if _is_vector_type(ty):
                 const_value = op.value.maybe_downcast()
                 # For FP16, the C++ interface __get_item__ do not have a proper implementation.
                 # So here use np.array to directly using its raw data.
@@ -423,31 +543,32 @@ class CodeGenerator():
     def gen_select(self, op):
         #cond, true_value, false_value
         result = op.result
-
         arg0 = self.get_operand(op, 0)
         arg1 = self.get_operand(op, 1)
         arg2 = self.get_operand(op, 2)
-        if isinstance(result.type, mlir_ir.VectorType):
-            self.emit_let(S.vsel(arg1, arg2, mask=arg0), result)
-        else:
-            self.emit_let(tir.Select(arg0, arg1, arg2), result)
+
+        self.emit_let(tir.Select(arg0, arg1, arg2), result)
 
     def gen_arith_cast(self, op):
         result = op.result
         arg0 = self.get_operand(op, 0)
 
         if arg0.dtype.startswith("bool"):
-            # Find the associated_dtype of the bool arg.
-            owner = op.operands[0].owner
-            associated_dtype = self.get_operand(owner, 0).dtype
-            while associated_dtype.startswith("bool"):
-                owner = owner.operands[0].owner
-                associated_dtype = self.get_operand(owner, 0).dtype
+            associated_dtype = self._get_associated_dtype(op)
+            arg0 = T.Select(arg0, S.cast(1, associated_dtype), 0)
 
-            vsel = S.vsel(S.cast(1, associated_dtype), 0, arg0)
-            self.emit_let(S.cast(vsel, _get_type(result)), result)
-        else:
-            self.emit_let(S.cast(arg0, _get_type(result)), result)
+        self.emit_let(S.cast(arg0, _get_type(result)), result)
+
+    def gen_arith_mul_extended(self, op):
+        mull, mulh = op.results
+        arg0 = self.get_operand(op, 0)
+        arg1 = self.get_operand(op, 1)
+
+        self.emit_let(T.Mul(arg0, arg1), mull)
+        mulh_func = "mul_hi"
+        if isinstance(mulh.type, mlir_ir.VectorType):
+            mulh_func = "vmul_hi"
+        self.emit_let(T.call_extern(_get_type(mulh), mulh_func, arg0, arg1), mulh)
 
     def gen_unary(self, op, method):
         result = op.result
@@ -523,6 +644,8 @@ class CodeGenerator():
         # Finish
         if stage.is_after_all_regions():
             self.exit_scope()
+            for i, value in enumerate(op.results):
+                self.mlir_to_tir_mapping[value] = self.yeild_args[i]
 
     def gen_scf_while(self, op, stage):
         if stage.is_before_all_regions():
@@ -555,28 +678,23 @@ class CodeGenerator():
 
     def gen_vload(self, op):
         result = op.result
-        arg0 = self.get_operand(op, 0)
-        buffer = arg0.buffer if isinstance(arg0, tir.Pointer) else arg0
-        index = 0
-        if len(op.operands) >= 2:
-            index = self.get_operand(op, 1)
+        buffer = _get_buffer(self.get_operand(op, 0))
+        indices = self.get_list_value(op.indices) or 0
 
-        self.emit_let(S.vload(buffer.addr_of(index), lanes=result.type.shape[0]), result)
+        self.emit_let(S.vload(buffer.addr_of(indices), lanes=result.type.shape[0]), result)
 
     def gen_vstore(self, op):
         value = self.get_operand(op, 0)
-        arg1 = self.get_operand(op, 1)
-        buffer = arg1.buffer if isinstance(arg1, tir.Pointer) else arg1
-        index = 0
-        if len(op.operands) >= 3:
-            index = self.get_operand(op, 2)
+        buffer = _get_buffer(self.get_operand(op, 1))
+        indices = self.get_list_value(op.indices) or 0
 
-        self.ib.emit(S.vstore(value, buffer.addr_of(index)))
+        self.ib.emit(S.vstore(value, buffer.addr_of(indices)))
 
     def gen_vbcast(self, op):
         result = op.result
         value = self.get_operand(op, 0)
         dtype = result.type
+
         self.emit_let(S.vbcast(S.cast(value, value.dtype), lanes=dtype.shape[0]), result)
 
 

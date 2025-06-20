@@ -41,22 +41,7 @@ def rcp64h(arg0):
     ...
 
 
-def rsqrt(arg0):
-    ...
-
-
 def ceil(arg0):
-    ...
-
-
-@core.extern
-def trunc(arg0, _builder=None):
-    return core.extern_elementwise("trunc", "", [arg0], {
-        (core.dtype("fp32"), ): ("__truncf", core.dtype("fp32")),
-    }, is_pure=True, _builder=_builder)
-
-
-def exp2(arg0):
     ...
 
 
@@ -82,17 +67,6 @@ def fma_ru(arg0, arg1, arg2):
 
 def fast_dividef(arg0, arg1):
     ...
-
-
-def div_rn(arg0, arg1):
-    ...
-
-
-@core.extern
-def div_rz(arg0, arg1, _builder=None):
-    return core.extern_elementwise("div_rz", "", [arg0, arg1], {
-        (core.dtype("fp32"), core.dtype("fp32")): ("__div_rz", core.dtype("fp32")),
-    }, is_pure=True, _builder=_builder)
 
 
 def div_rd(arg0, arg1):
@@ -547,14 +521,6 @@ def copysign(arg0, arg1):
     ...
 
 
-def finitef(arg0):
-    ...
-
-
-def isinf(arg0):
-    ...
-
-
 def nextafter(arg0, arg1):
     ...
 
@@ -743,10 +709,6 @@ def scalbn(arg0, arg1):
     ...
 
 
-def fmod(arg0, arg1):
-    ...
-
-
 def remainder(arg0, arg1):
     ...
 
@@ -809,5 +771,14 @@ def create_binary_op_wrapper(func_name, dtypes):
 
 fmod = create_binary_op_wrapper("fmod", ["fp32", "fp16"])
 pow = create_binary_op_wrapper("powf", ["fp32", "fp16"])
+div_rz = create_binary_op_wrapper("div_rz", ["fp32", "fp16"])
+div_rn = create_binary_op_wrapper("div_rn", ["fp32", "fp16"])
+fmod = create_binary_op_wrapper("fmod", ["fp32", "fp16"])
+
 tanh = create_unary_op_wrapper("tanh", ["fp32", "fp16"])
 erf = create_unary_op_wrapper("erf", ["fp32", "fp16"])
+trunc = create_unary_op_wrapper("trunc", ["fp32", "fp16"])
+exp2 = create_unary_op_wrapper("exp2", ["fp32", "fp16"])
+finitef = create_unary_op_wrapper("isfinite", ["fp32", "fp16"])
+isinf = create_unary_op_wrapper("isinf", ["fp32", "fp16"])
+rsqrt = create_unary_op_wrapper("rsqrt", ["fp32", "fp16"])

@@ -6,7 +6,10 @@
 using namespace mlir::aipu;
 
 void init_aipu_passes(pybind11::module &&m) {
-  m.def("register_all_passes", []() { registerAIPUConvertBoolArg2I8(); });
+  m.def("register_all_passes", []() {
+    registerAIPUConvertBoolArg2I8();
+    registerSCFLoopBufferizationPreprocessing();
+  });
 }
 
 PYBIND11_MODULE(libaipu_interface, m) {
