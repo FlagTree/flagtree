@@ -7,6 +7,7 @@ import triton._C.libaipu_interface as aipu_interface
 from mlir.passmanager import PassManager
 from mlir.ir import Context, Module
 
+import ctypes
 from triton._C.libtriton.aipu import UnifiedHardwareAIPU
 
 from dataclasses import dataclass
@@ -14,7 +15,6 @@ import functools
 import hashlib
 from typing import Any, Dict, Tuple
 from types import ModuleType
-
 
 
 def min_dot_size(target: GPUTarget):
@@ -83,7 +83,6 @@ class AIPUBackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
-        
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -100,18 +99,11 @@ class AIPUBackend(BaseBackend):
 
     @staticmethod
     def make_linalg(mod, metadata, opt):
-        
-        import ctypes
         uh_aipu = UnifiedHardwareAIPU()
-        obj_ptr = id(uh_aipu)
-        uh_aipu_ptr = ctypes.cast(obj_ptr, ctypes.c_void_p)
-        
-        
-        from mlir.ir import IntegerAttr, IntegerType
-        ctx = Context()
-        ptr_type = IntegerType.get_unsigned(64, ctx)
-        ptr_attr = IntegerAttr.get(ptr_type, uh_aipu_ptr.value) 
-        # mod.set_attr("uh_aipu_ptr", ptr_attr) #报错
+        uh_aipu_ptr = ctypes.cast(id(uh_aipu), ctypes.c_void_p)
+        ptr_value = int(uh_aipu_ptr.value)
+        ptr_attr = ir.make_attr_i64([ptr_value], mod.context)
+        mod.set_attr("uh_aipu_ptr", ptr_attr)
 
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()

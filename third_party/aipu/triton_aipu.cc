@@ -91,9 +91,6 @@ void init_triton_aipu(py::module &&m) {
     context.loadAllAvailableDialects();
   });
   // register passes here
-
-  //flagtree
   py::class_<mlir::aipu::UnifiedHardwareAIPU>(m, "UnifiedHardwareAIPU")
-        .def(py::init<>());
-  
+        .def(py::init<>());    // flagtree
 }
