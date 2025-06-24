@@ -103,7 +103,7 @@ class AIPUBackend(BaseBackend):
         uh_aipu_ptr = ctypes.cast(id(uh_aipu), ctypes.c_void_p)
         ptr_value = int(uh_aipu_ptr.value)
         ptr_attr = ir.make_attr_i64([ptr_value], mod.context)
-        mod.set_attr("uh_aipu_ptr", ptr_attr)
+        #mod.set_attr("uh_aipu_ptr", ptr_attr)  # TODO
 
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
