@@ -431,7 +431,7 @@ cache.store(
 
 # ascend
 cache.store(
-    file="ascend-llvm-b5cc222d-ubuntu-arm64",
+    file="llvm-b5cc222d-ubuntu-arm64",
     condition=("ascend" == flagtree_backend),
     url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
@@ -440,7 +440,7 @@ cache.store(
 
 # aipu
 cache.store(
-    file="aipu-llvm-a66376b0-ubuntu-x64",
+    file="llvm-a66376b0-ubuntu-x64",
     condition=("aipu" == flagtree_backend),
     url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-x64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
