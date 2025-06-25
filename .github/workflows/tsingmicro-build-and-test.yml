@@ -48,6 +48,7 @@ jobs:
       - name: FlagTree Build on Tsingmicro
         shell: bash
         run: |
+          pip uninstall -y triton
           source ~/env.sh
           export FLAGTREE_BACKEND=tsingmicro
           cd python
