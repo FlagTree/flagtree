@@ -418,9 +418,28 @@ cache.store(
 
 # ascend
 cache.store(
-    file="ascend-llvm-b5cc222d-ubuntu-arm64",
+    file="llvm-b5cc222d-ubuntu-arm64",
     condition=("ascend" == flagtree_backend),
     url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz",
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
+    post_hock=set_llvm_env,
+)
+
+# aipu
+cache.store(
+    file="llvm-a66376b0-ubuntu-x64",
+    condition=("aipu" == flagtree_backend),
+    url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-x64.tar.gz",
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
+    post_hock=set_llvm_env,
+)
+
+# tsingmicro
+cache.store(
+    file="tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-x64",
+    condition=("tsingmicro" == flagtree_backend),
+    url=
+    "https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-x64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
