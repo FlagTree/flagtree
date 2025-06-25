@@ -8,6 +8,7 @@
 #include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Pass/Pass.h"
@@ -39,8 +40,9 @@ class MKToTx81Pass : public triton::impl::MKToTx81Base<MKToTx81Pass> {
 
 public:
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<memref::MemRefDialect, arith::ArithDialect,
-                    mk::MagicKernelDialect, tx::Tx81Dialect>();
+    registry.insert<linalg::LinalgDialect, memref::MemRefDialect,
+                    arith::ArithDialect, mk::MagicKernelDialect,
+                    tx::Tx81Dialect, LLVM::LLVMDialect>();
   }
 
   bool isOperandMemorySpaceSPM(Value operand) {
@@ -50,6 +52,8 @@ public:
     do {
       if (isa<memref::AllocOp>(op))
         return true;
+      else if (isa<memref::GetGlobalOp>(op))
+        return false;
       else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         // Here we assume that yieldResults (inner loop region) and
         // loopResults (outer loop region) correspond one-to-one to obtain the
@@ -59,12 +63,13 @@ public:
         auto yieldResults = forOp.getYieldedValues();
         mlir::ResultRange loopResults = forOp.getLoopResults().value();
         assert(yieldResults.size() == loopResults.size());
-
         auto idx = std::distance(
             loopResults.begin(),
             std::find(loopResults.begin(), loopResults.end(), operand));
         operand = yieldResults[idx];
-
+        if (operand.getDefiningOp() == nullptr) {
+          operand = forOp.getInitArgs()[idx];
+        }
       } else {
         operand = op->getOperand(0);
       }
@@ -76,6 +81,13 @@ public:
 
   void runOnOperation() override {
     auto moduleOp = getOperation();
+
+    RewritePatternSet canonicalizePatterns(&getContext());
+    triton::populateMKToTx81CanonicalizationPatterns(canonicalizePatterns);
+    if (failed(
+            applyPatternsGreedily(moduleOp, std::move(canonicalizePatterns)))) {
+      signalPassFailure();
+    }
 
     // Use to memory::CopyOp to tx dialect op
     moduleOp->walk([&](Operation *op) {
@@ -92,6 +104,24 @@ public:
       }
     });
 
+    // Transpose operand b from (K, N) to (N, K)
+    moduleOp->walk([&](linalg::MatmulOp op) {
+      OpBuilder builder(op);
+
+      auto b = op->getOperand(1);
+
+      auto memType = cast<MemRefType>(b.getType());
+      auto oldShape = memType.getShape();
+      llvm::SmallVector<int64_t> newShape({oldShape[1], oldShape[0]});
+      auto transposeInit = builder.create<memref::AllocOp>(
+          op->getLoc(), MemRefType::get(newShape, memType.getElementType()));
+
+      SmallVector<int64_t> perm({1, 0});
+      auto linalgTranspose = builder.create<linalg::TransposeOp>(
+          op->getLoc(), b, transposeInit, perm);
+      op->setOperand(1, transposeInit);
+    });
+
     RewritePatternSet patterns(&getContext());
     ConversionTarget target(getContext());
 
@@ -100,12 +130,19 @@ public:
                              bufferization::BufferizationDialect,
                              mk::MagicKernelDialect>();
 
-    target.addLegalDialect<func::FuncDialect, arith::ArithDialect,
-                           math::MathDialect, affine::AffineDialect,
-                           scf::SCFDialect, memref::MemRefDialect,
-                           cf::ControlFlowDialect, tx::Tx81Dialect>();
+    target.addLegalDialect<
+        func::FuncDialect, arith::ArithDialect, math::MathDialect,
+        affine::AffineDialect, scf::SCFDialect, memref::MemRefDialect,
+        cf::ControlFlowDialect, tx::Tx81Dialect, LLVM::LLVMDialect>();
 
-    target.addIllegalOp<memref::CopyOp>();
+    // FIXME: Support copy rank > 4. Spm to Spm copy has supported
+    target.addDynamicallyLegalOp<memref::CopyOp>([&](memref::CopyOp op) {
+      auto shape = op.getSource().getType().getShape();
+      return shape.size() > 4 &&
+             !(op->getAttrOfType<IntegerAttr>("srcSpm").getInt() &&
+               op->getAttrOfType<IntegerAttr>("dstSpm").getInt());
+    });
+
     target.addLegalOp<ModuleOp>();
 
     triton::populateMKToTx81ConversionPatterns(patterns);

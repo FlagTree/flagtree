@@ -11,7 +11,8 @@
 
 #include "tx81.h"
 
-void __ArgMax(uint64_t *src, uint32_t elem_count, uint16_t fmt) {
+void __ArgMax(uint64_t *src, uint64_t *dst0, uint64_t *dst1,
+              uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
   TsmPeripheral *cmd = TsmNewPeripheral();
   TsmPeripheralInstr inst = {I_CGRA,
@@ -27,6 +28,11 @@ void __ArgMax(uint64_t *src, uint32_t elem_count, uint16_t fmt) {
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);
+
+  TsmWaitfinish();
+
+  *(float *)dst0 = *(float *)inst.param.wb_data0;
+  *(int32_t *)dst1 = *(int32_t *)inst.param.wb_data1;
 
   // Destroy the command buffer.
   TsmDeletePeripheral(cmd);

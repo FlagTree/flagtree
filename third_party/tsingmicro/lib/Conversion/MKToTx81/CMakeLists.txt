@@ -8,6 +8,7 @@ add_triton_library(MKToTx81
 
   LINK_LIBS PUBLIC
   MLIRArithDialect
+  MLIRLinalgDialect
   MLIRDialectUtils
   MLIRIR
   MLIRPass

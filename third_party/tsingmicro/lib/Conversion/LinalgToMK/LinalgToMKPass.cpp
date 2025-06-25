@@ -36,28 +36,12 @@ class LinalgToMKPass : public triton::impl::LinalgToMKBase<LinalgToMKPass> {
   using LinalgToMKBase<LinalgToMKPass>::LinalgToMKBase;
 
 public:
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<linalg::LinalgDialect, arith::ArithDialect,
-                    mk::MagicKernelDialect>();
-  }
-
   void runOnOperation() override {
     auto moduleOp = getOperation();
     RewritePatternSet patterns(&getContext());
-    ConversionTarget target(getContext());
-
-    // TODO: Enable this when all conversion pattern has been implemented.
-    // target.addIllegalDialect<linalg::LinalgDialect>();
-
-    target.addLegalDialect<func::FuncDialect, arith::ArithDialect,
-                           math::MathDialect, affine::AffineDialect,
-                           scf::SCFDialect, cf::ControlFlowDialect,
-                           tensor::TensorDialect, mk::MagicKernelDialect>();
-
-    target.addLegalOp<ModuleOp>();
 
     triton::populateLinalgToMKConversionPatterns(patterns);
-    if (failed(applyPartialConversion(moduleOp, target, std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(moduleOp, std::move(patterns)))) {
       signalPassFailure();
     }
   }

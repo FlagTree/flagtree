@@ -48,11 +48,7 @@ def MemRefOrInt
 // =============================================================================
 
 def RdmaOp : Tx81Op<"rdma", [
-    AttrSizedOperandSegments,
-    PredOpTrait<"Constrain shape to 4d.",
-      CPred<"cast<tx::RdmaOp>($_op).getShape().size() == 4">>,
-    PredOpTrait<"Constrain strides to 3d.",
-      CPred<"cast<tx::RdmaOp>($_op).getStrides().size() == 3">>
+    AttrSizedOperandSegments
       ]> {
 
   let summary = "Copy data from global memory DDR(dram) to per thread local SPM(sram)";
@@ -63,31 +59,21 @@ def RdmaOp : Tx81Op<"rdma", [
 
   let arguments = (
     ins
-    MemRefOrInt:$source,                 // The source address in DDR
-    MemRefOrInt:$target,                 // The target address in SPM
-    Variadic<Index>:$shape,      // NHWC shape
-    Variadic<Index>:$strides,    // 3 dim strides
-    I32Attr:$fmt
+    MemRefOrInt:$source,             // The source address in DDR
+    MemRefOrInt:$target,             // The target address in SPM
+    Variadic<Index>:$src_shape,      // src shape
+    Variadic<Index>:$src_strides,    // src strides
+    Variadic<Index>:$dst_shape,      // dst shape
+    Variadic<Index>:$dst_strides,    // dst strides
+    I32Attr:$elem_bytes,             // elem bytes
+    I32Attr:$fmt                     // elem fmt
   );
-
-  let builders = [
-    OpBuilder<(ins "MemRefType":$resultType,
-      "Value":$source, "Value":$target,
-      "ArrayRef<Value>":$shape,
-      "ArrayRef<Value>":$strides,
-      "IntegerAttr":$fmt
-    )>
-  ];
 
   let results = (outs I64:$dst); // The dest address in SPM
 }
 
 def WdmaOp : Tx81Op<"wdma", [
-    AttrSizedOperandSegments,
-    PredOpTrait<"Constrain shape to 4d.",
-      CPred<"cast<tx::WdmaOp>($_op).getShape().size() == 4">>,
-    PredOpTrait<"Constrain strides to 3d.",
-      CPred<"cast<tx::WdmaOp>($_op).getStrides().size() == 3">>
+    AttrSizedOperandSegments
       ]> {
   let summary = "Copy data from per thread local SPM(sram) to global memory DDR(dram)";
 
@@ -97,21 +83,15 @@ def WdmaOp : Tx81Op<"wdma", [
 
   let arguments = (
     ins
-    MemRefOrInt:$source,                 // The source address in DDR
-    MemRefOrInt:$target,                 // The target address in SPM
-    Variadic<Index>:$shape,      // NHWC shape
-    Variadic<Index>:$strides,    // 3 dim strides
-    I32Attr:$fmt
+    MemRefOrInt:$source,             // The source address in DDR
+    MemRefOrInt:$target,             // The target address in SPM
+    Variadic<Index>:$src_shape,      // src shape
+    Variadic<Index>:$src_strides,    // src strides
+    Variadic<Index>:$dst_shape,      // dst shape
+    Variadic<Index>:$dst_strides,    // dst strides
+    I32Attr:$elem_bytes,             // elem bytes
+    I32Attr:$fmt                     // elem fmt
   );
-
-  let builders = [
-    OpBuilder<(ins "MemRefType":$resultType,
-      "Value":$source, "Value":$target,
-      "ArrayRef<Value>":$shape,
-      "ArrayRef<Value>":$strides,
-      "IntegerAttr":$fmt
-    )>
-  ];
 
   let results = (outs I64:$dst); // The dest address in DDR
 }
@@ -193,14 +173,14 @@ def GemmOp : Tx81Op<"gemm", []> {
     // FIXME: Whether need add side effect to source operands?
     Arg<MemRefOrInt, "the target memref", [MemWrite]>:$dst,
     I32ArrayAttr:$dims,   // The dimensions of M, K, N
-    BoolAttr:$en_psum,        // Enable psum? TODO: Production sum?
-    MemRefOrInt:$psum_addr,      // The address of psum in SPM, TODO: psum?
+    BoolAttr:$en_psum,        // Enable psum. Used as accumulate buffer
+    MemRefOrInt:$psum_addr,   // The address of psum in SPM, Always same to output
     BoolAttr:$trans_src_a,  // Should matrix A be transposed
     BoolAttr:$trans_src_b,  // Should matrix B be transposed
     I32Attr:$batch_src_a,  // The batch of matrix A
     I32Attr:$batch_src_b,  // The batch of matrix B
     I32Attr:$relu_mode,    // Enable LeakyRelu or normal Relu or none
-    BoolAttr:$en_bias,      // Enable bias add
+    BoolAttr:$en_bias,      // Enable bias add. Only support per channel(C dim), and int8 type
     BoolAttr:$en_neg_scale, // Enable negative axis scale
     MemRefOrInt:$src_neg_scale,    // The address of negative scale data in SPM
     BoolAttr:$en_pos_scale, // Enable positive axis scale
@@ -208,6 +188,56 @@ def GemmOp : Tx81Op<"gemm", []> {
     I32Attr:$src_fmt,       // Input matrix data format
     I32Attr:$dst_fmt        // Output matrix data format
     // The param of SetQuant() is unused
+  );
+
+  // Output matrix C addr in SPM
+  let results = (outs Variadic<I64>:$output);
+}
+
+
+// =============================================================================
+// Tsm crt ChannelNorm/Dechannelnorm
+// =============================================================================
+
+def ChannelNormOp : Tx81Op<"channel_norm", []> {
+  let summary = "Align channel dim.";
+
+  let description = [{
+    Align (N,H,W,C) to (N,cx,H,W,64) + (N,cx,H,W,c0),
+    which align_base = 64, cx = C/align_base
+    c0 = C%align_base
+    c0_align = get_c0_align(c0)
+  }];
+
+  let arguments = (
+    ins
+    MemRefOrInt:$src,           // Input tensor address in SPM
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$dst,           // Output tensor address in SPM
+    DenseI64ArrayAttr:$shape,  // The shape info of src
+    // I16Attr:$cx,
+    I16Attr:$c0_align,
+    I16Attr:$dtype_size
+  );
+
+  // Output matrix C addr in SPM
+  let results = (outs Variadic<I64>:$output);
+}
+
+def DechannelNormOp : Tx81Op<"dechannel_norm", []> {
+  let summary = "Inverse operation of channelnorm.";
+
+  let description = [{
+    Trans (N,cx,H,W,64) + (N,cx,H,W,c0) back to (N,H,W,C).
+  }];
+
+  let arguments = (
+    ins
+    MemRefOrInt:$src,           // Input tensor address in SPM
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$dst,           // Output tensor address in SPM
+    DenseI64ArrayAttr:$shape,  // The shape info of src
+    // I16Attr:$cx,
+    I16Attr:$c0_align,
+    I16Attr:$dtype_size
   );
 
   // Output matrix C addr in SPM
@@ -286,7 +316,7 @@ def DivVSOp : BinaryVSOp<"divvs">;
 // 4.11. TsmRelation
 // =============================================================================
 
-class BoolRelationVVOp<string mnemonic, list<Trait> traits = []> :
+class RelationVVOp<string mnemonic, list<Trait> traits = []> :
     Tx81Op<mnemonic, traits # [Elementwise]> {
   let arguments = (ins
     MemRefOrInt:$input0,              // First input vector address
@@ -298,29 +328,114 @@ class BoolRelationVVOp<string mnemonic, list<Trait> traits = []> :
   let results = (outs Variadic<I64>:$dst);
 }
 
-def BoolEqualVV : BoolRelationVVOp<"boolequalvv"> {
+def BoolEqualVV : RelationVVOp<"boolequalvv"> {
   let summary = "compare two input value, if equal, return true";
 }
 
-def BoolUnEqualVV : BoolRelationVVOp<"boolunequalvv"> {
+def BoolUnEqualVV : RelationVVOp<"boolunequalvv"> {
   let summary = "compare two input value, if unequal, return true";
 }
 
-def BoolGreaterEqualVV : BoolRelationVVOp<"boolgreatrequalvv"> {
+def BoolGreaterEqualVV : RelationVVOp<"boolgreatrequalvv"> {
   let summary = "compare two input value, if src0 >= src1, return true";
 }
 
-def BoolGreaterVV : BoolRelationVVOp<"boolgreatervv"> {
+def BoolGreaterVV : RelationVVOp<"boolgreatervv"> {
   let summary = "compare two input value, if src0 > src1, return true";
 }
 
-def BoolLessEqualVV : BoolRelationVVOp<"boollessequalvv"> {
+def BoolLessEqualVV : RelationVVOp<"boollessequalvv"> {
   let summary = "compare two input value, if src0 <= src1, return true";
 }
 
-def BoolLessThenVV : BoolRelationVVOp<"boollessthenvv"> {
+def BoolLessThenVV : RelationVVOp<"boollessthenvv"> {
   let summary = "compare two input value, if src0 < src1, return true";
 }
+
+def EqualVV : RelationVVOp<"equalvv"> {
+  let summary = "compare two input value, if equal, return 1.0";
+}
+
+def UnEqualVV : RelationVVOp<"unequalvv"> {
+  let summary = "compare two input value, if unequal, return 1.0";
+}
+
+def GreaterEqualVV : RelationVVOp<"greatrequalvv"> {
+  let summary = "compare two input value, if src0 >= src1, return 1.0";
+}
+
+def GreaterVV : RelationVVOp<"greatervv"> {
+  let summary = "compare two input value, if src0 > src1, return 1.0";
+}
+
+def LessEqualVV : RelationVVOp<"lessequalvv"> {
+  let summary = "compare two input value, if src0 <= src1, return 1.0";
+}
+
+def LessThenVV : RelationVVOp<"lessthenvv"> {
+  let summary = "compare two input value, if src0 < src1, return 1.0";
+}
+
+class RelationVSOp<string mnemonic, list<Trait> traits = []> :
+    Tx81Op<mnemonic, traits # [Elementwise]> {
+  let arguments = (ins
+    MemRefOrInt:$input0,              // First input vector address
+    I32:$value,                       // Const value
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$out,  // Out vector address
+    MemRefOrInt:$elem_count,      // Number of input elements
+    I16Attr:$fmt              // The data format of src & dst
+  );
+  let results = (outs Variadic<I64>:$dst);
+}
+
+def BoolEqualVS : RelationVSOp<"boolequalvs"> {
+  let summary = "compare input value with ConstantOp, if equal, return true";
+}
+
+def BoolUnEqualVS : RelationVSOp<"boolunequalvs"> {
+  let summary = "compare input value with ConstantOp, if unequal, return true";
+}
+
+def BoolGreaterEqualVS : RelationVSOp<"boolgreatrequalvs"> {
+  let summary = "compare input value with ConstantOp, if src0 >= src1, return true";
+}
+
+def BoolGreaterVS : RelationVSOp<"boolgreatervs"> {
+  let summary = "compare input value with ConstantOp, if src0 > src1, return true";
+}
+
+def BoolLessEqualVS : RelationVSOp<"boollessequalvs"> {
+  let summary = "compare input value with ConstantOp, if src0 <= src1, return true";
+}
+
+def BoolLessThenVS : RelationVSOp<"boollessthenvs"> {
+  let summary = "compare input value with ConstantOp, if src0 < src1, return true";
+}
+
+def EqualVS : RelationVSOp<"equalvs"> {
+  let summary = "compare input value with ConstantOp, if equal, return 1.0";
+}
+
+def UnEqualVS : RelationVSOp<"unequalvs"> {
+  let summary = "compare input value with ConstantOp, if unequal, return 1.0";
+}
+
+def GreaterEqualVS : RelationVSOp<"greatrequalvs"> {
+  let summary = "compare input value with ConstantOp, if src0 >= src1, return 1.0";
+}
+
+def GreaterVS : RelationVSOp<"greatervs"> {
+  let summary = "compare input value with ConstantOp, if src0 > src1, return 1.0";
+}
+
+def LessEqualVS : RelationVSOp<"lessequalvs"> {
+  let summary = "compare input value with ConstantOp, if src0 <= src1, return 1.0";
+}
+
+def LessThenVS : RelationVSOp<"lessthenvs"> {
+  let summary = "compare input value with ConstantOp, if src0 < src1, return 1.0";
+}
+
 
 // ...
 // =============================================================================
@@ -384,11 +499,13 @@ def CosOp : UnaryOp<"cos", []> {
 class ActivationOp<string mnemonic, list<Trait> traits> :
     Tx81Op<mnemonic, traits> {
   let arguments = (ins
-    MemRefOrInt:$src,              // Input vector address
-    UI32Attr:$elem_count,   // Number of input elements
-    UI16Attr:$fmt           // The data format of src & dst
+    MemRefOrInt:$input,              // Input vector address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$out,  // Out vector address
+    AnySignlessIntegerOrIndex:$elem_count,   // Number of input elements
+    I16Attr:$fmt           // The data format of src & dst
   );
-  let results = (outs UI64:$dst);
+
+  let results = (outs Variadic<I64>:$dst);
 }
 
 def Tanh : ActivationOp<"tanh", []> {
@@ -428,7 +545,7 @@ class Reduce<string mnemonic> : Tx81Op<mnemonic, [Pure]> {
 
   let arguments = (
     ins
-    AnyType:$src,           // Input tensor address in SPM
+    MemRefOrInt:$src,           // Input tensor address in SPM
     Arg<MemRefOrInt, "the target memref", [MemWrite]>:$dst,           // Output tensor address in SPM
     UI32Attr:$dim,      // Which dimension to be reduced
     I64ArrayAttr:$shape,  // The shape info of src
@@ -436,7 +553,7 @@ class Reduce<string mnemonic> : Tx81Op<mnemonic, [Pure]> {
   );
 
   // Output tensor address in SPM
-  let results = (outs Variadic<AnyType>);
+  let results = (outs Variadic<MemRefOrInt>);
 }
 
 def ReduceSumOp : Reduce<"reduce_sum">;
@@ -461,7 +578,7 @@ When mask=0, the corresponding elements of dst remain unchanged.
     // The target address in SPM
     Arg<MemRefOrInt, "the target memref", [MemWrite]>:$target,
     AnySignlessIntegerOrIndex:$elem_count,    // Number of elements to be copied
-    I32ArrayAttr:$mask,     // 3 dim masks
+    MemRefOrInt:$mask,
     I32Attr:$fmt
   );
 
@@ -670,41 +787,40 @@ def Bit2FpOp : Tx81Op<"bit2fp", []> {
   let summary = "Convert a vector of the bitwise into the fp vector";
 
   let arguments = (ins
-    UI64:$src,             // Input tensor
-    I32Attr:$elem_count,   // Number of input elements
+    MemRefOrInt:$src,             // Input tensor
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$target,
+    AnySignlessIntegerOrIndex:$elem_count,   // Number of input elements
     I16Attr:$fmt           // The data format of src & dst
   );
-  let results = (outs UI64:$dst);
+  let results = (outs I64:$dst);
 }
 
 def ArgMaxOp : Tx81Op<"argmax", []> {
   let summary = "Return a max value inner a vector and its corresponding index";
 
   let arguments = (ins
-    UI64:$src,             // Input vector
+    MemRefOrInt:$src,              // First input vector address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$value,  // Address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$index,  // Address
     I32Attr:$elem_count,   // Number of input elements
     I16Attr:$fmt           // The data format of src & dst
   );
 
-  let results = (outs
-    AnyType:$max,          // Max value inner a vector
-    UI64:$index            // Corresponding index
-  );
+  let results = (outs Variadic<I64>:$dst);
 }
 
 def ArgMinOp : Tx81Op<"argmin", []> {
   let summary = "Return a min value inner a vector and its corresponding index";
 
   let arguments = (ins
-    UI64:$src,             // Input vector
+    MemRefOrInt:$src,              // First input vector address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$value,  // Address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$index,  // Address
     I32Attr:$elem_count,   // Number of input elements
     I16Attr:$fmt           // The data format of src & dst
   );
 
-  let results = (outs
-    AnyType:$min,          // Min value inner a vector
-    UI64:$index            // Corresponding index
-  );
+  let results = (outs Variadic<I64>:$dst);
 }
 
 def BilinearOp : Tx81Op<"bilinear", []> {
@@ -769,12 +885,13 @@ def RandGenOp : Tx81Op<"randgen", []> {
 class TransformOp<string mnemonic, list<Trait> traits = []> :
     Tx81Op<mnemonic, traits> {
   let arguments = (ins
-    UI64:$src,                 // Input matrix or tensor address
-    I32ArrayAttr:$src_shape,   // Input shape
-    I32ArrayAttr:$dst_shape,   // Output shape
+    MemRefOrInt:$source,       // Input tensor
+    MemRefOrInt:$target,       // Output tensor
+    DenseI32ArrayAttr:$src_shape,   // Input shape
+    DenseI32ArrayAttr:$dst_shape,   // Output shape
     I16Attr:$fmt               // The data format of src & dst
   );
-  let results = (outs UI64:$dst);
+  let results = (outs I64:$dst);
 }
 
 def Mirror : TransformOp<"mirror", []> {
@@ -851,14 +968,31 @@ def GatherScatter : Tx81Op<"gatherscatter", []> {
   let summary = "Transfer data in strides and iterations";
 
   let arguments = (ins
-    UI64:$src,                      // Input tensor
-    I32Attr:$size,                  // Transfer data size in bytes
-    I32ArrayAttr:$src_strides,      // 3 dim strides for input
-    I32ArrayAttr:$src_iterations,   // 3 dim iterations for input
-    I32ArrayAttr:$dst_strides,      // 3 dim strides for output
-    I32ArrayAttr:$dst_iterations    // 3 dim iterations for output
+    MemRefOrInt:$source,                 // The source
+    MemRefOrInt:$target,                 // The target
+    I32Attr:$bytes,                  // Inner loop data size in bytes
+    I32Attr:$src_strideN,
+    I32Attr:$src_strideH,
+    I32Attr:$src_strideW,
+    I32Attr:$src_iterN,
+    I32Attr:$src_iterH,
+    I32Attr:$src_iterW,
+    I32Attr:$dst_strideN,
+    I32Attr:$dst_strideH,
+    I32Attr:$dst_strideW,
+    I32Attr:$dst_iterN,
+    I32Attr:$dst_iterH,
+    I32Attr:$dst_iterW
   );
-  let results = (outs UI64:$dst);
+  let results = (outs I64:$dst);
+}
+
+def BarrierOp : Tx81Op<"barrier"> {
+  let summary = "Synchronizes all work items";
+  let description = [{
+    The "barrier" op synchronizes all work items.
+  }];
+  let assemblyFormat = "attr-dict";
 }
 
 #endif // TSINGMICRO_TX81_OPS

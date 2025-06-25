@@ -11,9 +11,8 @@
 
 #include "tx81.h"
 
-void __Nhwc2nchw(uint64_t *src, uint16_t src_n, uint16_t src_h, uint16_t src_w,
-                 uint16_t src_c, uint64_t *dst, uint16_t dst_n, uint16_t dst_h,
-                 uint16_t dst_w, uint16_t dst_c, uint16_t fmt) {
+void __Nhwc2nchw(uint64_t *src, uint64_t *dst, int32_t *src_shape,
+                 int32_t *dst_shape, uint16_t fmt) {
   // Create command buffer.
   TsmDataMove *cmd = TsmNewDataMove();
   TsmDataMoveInstr inst = {I_CGRA,
@@ -24,8 +23,8 @@ void __Nhwc2nchw(uint64_t *src, uint16_t src_n, uint16_t src_h, uint16_t src_w,
                                0,
                            }};
 
-  Data_Shape shape1 = {src_n, src_h, src_w, src_c};
-  Data_Shape shape2 = {dst_n, dst_h, dst_w, dst_c};
+  Data_Shape shape1 = {src_shape[0], src_shape[1], src_shape[2], src_shape[3]};
+  Data_Shape shape2 = {dst_shape[0], dst_shape[1], dst_shape[2], dst_shape[3]};
   cmd->Nhwc2nchw(&inst, (uint64_t)src, shape1, (uint64_t)dst, shape2,
                  (Data_Format)fmt);
 

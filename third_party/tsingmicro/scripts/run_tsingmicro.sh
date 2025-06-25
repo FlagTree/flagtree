@@ -8,17 +8,17 @@ if [ -z "${WORKSPACE+x}" ]; then
     WORKSPACE=$(realpath "$project_dir/..")
 fi
 
-TX8_HOME=$WORKSPACE/tx8_deps
+TX8_DEPS_ROOT=$WORKSPACE/tx8_deps
 LLVM=$WORKSPACE/llvm-a66376b0-ubuntu-x64
 
-if [ ! -d $TX8_HOME ] || [ ! -d $LLVM ]; then
-    WORKSPACE="${HOME}/.flagtree/tsingmicro/"
-    TX8_HOME=$WORKSPACE/tx8_deps
+if [ ! -d $TX8_DEPS_ROOT ] || [ ! -d $LLVM ]; then
+    WORKSPACE="${HOME}/.triton/tsingmicro/"
+    TX8_DEPS_ROOT=$WORKSPACE/tx8_deps
     LLVM=$WORKSPACE/llvm-a66376b0-ubuntu-x64
 fi
 
-if [ ! -d $TX8_HOME ]; then
-    echo "Error: $TX8_HOME not exist!" 1>&2
+if [ ! -d $TX8_DEPS_ROOT ]; then
+    echo "Error: $TX8_DEPS_ROOT not exist!" 1>&2
     exit 1
 fi
 
@@ -27,16 +27,26 @@ if [ ! -d $LLVM ]; then
     exit 1
 fi
 
-export TX8_HOME=$TX8_HOME
+if [ -f $project_dir/.venv/bin/activate ]; then
+    source $project_dir/.venv/bin/activate
+fi
+
+export TX8_DEPS_ROOT=$TX8_DEPS_ROOT
 export LLVM_SYSPATH=$LLVM
-export LD_LIBRARY_PATH=$TX8_HOME/lib:$LD_LIBRARY_PATH
-export TRITON_ALWAYS_COMPILE=1
+export PYTHONPATH=$LLVM/python_packages/mlir_core:$PYTHONPATH
+
+export LD_LIBRARY_PATH=$TX8_DEPS_ROOT/lib:$LD_LIBRARY_PATH
+export VENDOR_VERSION=1
 
 # export TRITON_DUMP_PATH=$project_dir/dump
+export TRITON_ALWAYS_COMPILE=1
 
-echo "export TX8_HOME=$TX8_HOME"
+echo "export TX8_DEPS_ROOT=$TX8_DEPS_ROOT"
 echo "export LLVM_SYSPATH=$LLVM_SYSPATH"
+echo "export PYTHONPATH=$PYTHONPATH"
 echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+echo "export VENDOR_VERSION=$VENDOR_VERSION"
+# echo "export TRITON_DUMP_PATH=$TRITON_DUMP_PATH"
 echo "export TRITON_ALWAYS_COMPILE=$TRITON_ALWAYS_COMPILE"
 
-python3 $@
+USE_SIM_MODE=${USE_SIM_MODE} python3 $@

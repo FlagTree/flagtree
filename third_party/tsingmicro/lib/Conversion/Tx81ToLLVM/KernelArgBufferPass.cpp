@@ -34,6 +34,10 @@ class KernelArgBufferPass
     : public mlir::triton::KernelArgBufferPassBase<KernelArgBufferPass> {
   using KernelArgBufferPassBase<KernelArgBufferPass>::KernelArgBufferPassBase;
 
+private:
+  // Check if the function is a kernel function
+  bool isKernelFunction(LLVM::LLVMFuncOp func);
+
 public:
   StringRef getArgument() const final { return "kernel-arg-buffer"; }
   StringRef getDescription() const final {
@@ -52,6 +56,11 @@ private:
   Value insertKernelArgLoad(OpBuilder &builder, Location loc, Value argsBuffer,
                             Type argType, int64_t &currentOffset);
 };
+
+bool KernelArgBufferPass::isKernelFunction(LLVM::LLVMFuncOp func) {
+  return !(func.getSymName().contains("__Print") ||
+           func.getSymName().contains("get_spm_memory_mapping_wrapper"));
+}
 
 Value KernelArgBufferPass::insertKernelArgLoad(OpBuilder &builder, Location loc,
                                                Value argsBuffer, Type argType,
@@ -82,6 +91,8 @@ void KernelArgBufferPass::runOnOperation() {
   // Collect functions to process
   SmallVector<LLVM::LLVMFuncOp, 4> kernelFuncs;
   for (auto func : module.getOps<LLVM::LLVMFuncOp>()) {
+    if (!isKernelFunction(func))
+      continue;
     kernelFuncs.push_back(func);
   }
   // NOTE: We move this pass before tx81-to-llvm pass.

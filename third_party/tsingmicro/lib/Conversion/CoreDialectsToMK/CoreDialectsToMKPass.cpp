@@ -24,6 +24,7 @@ using namespace triton;
 
 #define GEN_PASS_CLASSES
 #include "magic-kernel/Conversion/CoreDialectsToMK/Passes.h.inc"
+#include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
 
 namespace {
 
@@ -35,7 +36,7 @@ public:
         .insert<func::FuncDialect, arith::ArithDialect, math::MathDialect,
                 linalg::LinalgDialect, affine::AffineDialect, scf::SCFDialect,
                 tensor::TensorDialect, bufferization::BufferizationDialect,
-                memref::MemRefDialect>();
+                memref::MemRefDialect, mk::MagicKernelDialect>();
   }
 
   void runOnOperation() override {

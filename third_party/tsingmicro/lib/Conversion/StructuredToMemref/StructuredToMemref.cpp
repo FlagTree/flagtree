@@ -110,6 +110,9 @@ private:
       auto strideIntAttr = getIntAttr(stride);
       if (size == 1 && strideIntAttr && strideIntAttr.value() == 0) {
         strides.push_back(b.getIndexAttr(accumulate));
+      } else if (auto v = llvm::dyn_cast_if_present<Value>(stride)) {
+        OpFoldResult result = getAsOpFoldResult(v);
+        strides.push_back(result);
       } else {
         strides.push_back(stride);
       }
@@ -179,8 +182,9 @@ private:
         /* result shape */
         SmallVector<int64_t>{
 
-            // Row stays the same
-            resultShape[0],
+            // Row stays the same, but mlir doesn't allow this anymore. Put
+            // dynamic.
+            ShapedType::kDynamic,
 
             // Column is dynamic, in most cases, this
             // should be the same as the original column.
@@ -288,9 +292,9 @@ private:
             // around.
             ShapedType::kDynamic,
 
-            // Col stays the same.
-            resultShape[1],
-        });
+            // Col stays the same, which is resultShape[1], but mlir doesn't
+            // allow this anymore. So we put dynamic instead.
+            ShapedType::kDynamic});
 
     Value rowSize = rewriter.create<arith::ConstantOp>(
         loc, rewriter.getIndexAttr(op.getSizes()[0]));

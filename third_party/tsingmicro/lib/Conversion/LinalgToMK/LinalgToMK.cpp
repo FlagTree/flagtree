@@ -53,4 +53,5 @@ void mlir::triton::populateLinalgToMKCanonicalizationPatterns(
 void mlir::triton::populateLinalgToMKConversionPatterns(
     RewritePatternSet &patterns) {
   // patterns.add<MatmulConverter>(patterns.getContext());
+  patterns.add<SigmoidFusionPattern>(patterns.getContext());
 }
