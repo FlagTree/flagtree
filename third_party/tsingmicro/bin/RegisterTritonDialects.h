@@ -22,6 +22,7 @@
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
@@ -31,7 +32,6 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 #include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
-#include "magic-kernel/Transforms/BufferizableOpInterfaceImpl.h"
 #include "triton-shared/Conversion/StructuredToMemref/Passes.h"
 #include "triton-shared/Conversion/TritonArithToLinalg/Passes.h"
 #include "triton-shared/Conversion/TritonToCoreDialects/Passes.h"
@@ -44,7 +44,6 @@
 #include "magic-kernel/Conversion/CoreDialectsToMK/Passes.h"
 #include "magic-kernel/Conversion/LinalgToMK/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
-#include "triton-shared/Conversion/StructuredToMemref/Passes.h"
 #include "tsingmicro-tx81/Conversion/MKToTx81/Passes.h"
 #include "tsingmicro-tx81/Conversion/Tx81MemrefToLLVM/Passes.h"
 #include "tsingmicro-tx81/Conversion/Tx81ToLLVM/KernelArgBufferPass.h"
@@ -58,6 +57,7 @@
 
 namespace mlir {
 namespace test {
+void registerTestMathPolynomialApproximationPass();
 void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerTestAllocationPass();
@@ -120,10 +120,13 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
 
+  // Math dialect passes
+  mlir::test::registerTestMathPolynomialApproximationPass();
+
   // FIXME: May not need all of these
   // mlir::registerAllDialects(registry);
   // Register all external models.
-  // affine::registerValueBoundsOpInterfaceExternalModels(registry);
+  mlir::affine::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::arith::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::arith::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::arith::registerBufferViewFlowOpInterfaceExternalModels(registry);
@@ -145,10 +148,12 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::memref::registerRuntimeVerifiableOpInterfaceExternalModels(registry);
   mlir::memref::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::memref::registerMemorySlotExternalModels(registry);
+
   mlir::scf::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::shape::registerBufferizableOpInterfaceExternalModels(registry);
+
   mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::tensor::registerFindPayloadReplacementOpInterfaceExternalModels(
       registry);
@@ -156,26 +161,28 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::tensor::registerSubsetOpInterfaceExternalModels(registry);
   mlir::tensor::registerTilingInterfaceExternalModels(registry);
   mlir::tensor::registerValueBoundsOpInterfaceExternalModels(registry);
+
   mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::vector::registerSubsetOpInterfaceExternalModels(registry);
   mlir::vector::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::NVVM::registerNVVMTargetInterfaceExternalModels(registry);
+
   // This is need for the Bufferization pass(one-shot bufferization)
   mlir::registerAllExtensions(registry);
   mlir::mk::registerBufferizableOpInterfaceExternalModels(registry);
 
-  registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
-                  mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
-                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
-                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
-                  mlir::triton::amdgpu::TritonAMDGPUDialect,
-                  mlir::triton::proton::ProtonDialect,
-                  mlir::ROCDL::ROCDLDialect, mlir::ttx::TritonTilingExtDialect,
-                  mlir::tts::TritonStructuredDialect,
-                  mlir::linalg::LinalgDialect, mlir::func::FuncDialect,
-                  mlir::tensor::TensorDialect, mlir::memref::MemRefDialect,
-                  mlir::bufferization::BufferizationDialect,
-                  mlir::mk::MagicKernelDialect, mlir::tx::Tx81Dialect>();
+  registry.insert<
+      mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+      mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+      mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+      mlir::arith::ArithDialect, mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
+      mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
+      mlir::triton::nvgpu::NVGPUDialect,
+      mlir::triton::amdgpu::TritonAMDGPUDialect,
+      mlir::triton::proton::ProtonDialect, mlir::ROCDL::ROCDLDialect,
+      mlir::ttx::TritonTilingExtDialect, mlir::tts::TritonStructuredDialect,
+      mlir::linalg::LinalgDialect, mlir::func::FuncDialect,
+      mlir::tensor::TensorDialect, mlir::memref::MemRefDialect,
+      mlir::affine::AffineDialect, mlir::bufferization::BufferizationDialect,
+      mlir::mk::MagicKernelDialect, mlir::tx::Tx81Dialect>();
 }

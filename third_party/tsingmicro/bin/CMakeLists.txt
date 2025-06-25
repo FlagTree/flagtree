@@ -3,13 +3,11 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
-add_llvm_executable(tsingmicro-opt tsingmicro-opt.cpp PARTIAL_SOURCES_INTENDED)
+# TODO: Workaround include path
+# include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tsingmicro/include)
+# include_directories(${CMAKE_CURRENT_BINARY_DIR}/../third_party/tsingmicro/include)
 
-if (DEFINED TSM_BACKEND_DIR)
-  set(TSM_BIN_OUT ${TSM_BACKEND_DIR}/bin)
-else ()
-  set(TSM_BIN_OUT ${CMAKE_BINARY_DIR}/bin)
-endif ()
+add_llvm_executable(tsingmicro-opt tsingmicro-opt.cpp PARTIAL_SOURCES_INTENDED)
 
 # TODO: what's this?
 llvm_update_compile_flags(tsingmicro-opt)
@@ -27,81 +25,87 @@ target_link_libraries(tsingmicro-opt PRIVATE
   MLIROptLib
   MLIRPass
   MLIRTransforms
-)
-set_target_properties(tsingmicro-opt PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY ${TSM_BIN_OUT}
+  MLIRMathTestPasses
 )
 
 mlir_check_all_link_libraries(tsingmicro-opt)
 
-add_llvm_executable(tsingmicro-reduce tsingmicro-reduce.cpp PARTIAL_SOURCES_INTENDED)
-mlir_check_all_link_libraries(tsingmicro-reduce)
+# add_llvm_executable(tsingmicro-reduce tsingmicro-reduce.cpp PARTIAL_SOURCES_INTENDED)
+# mlir_check_all_link_libraries(tsingmicro-reduce)
 
-llvm_update_compile_flags(tsingmicro-reduce)
-target_link_libraries(tsingmicro-reduce PRIVATE
-  ${dialect_libs}
-  ${conversion_libs}
-  ${extension_libs}
-  ${triton_libs}
-  # tests
-  TritonTestAnalysis
-  TritonTestDialectTritonGPU
-  TritonAMDGPUTestAnalysis
-  # MLIR core
-  MLIRReduceLib
-  MLIRPass
-  MLIRTransforms
-)
-set_target_properties(tsingmicro-reduce PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY ${TSM_BIN_OUT}
-)
+# llvm_update_compile_flags(tsingmicro-reduce)
+# target_link_libraries(tsingmicro-reduce PRIVATE
+#   ${dialect_libs}
+#   ${conversion_libs}
+#   ${extension_libs}
+#   ${triton_libs}
+#   # tests
+#   TritonTestAnalysis
+#   TritonTestDialectTritonGPU
+#   TritonAMDGPUTestAnalysis
+#   # MLIR core
+#   MLIRReduceLib
+#   MLIRPass
+#   MLIRTransforms
+#   MLIRMathTestPasses
+# )
 
-mlir_check_all_link_libraries(tsingmicro-reduce)
+# mlir_check_all_link_libraries(tsingmicro-reduce)
 
-add_llvm_executable(tsingmicro-lsp tsingmicro-lsp.cpp PARTIAL_SOURCES_INTENDED)
-mlir_check_all_link_libraries(tsingmicro-lsp)
+# add_llvm_executable(tsingmicro-lsp tsingmicro-lsp.cpp PARTIAL_SOURCES_INTENDED)
 
-llvm_update_compile_flags(tsingmicro-lsp)
-target_link_libraries(tsingmicro-lsp PRIVATE
-  ${dialect_libs}
-  ${conversion_libs}
-  ${extension_libs}
-  ${triton_libs}
-  # tests
-  TritonTestAnalysis
-  TritonTestDialectTritonGPU
-  TritonAMDGPUTestAnalysis
-  # MLIR core
-  MLIRLspServerLib
-  MLIRPass
-  MLIRTransforms
-)
-set_target_properties(tsingmicro-lsp PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY ${TSM_BIN_OUT}
-)
+# llvm_update_compile_flags(tsingmicro-lsp)
+# target_link_libraries(tsingmicro-lsp PRIVATE
+#   ${dialect_libs}
+#   ${conversion_libs}
+#   ${extension_libs}
+#   ${triton_libs}
+#   # tests
+#   TritonTestAnalysis
+#   TritonTestDialectTritonGPU
+#   TritonAMDGPUTestAnalysis
+#   # MLIR core
+#   MLIRLspServerLib
+#   MLIRPass
+#   MLIRTransforms
+#   MLIRMathTestPasses
+# )
 
-mlir_check_all_link_libraries(tsingmicro-lsp)
+# mlir_check_all_link_libraries(tsingmicro-lsp)
 
 
-add_llvm_executable(tsingmicro-llvm-opt
-  tsingmicro-llvm-opt.cpp
+# add_llvm_executable(tsingmicro-llvm-opt
+#   tsingmicro-llvm-opt.cpp
 
-  PARTIAL_SOURCES_INTENDED
-  DEPENDS
-  intrinsics_gen
-  SUPPORT_PLUGINS
-  )
-target_link_libraries(tsingmicro-llvm-opt PRIVATE
-  TritonLLVMIR
+#   PARTIAL_SOURCES_INTENDED
+#   DEPENDS
+#   intrinsics_gen
+#   SUPPORT_PLUGINS
+#   )
+# target_link_libraries(tsingmicro-llvm-opt PRIVATE
+#   TritonLLVMIR
 
-  LLVMAnalysis
-  LLVMCore
-  LLVMSupport
-  LLVMOption
-  LLVMCodeGen
-  )
-export_executable_symbols_for_plugins(tsingmicro-llvm-opt)
+#   LLVMAnalysis
+#   LLVMCore
+#   LLVMSupport
+#   LLVMOption
+#   LLVMCodeGen
+#   )
+# export_executable_symbols_for_plugins(tsingmicro-llvm-opt)
 
-set_target_properties(tsingmicro-llvm-opt PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY ${TSM_BIN_OUT}
+
+# add_llvm_executable(tsingmicro-tensor-layout tsingmicro-tensor-layout.cpp PARTIAL_SOURCES_INTENDED)
+# target_link_libraries(tsingmicro-tensor-layout PRIVATE
+#   ${triton_libs}
+#   ${conversion_libs}
+#   ${extension_libs}
+#   ${dialect_libs}
+#   TritonTestAnalysis
+#   TritonTestDialectTritonGPU
+#   TritonAMDGPUTestAnalysis
+#   MLIRMathTestPasses
+#   )
+
+install(TARGETS tsingmicro-opt
+  RUNTIME DESTINATION ${INSTALL_TSINGMICRO_DIR}/bin
 )

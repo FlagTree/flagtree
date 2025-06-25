@@ -27,29 +27,31 @@ if(NOT DEFINED LLVM_SYSPATH)
   endif()
 endif()
 
-if(NOT DEFINED TX8_HOME)
-  if(DEFINED ENV{TX8_HOME})
-    set(TX8_HOME $ENV{TX8_HOME})
+if(NOT DEFINED TX8_DEPS_ROOT)
+  if(DEFINED ENV{TX8_DEPS_ROOT})
+    set(TX8_DEPS_ROOT $ENV{TX8_DEPS_ROOT})
   else()
-    message(FATAL_ERROR "TX8_HOME environment variable is not defined")
+    message(FATAL_ERROR "TX8_DEPS_ROOT environment variable is not defined")
+  endif()
+endif()
+
+# Build for simulator or hardware
+if(NOT DEFINED USE_SIM_MODE)
+  if(DEFINED ENV{USE_SIM_MODE})
+    set(USE_SIM_MODE $ENV{USE_SIM_MODE})
+  else()
+    set(USE_SIM_MODE OFF)
+    message(STATUS "Building for hardware (USE_SIM_MODE not set)")
   endif()
 endif()
 
 # Project name and version
 project(VendorRuntime LANGUAGES CXX C)
 
-# Define RISC-V target triple
-set(RISCV_TRIPLE "riscv64-unknown-elf")
-set(CMAKE_SYSTEM_NAME Generic)
-set(CMAKE_SYSTEM_PROCESSOR riscv)
-set(CMAKE_C_COMPILER ${LLVM_SYSPATH}/bin/clang)
-set(CMAKE_CXX_COMPILER ${LLVM_SYSPATH}/bin/clang++)
-
 # Define standard include directories
+include_directories(${TX8_DEPS_ROOT}/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include/${TARGET})
-include_directories(${TX8_HOME}/include)
-include_directories(${TX8_HOME}/${XUANTIE_NAME}/riscv64-unknown-elf/include)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 # Set build type default
@@ -63,67 +65,61 @@ set(VENDOR_RUNTIME_LIB vr)
 # Collect all source files from the vendor directory
 file(GLOB_RECURSE VENDOR_SOURCES lib/${TARGET}/*.c)
 
-# Define RISC-V specific compile options
-set(RISCV_COMPILE_OPTIONS
-  --target=${RISCV_TRIPLE}
-  -march=rv64gc
-  -mabi=lp64d
-  -mcmodel=medany
-)
+set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_C_COMPILER ${LLVM_SYSPATH}/bin/clang)
+set(CMAKE_CXX_COMPILER ${LLVM_SYSPATH}/bin/clang++)
 
-# Add the library target
-add_library(${VENDOR_RUNTIME_LIB} STATIC ${VENDOR_SOURCES})
-
-# Apply RISC-V specific settings to our target
-target_compile_options(${VENDOR_RUNTIME_LIB} PRIVATE ${RISCV_COMPILE_OPTIONS})
-target_link_options(${VENDOR_RUNTIME_LIB} PRIVATE --target=${RISCV_TRIPLE})
-
-if (DEFINED TSM_BACKEND_DIR)
-  set_target_properties(${VENDOR_RUNTIME_LIB} PROPERTIES
-    POSITION_INDEPENDENT_CODE ON
-    ARCHIVE_OUTPUT_DIRECTORY ${TSM_BACKEND_DIR}/lib
+if (USE_SIM_MODE)
+  # Define simulator specific compile options
+  set(SIMULATOR_COMPILE_OPTIONS
+    -fPIC
+    -DUSE_SIM_MODE
   )
-else ()
+
+  add_library(${VENDOR_RUNTIME_LIB} SHARED ${VENDOR_SOURCES})
+
+  # Apply simulator specific settings to our target
+  target_compile_options(${VENDOR_RUNTIME_LIB} PRIVATE ${SIMULATOR_COMPILE_OPTIONS})
+
   # Set properties for the library
   set_target_properties(${VENDOR_RUNTIME_LIB} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
-    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib
+    SUFFIX ".so"
   )
-endif ()
-
-# Setup compiler and environment for RISC-V compilation
-if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  # Use the existing Clang installation with target triple
-  message(STATUS "Using Clang with RISC-V target triple")
 else()
-  # Override compiler paths if using explicit RISC-V toolchain
-  message(STATUS "Setting explicit RISC-V compiler from LLVM_SYSPATH")
+  # Define RISC-V target triple
+  set(RISCV_TRIPLE "riscv64-unknown-elf")
+  set(CMAKE_SYSTEM_PROCESSOR riscv)
 
-  foreach(source ${VENDOR_SOURCES})
-    if(source MATCHES "\\.(c)$")
-      set_source_files_properties(${source} PROPERTIES
-        COMPILE_FLAGS "-xc --target=${RISCV_TRIPLE}"
-        LANGUAGE C)
-    elseif(source MATCHES "\\.(cpp)$")
-      set_source_files_properties(${source} PROPERTIES
-        COMPILE_FLAGS "-xc++ --target=${RISCV_TRIPLE}"
-        LANGUAGE CXX)
-    endif()
-  endforeach()
+  include_directories(${TX8_DEPS_ROOT}/include)
+  include_directories(${TX8_DEPS_ROOT}/${XUANTIE_NAME}/riscv64-unknown-elf/include)
 
-  # Set compiler launch commands for the target
-  add_custom_command(TARGET ${VENDOR_RUNTIME_LIB} PRE_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "Building ${VENDOR_RUNTIME_LIB} for RISC-V target"
+  # Define RISC-V specific compile options
+  set(RISCV_COMPILE_OPTIONS
+    --target=${RISCV_TRIPLE}
+    -march=rv64gc
+    -mabi=lp64d
+    -mcmodel=medany
+    -DCONFIG_TX8_KERNEL_PRINTF_SUPPORT=1
   )
+
+  # Add the library target
+  add_library(${VENDOR_RUNTIME_LIB} STATIC ${VENDOR_SOURCES})
+
+  # Apply RISC-V specific settings to our target
+  target_compile_options(${VENDOR_RUNTIME_LIB} PRIVATE ${RISCV_COMPILE_OPTIONS})
+  target_link_options(${VENDOR_RUNTIME_LIB} PRIVATE --target=${RISCV_TRIPLE})
+
+  # Set properties for the library
+  set_target_properties(${VENDOR_RUNTIME_LIB} PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib
+    SUFFIX ".a"
+  )
+
 endif()
 
-# Install targets
 install(TARGETS ${VENDOR_RUNTIME_LIB}
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin
+  ARCHIVE DESTINATION ${INSTALL_TSINGMICRO_DIR}/lib
 )
-
-# Install headers (optional)
-file(GLOB_RECURSE VENDOR_HEADERS Target/lib/${TARGET}/*.h)
-install(FILES ${VENDOR_HEADERS} DESTINATION include/${TARGET})

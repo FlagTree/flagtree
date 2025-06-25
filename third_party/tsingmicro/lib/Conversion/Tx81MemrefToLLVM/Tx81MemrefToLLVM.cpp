@@ -10,6 +10,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "tsingmicro-tx81/Dialect/IR/Tx81Dialect.h"
+#include "utils/utils.h"
 #include <cstdint>
 #include <vector>
 
@@ -24,8 +25,6 @@ using namespace mlir;
 uint64_t spmPointer = 0x10000;
 
 namespace {
-// Used for kcore load/store data from/to spm
-const int64_t spmMappingOffset = 0x30400000;
 
 //===----------------------------------------------------------------------===//
 // Tx81 Custom MemRef Op Conversion Patterns
@@ -110,21 +109,29 @@ struct MemrefLoadOrStoreOpLowering : public ConvertOpToLLVMPattern<MemrefOp> {
 
     Value adjustedPtr = dataPtr;
     if (isSpm) {
-      auto spmMemoryOffset = rewriter.create<LLVM::ConstantOp>(
-          op.getLoc(), rewriter.getI64Type(),
-          rewriter.getI64IntegerAttr(spmMappingOffset));
-      auto spmMemoryAddr = rewriter.create<LLVM::AddOp>(
-          op.getLoc(), rewriter.getI64Type(),
-          SmallVector<Value>({ptrValue, spmMemoryOffset}));
+      // Get the module for function declarations
+      auto module = op->template getParentOfType<ModuleOp>();
+      // Types for function declaration
+      SmallVector<Type, 5> argTypes = {
+          rewriter.getI64Type() // offset
+      };
 
-      auto ptrTy = LLVM::LLVMPointerType::get(
+      auto i8PtrTy = LLVM::LLVMPointerType::get(
           rewriter.getContext(),
           *ConvertToLLVMPattern::getTypeConverter()->getMemRefAddressSpace(
               type));
-      auto spmMemoryAddrPtr =
-          rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), ptrTy, spmMemoryAddr);
+      // Declare the function
+      Value funcPtr = triton::utils::declareTx81Function(
+          module, rewriter, op.getLoc(), "get_spm_memory_mapping_wrapper",
+          i8PtrTy, argTypes);
 
-      adjustedPtr = spmMemoryAddrPtr;
+      // Create the call to __Rdma
+      auto spmMemoryAddrPtr = rewriter.create<LLVM::CallOp>(
+          op.getLoc(), TypeRange{i8PtrTy},
+          "get_spm_memory_mapping_wrapper", // funcPtr,
+          ValueRange{ptrValue});
+
+      adjustedPtr = spmMemoryAddrPtr.getResult();
     }
 
     // Wether need memoryspace cast
@@ -311,11 +318,10 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     BaseMemRefType sourceTy = extractOp.getSource().getType();
 
-    // FIXME: We want allocated ptr instead of aligned ptr.
     Value alignedPtr;
     if (sourceTy.hasRank()) {
       MemRefDescriptor desc(adaptor.getSource());
-      alignedPtr = desc.allocatedPtr(rewriter, extractOp->getLoc());
+      alignedPtr = desc.alignedPtr(rewriter, extractOp->getLoc());
     } else {
       auto elementPtrTy = LLVM::LLVMPointerType::get(
           rewriter.getContext(), sourceTy.getMemorySpaceAsInt());
@@ -323,8 +329,9 @@ public:
       UnrankedMemRefDescriptor desc(adaptor.getSource());
       Value descPtr = desc.memRefDescPtr(rewriter, extractOp->getLoc());
 
-      alignedPtr = UnrankedMemRefDescriptor::allocatedPtr(
-          rewriter, extractOp->getLoc(), descPtr, elementPtrTy);
+      alignedPtr = UnrankedMemRefDescriptor::alignedPtr(
+          rewriter, extractOp->getLoc(), *getTypeConverter(), descPtr,
+          elementPtrTy);
     }
 
     rewriter.replaceOpWithNewOp<LLVM::PtrToIntOp>(

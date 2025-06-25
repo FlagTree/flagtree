@@ -49,17 +49,26 @@ class MKOp<string mnemonic, list<Trait> traits = []> :
      !listconcat(traits, [/*TensorSizeTrait, VerifyTensorLayoutsTrait*/])> {
 }
 
-class MKUnElemWiseOp<string mnemonic> : MKOp<mnemonic, [Pure, Elementwise,
-                                             SameOperandsAndResultType]> {
+class MKUnElemWiseOp<string mnemonic> : MKOp<mnemonic, [Elementwise,
+                                             DestinationStyleOpInterface]> {
   let summary = "Element wise unary operation: $mnemonic";
 
   let arguments = (
     ins
-    AnyTensor:$src,
+    TensorOrMemref:$src,
+    // buffer for store result
+    Arg<TensorOrMemref, "the target memref", [MemWrite]>:$zeroes,
     BoolAttr:$is_atomic
   );
 
-  let results = (outs AnyTensor:$dst);
+  let results = (outs Variadic<TensorOrMemref>:$dst);
+
+  let extraClassDeclaration = [{
+    MutableOperandRange getDpsInitsMutable() {
+      return getZeroesMutable();
+    }
+  }];
+
 }
 
 class MKBinElemWiseOp<string mnemonic> : MKOp<mnemonic, [Pure, Elementwise]> {
@@ -246,7 +255,29 @@ def XorSumOp : MKOp<"xor_sum", [Pure]> {}
 // =============================================================================
 
 def SortOp : MKOp<"sort", [Pure]> {}
-def GatherOp : MKOp<"gather", [Pure]> {}
+def GatherOp : MKOp<"gather", [DestinationStyleOpInterface]> {
+  let summary = "Gather from a tensor along a given dimension.";
+
+  let description = [{
+    TODO: It is currently one to one mapping from upper dialect tt.gather.
+  }];
+
+  let arguments = (
+    ins
+    TensorOrMemref:$src,               // input
+    TensorOrMemref:$indices,           // indices
+    Arg<TensorOrMemref, "the target memref", [MemWrite]>:$dst, // output
+    I32Attr:$axis
+  );
+
+  let results = (outs Variadic<TensorOrMemref>:$result);
+
+  let extraClassDeclaration = [{
+    MutableOperandRange getDpsInitsMutable() {
+      return getDstMutable();
+    }
+  }];
+}
 
 
 // =============================================================================
@@ -280,5 +311,37 @@ def SqrtRnOp : MKUnElemWiseOp<"sqrt_rn">;
 def XorOp : MKBinElemWiseOp<"xor">;
 // def UmulhiOp : MKOp<"umulhi", [Pure]> {}
 
+def BarrierOp : MKOp<"barrier"> {
+  let summary = "Synchronizes all work items";
+  let description = [{
+    The "barrier" op synchronizes all work items.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+def PrintOp : MKOp<"print", [DestinationStyleOpInterface]> {
+  let summary = "Print at most a single scalar or 1D TensorOrMemref on each line";
+
+  let description = [{
+    It only takes a single scalar or 1D TensorOrMemref element.
+  }];
+
+  let arguments = (ins
+    StrAttr:$prefix,
+    BoolAttr:$hex,
+    Variadic<AnyTypeOf<[MKFloat, MKInt, MKPtr, TensorOrMemref]>>:$val,
+    DenseI32ArrayAttr:$isSigned
+  );
+
+  let results = (outs Variadic<TensorOrMemref>:$dst);
+
+  let extraClassDeclaration = [{
+    MutableOperandRange getDpsInitsMutable() {
+      return getValMutable();
+    }
+  }];
+
+  let hasVerifier = 1;
+}
 
 #endif // MAGIC_KERNEL_OPS

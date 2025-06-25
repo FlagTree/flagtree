@@ -11,6 +11,12 @@
 using namespace mlir;
 using namespace mlir::mk;
 
+LogicalResult PrintOp::verify() {
+  if (getOperands().size() > 1)
+    return emitOpError("expects at most one operand");
+  return success();
+}
+
 /// Dialect creation, the instance will be owned by the context. This is the
 /// point of registration of custom types and operations for the dialect.
 void MagicKernelDialect::initialize() {
@@ -19,8 +25,8 @@ void MagicKernelDialect::initialize() {
 #include "magic-kernel/Dialect/IR/MagicKernelOps.cpp.inc"
       >();
   // TODO: Add BufferizableOpInterface to all ops that can be bufferized
-  declarePromisedInterfaces<bufferization::BufferizableOpInterface,
-                            mk::DotOp>();
+  declarePromisedInterfaces<bufferization::BufferizableOpInterface, mk::DotOp,
+                            mk::SigmoidOp, mk::GatherOp, mk::PrintOp>();
 }
 
 //===----------------------------------------------------------------------===//

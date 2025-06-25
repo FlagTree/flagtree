@@ -20,4 +20,6 @@ add_triton_library(CoreDialectsToMK
   MLIRTensorDialect
   MLIRTransforms
   MLIRSupport
+
+  LinalgToMagicKernel
 )

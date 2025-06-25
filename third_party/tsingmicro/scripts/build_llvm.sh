@@ -22,6 +22,7 @@ build_llvm() {
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU;RISCV" \
         -DLLVM_USE_LINKER=lld \
         -DMLIR_ENABLE_BINDINGS_PYTHON=1 \
+        -DPython3_EXECUTABLE="$(which python3)" \
         ../llvm
     ninja
 }

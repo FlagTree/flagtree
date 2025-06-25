@@ -150,8 +150,9 @@ public:
         });
 
     if (pidsToFuncArgs) {
-      target
-          .addIllegalOp</*triton::GetProgramIdOp,*/ triton::GetNumProgramsOp>();
+      // Need use tx interface to get pid.
+      target.addIllegalOp<
+          /* triton::GetProgramIdOp, */ triton::GetNumProgramsOp>();
     }
 
     if (addptrToLinalg) {

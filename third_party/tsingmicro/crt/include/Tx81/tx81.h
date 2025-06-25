@@ -9,7 +9,6 @@
 
 #include "instr_adapter.h"
 #include "instr_def.h"
-#include "lib_log.h"
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -27,7 +26,22 @@ enum ActFuncMode : int32_t {
   ENLeakRelu = 2,
 };
 
-inline uint64_t spm_print_offset(uint64_t addr) {
-  return (uint64_t)addr + 0x030400000;
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+float set_value2float32(Data_Format fmt, int8_t *value);
+
+bool is_contiguous(int *shape, int *strides, int elem_bytes);
+
+// Use in simulation mode, return the spm address mapping
+int8_t *get_spm_memory_mapping(uint64_t offset);
+// Hardware mode will use add the spmMappingOffset to get the real spm address
+// Simulation mode will call get_spm_memory_mapping
+int8_t *get_spm_memory_mapping_wrapper(uint64_t offset);
+
+#ifdef __cplusplus
 }
+#endif
+
 #endif // CRT_TARGET_TX81_H

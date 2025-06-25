@@ -11,7 +11,8 @@
 
 #include "tx81.h"
 
-void __Bit2Fp(uint64_t *src, uint64_t *dst, uint32_t elem_count, uint16_t fmt) {
+void __Bit2Fp(uint64_t *src, uint64_t *target, uint32_t elem_count,
+              uint16_t fmt) {
   // Create command buffer.
   TsmPeripheral *cmd = TsmNewPeripheral();
   TsmPeripheralInstr inst = {I_CGRA,
@@ -21,9 +22,10 @@ void __Bit2Fp(uint64_t *src, uint64_t *dst, uint32_t elem_count, uint16_t fmt) {
                              {
                                  0,
                              }};
-  ;
 
-  cmd->Bit2Fp(&inst, (uint64_t)src, (uint64_t)dst, elem_count,
+  assert(elem_count % 8 == 0);
+
+  cmd->Bit2Fp(&inst, (uint64_t)src, (uint64_t)target, elem_count,
               (Data_Format)fmt);
 
   // Dispatch the command to accelerator

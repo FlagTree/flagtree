@@ -144,15 +144,14 @@ public:
 
     // Compute the target materialization, given a value with the pointer type,
     // convert that value to a tuple type.
-#if 0 // FIXME: Incompatible MILR interface
-    converter.addTargetMaterialization(
-        [](OpBuilder &builder, TypeRange resultTypes, Value input,
-           Location loc) -> std::optional<SmallVector<Value>> {
-          return builder
-              .create<UnrealizedConversionCastOp>(loc, resultTypes, input)
-              ->getResults();
-        });
-#endif
+    converter.addTargetMaterialization([](OpBuilder &builder,
+                                          TypeRange resultTypes,
+                                          ValueRange inputs,
+                                          Location loc) -> SmallVector<Value> {
+      return builder
+          .create<UnrealizedConversionCastOp>(loc, resultTypes, inputs.front())
+          ->getResults();
+    });
 
     scf::populateSCFStructuralOneToNTypeConversions(converter, patterns);
 
@@ -209,16 +208,14 @@ public:
     // The return values for this op will be used as the init-args for scf.for.
     // At the end of pointer analysis, we will use the PtrState to create the
     // correct offsets, strides, and remove these ops.
-#if 0 // FIXME: Incompatible MILR interface
     converter.addTargetMaterialization([](OpBuilder &builder,
-                                          TypeRange resultTypes, Value input,
-                                          Location loc) {
+                                          TypeRange resultTypes,
+                                          ValueRange inputs, Location loc) {
       auto placeholder = builder.create<tts::GetStructuredStateOp>(
-          loc, input.getDefiningOp()->getOperand(0));
+          loc, inputs.front().getDefiningOp()->getOperand(0));
       assert(llvm::equal(placeholder.getResultTypes(), resultTypes));
       return placeholder.getResults();
     });
-#endif
 
     RewritePatternSet patterns(&getContext());
     scf::populateSCFStructuralOneToNTypeConversions(converter, patterns);

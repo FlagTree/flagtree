@@ -36,6 +36,9 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
 
 
 def add(x: torch.Tensor, y: torch.Tensor):
+    output_torch = x + y
+    x = x.to(DEVICE)
+    y = y.to(DEVICE)
     # We need to preallocate the output.
     output = torch.empty_like(x)
     # assert x.is_cuda and y.is_cuda and output.is_cuda
@@ -51,21 +54,27 @@ def add(x: torch.Tensor, y: torch.Tensor):
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
+    output = output.to("cpu")
+    print(f"The maximum difference between torch and triton is "
+          f"{torch.max(torch.abs(output_torch - output))}")
     return output
 
 
 def test(device):
-    # torch.manual_seed(0)
+    torch.manual_seed(0)
     size = 1024
     x = torch.rand(size, device="cpu")
     y = torch.rand(size, device="cpu")
+    print("x: ", x)
+    print("y: ", y)
     output_torch = x + y
     x = x.to(device)
     y = y.to(device)
     output_triton = add(x, y)
+    print("output_triton device: ", output_triton.device)
     # TODO: need to check some conditions otherwise the code below does not make any difference for the test
-    print("expected", output_torch)
     output_triton = output_triton.to("cpu")
+    print("expected", output_torch)
     print("actual", output_triton)
     print(f"The maximum difference between torch and triton is "
           f"{torch.max(torch.abs(output_torch - output_triton))}")
@@ -78,8 +87,6 @@ def bench_vecadd(size, provider):
     if provider == 'torch':
         a + b
     if provider == 'triton':
-        a = a.to(DEVICE)
-        b = b.to(DEVICE)
         add(a, b)
 
 

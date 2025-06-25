@@ -55,6 +55,7 @@ void mlir::triton::populateTritonArithToLinalgConversionPatterns(
   if (assertToCf) {
     patterns.add<AssertConverter>(patterns.getContext());
   }
+  patterns.add<BarrierConverter>(patterns.getContext());
   patterns.add<BroadcastConverter>(patterns.getContext());
   patterns.add<TransposeConverter>(patterns.getContext());
   patterns.add<MakeRangeConverter>(patterns.getContext());
@@ -72,8 +73,11 @@ void mlir::triton::populateTritonArithToLinalgConversionPatterns(
   patterns.add<MatmulConverter>(patterns.getContext());
   patterns.add<SplatConverter>(patterns.getContext());
   patterns.add<DenseConstantConverter>(patterns.getContext());
-  patterns.add<CumSumConverter>(patterns.getContext());
+  patterns.add<ScanOpConverter>(patterns.getContext());
   patterns.add<ReshapeConverter>(patterns.getContext());
+  patterns.add<GatherConverter>(patterns.getContext());
+  patterns.add<HistogramOpConversion>(patterns.getContext());
+  patterns.add<PrintOpConverter>(patterns.getContext());
 
   populateExternElementwiseOpToMLIROps(patterns);
 

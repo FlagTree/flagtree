@@ -164,9 +164,12 @@ struct ScalarAddptrConverter
   }
 };
 
-static std::optional<SmallVector<Value>>
-buildCastAndOffsetOps(OpBuilder &builder, TypeRange resultTypes, Value input,
-                      Location loc) {
+static SmallVector<Value> buildCastAndOffsetOps(OpBuilder &builder,
+                                                TypeRange resultTypes,
+                                                ValueRange inputs,
+                                                Location loc) {
+  assert(inputs.size() == 1 && "Unexpected number of inputs when converting");
+  Value input = inputs[0];
   assert(resultTypes.size() == 2 && isa<MemRefType>(resultTypes[0]) &&
          isa<IndexType>(resultTypes[1]) &&
          "Unexpected result types when converting addptr");
@@ -334,9 +337,7 @@ public:
 
     // Compute the target materialization, given a value with the pointer type,
     // convert that value to a pair of {memref, index} type.
-#if 0 // FIXME: Incompatible MILR interface
     converter.addTargetMaterialization(buildCastAndOffsetOps);
-#endif
 
     patterns.add<ScalarAddptrConverter>(converter, context);
 

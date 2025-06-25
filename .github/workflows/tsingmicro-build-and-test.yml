@@ -48,6 +48,7 @@ jobs:
       - name: FlagTree Build on Tsingmicro
         shell: bash
         run: |
+          pip uninstall -y triton
           source ~/env.sh
           export FLAGTREE_BACKEND=tsingmicro
           cd python
@@ -59,4 +60,3 @@ jobs:
           source ~/env.sh
           python3.11 -c 'import triton; print(triton.__path__)'
           /usr/local/lib/python3.11/dist-packages/triton/backends/tsingmicro/bin/tsingmicro-opt --version
-          /usr/local/lib/python3.11/dist-packages/triton/backends/tsingmicro/bin/tsingmicro-llvm-opt --version
