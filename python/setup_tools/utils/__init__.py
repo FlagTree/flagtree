@@ -21,10 +21,7 @@ flagtree_backends = (
                     tag="00f51c2e48a943922f86f03d58e29f514def646d"),
     FlagTreeBackend(name="flir", url="git@github.com:FlagTree/flir.git",
                     tag="243690fb1c8b9f032c1f938271414831a6cfe406"),
-    FlagTreeBackend(
-        name="ascend",
-        url="https://gitee.com/ascend/triton-ascend.git",
-    ),
+    FlagTreeBackend(name="ascend", url="https://gitee.com/ascend/triton-ascend.git"),
 )
 
 
