@@ -1,4 +1,4 @@
-[中文版](./release_notes_v0.1.0_cn.md)
+[中文版](./release_notes_v0.2.0_cn.md)
 
 ## FlagTree 0.1.0 Release
 
