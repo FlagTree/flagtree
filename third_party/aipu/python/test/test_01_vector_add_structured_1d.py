@@ -15,7 +15,7 @@ def add_kernel_structured_1d(x_ptr,
                ):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
-    
+
     A_block_ptr = tl.make_block_ptr(
         base=x_ptr,
         shape=(n_elements,),
@@ -47,22 +47,22 @@ def add_kernel_structured_1d(x_ptr,
 
 def add_structured_1d(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
-    
+
     n_elements = output.numel()
     stride = 1
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-    
+
     add_kernel_structured_1d[grid](x, y, output, stride, n_elements, BLOCK_SIZE=1024)
     return output.cpu()
 
 
 def test_vector_add_structured_1d():
     torch.manual_seed(0)
-    
+
     size = 4432
     x = torch.rand(size, device=DEVICE)
     y = torch.rand(size, device=DEVICE)
-    
+
     output_torch = x.cpu() + y.cpu()
     output_triton = add_structured_1d(x, y)
 

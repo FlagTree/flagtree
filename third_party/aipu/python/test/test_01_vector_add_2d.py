@@ -21,7 +21,7 @@ def add_kernel_2d(x_ptr, y_ptr, output_ptr,
 
     mask_m = row_offsets < M
     mask_n = col_offsets < N
-    mask = mask_m[:, None] & mask_n[None, :]  
+    mask = mask_m[:, None] & mask_n[None, :]
 
     x_ptrs = x_ptr + row_offsets[:, None] * stride_xm + col_offsets[None, :] * stride_xn
     y_ptrs = y_ptr + row_offsets[:, None] * stride_ym + col_offsets[None, :] * stride_yn
@@ -60,14 +60,14 @@ def add_2d(x: torch.Tensor, y: torch.Tensor):
 
 def test_vector_add_2d():
     torch.manual_seed(0)
-    
+
     M, N = 129, 4432
     x = torch.rand((M, N), device=DEVICE)
     y = torch.rand((M, N), device=DEVICE)
 
     output_torch = x.cpu() + y.cpu()
     output_triton = add_2d(x, y)
-    
+
     print(f'The maximum difference between torch and triton is '
           f'{torch.max(torch.abs(output_torch - output_triton))}')
     assert torch.allclose(output_triton, output_torch), (output_triton, output_torch)
@@ -75,5 +75,3 @@ def test_vector_add_2d():
 
 if __name__ == "__main__":
     test_vector_add_2d()
-
-    

@@ -15,7 +15,7 @@ def add_kernel_structured_2d(x_ptr, y_ptr, output_ptr,
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
 
-    offs_m = pid_m * BLOCK_M 
+    offs_m = pid_m * BLOCK_M
     offs_n = pid_n * BLOCK_N
 
     x_block_ptr = tl.make_block_ptr(
@@ -53,7 +53,7 @@ def add_kernel_structured_2d(x_ptr, y_ptr, output_ptr,
 
 def add_structured_2d(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
-    
+
     M, N = x.shape
     BLOCK_M = 32
     BLOCK_N = 512
@@ -82,7 +82,7 @@ def test_add_structured_2d():
     M, N = 128, 4096
     x = torch.rand((M, N), device=DEVICE)
     y = torch.rand((M, N), device=DEVICE)
-    
+
     output_torch = x.cpu() + y.cpu()
     output_triton = add_structured_2d(x, y)
 
