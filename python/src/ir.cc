@@ -674,6 +674,13 @@ void init_triton_ir(py::module &&m) {
         values));
   });
 
+  m.def("make_attr_i64", [](const std::vector<int64_t> &values, MLIRContext &context) {
+    return mlir::cast<Attribute>(DenseIntElementsAttr::get(
+        RankedTensorType::get({static_cast<int64_t>(values.size())},
+                              IntegerType::get(&context, 64)),
+        values));
+  });
+
   m.def(
       "parse_mlir_module",
       [](const std::string &inputFilename, MLIRContext &context) {

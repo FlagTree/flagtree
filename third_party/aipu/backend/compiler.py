@@ -7,6 +7,9 @@ import triton._C.libaipu_interface as aipu_interface
 from mlir.passmanager import PassManager
 from mlir.ir import Context, Module
 
+import ctypes
+from triton._C.libtriton.aipu import UnifiedHardwareAIPU
+
 from dataclasses import dataclass
 import functools
 import hashlib
@@ -96,6 +99,12 @@ class AIPUBackend(BaseBackend):
 
     @staticmethod
     def make_linalg(mod, metadata, opt):
+        uh_aipu = UnifiedHardwareAIPU()
+        uh_aipu_ptr = ctypes.cast(id(uh_aipu), ctypes.c_void_p)
+        ptr_value = int(uh_aipu_ptr.value)
+        ptr_attr = ir.make_attr_i64([ptr_value], mod.context)
+        #mod.set_attr("uh_aipu_ptr", ptr_attr)  # TODO
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         # Add pass here.
