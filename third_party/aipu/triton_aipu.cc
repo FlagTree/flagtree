@@ -69,7 +69,6 @@ void init_triton_aipu(py::module &&m) {
   init_triton_aipu_common(m.def_submodule("common"));
   auto passes = m.def_submodule("passes");
   init_triton_aipu_passes_convert(passes.def_submodule("convert"));
-
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     using namespace mlir;
@@ -88,4 +87,5 @@ void init_triton_aipu(py::module &&m) {
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
+  // register passes here
 }
