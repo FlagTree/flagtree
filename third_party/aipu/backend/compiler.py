@@ -7,7 +7,6 @@ import triton._C.libaipu_interface as aipu_interface
 from mlir.passmanager import PassManager
 from mlir.ir import Context, Module
 
-import ctypes
 from dataclasses import dataclass
 import functools
 import hashlib
