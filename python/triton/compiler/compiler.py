@@ -17,28 +17,14 @@ import functools
 import os
 
 
-@dataclass
-class AttrsDescriptor:
-    divisible_by_16: set = None
-    equal_to_1: set = None
+# TODO: 0626
+from triton.backend_loader import get_backend
 
-    def __post_init__(self):
-        if self.divisible_by_16 is None:
-            self.divisible_by_16 = set()
-        if self.equal_to_1 is None:
-            self.equal_to_1 = set()
+# 默认平台从环境变量或配置传入
+PLATFORM = os.getenv("FLAGTREE_PLATFORM", "iluvatar")
+backend = get_backend(PLATFORM)
 
-    def to_dict(self):
-        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
-
-    @staticmethod
-    def from_dict(data):
-        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
-                               equal_to_1=set(data.get('equal_to_1', [])))
-
-    def hash(self):
-        key = str([sorted(x) for x in self.__dict__.values()])
-        return hashlib.sha256(key.encode("utf-8")).hexdigest()
+AttrsDescriptor = backend.AttrsDescriptor
 
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
@@ -224,82 +210,7 @@ def filter_traceback(e: BaseException):
 
 
 def compile(src, target=None, options=None):
-    if target is None:
-        target = driver.active.get_current_target()
-    assert isinstance(target, GPUTarget), "target must be of GPUTarget type"
-    backend = make_backend(target)
-    ir_source = not isinstance(src, ASTSource)
-    # create backend
-    if ir_source:
-        assert isinstance(src, str), "source must be either AST or a filepath"
-        src = IRSource(src)
-    extra_options = src.parse_options()
-    options = backend.parse_options(dict(options or dict(), **extra_options))
-    # create cache manager
-    env_vars = get_cache_invalidating_env_vars()
-    key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(env_vars.items()))}"
-    hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    fn_cache_manager = get_cache_manager(hash)
-    # For dumping/overriding only hash the source as we want it to be independent of triton
-    # core changes to make it easier to track kernels by hash.
-    enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
-    enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
-    fn_override_manager = get_override_manager(src.hash()) if enable_override else None
-    fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
-    metadata_filename = f"{src.name}.json"
-    metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
-    metadata_path = metadata_group.get(metadata_filename)
-    always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
-    if not always_compile and metadata_path is not None:
-        # cache hit!
-        metadata = json.loads(Path(metadata_path).read_text())
-        return CompiledKernel(src, metadata_group, hash)
-    # initialize metadata
-    metadata = {
-        "hash": hash,
-        "target": target,
-        **options.__dict__,
-        **env_vars,
-    }
-    # run compilation pipeline  and populate metadata
-    stages = dict()
-    backend.add_stages(stages, options)
-    first_stage = list(stages.keys()).index(src.ext)
-    # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
-    if ir_source:
-        first_stage += 1
-    context = ir.context()
-    ir.load_dialects(context)
-    backend.load_dialects(context)
-    codegen_fns = backend.get_codegen_implementation()
-    try:
-        module = src.make_ir(options, codegen_fns, context)
-    except Exception as e:
-        filter_traceback(e)
-        raise
-    use_ttgir_loc = os.environ.get("USE_TTGIR_LOC", "0") == "1"
-    for ext, compile_ir in list(stages.items())[first_stage:]:
-        next_module = compile_ir(module, metadata)
-        ir_filename = f"{src.name}.{ext}"
-        metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
-        if fn_dump_manager is not None:
-            fn_dump_manager.put(next_module, ir_filename)
-        if (fn_override_manager is not None and fn_override_manager.has_file(ir_filename)):
-            print(f"\nOverriding kernel with file {ir_filename}")
-            full_name = fn_override_manager.get_file(ir_filename)
-            next_module = parse(full_name, ext, context)
-        # use an env variable to parse ttgir from file
-        if use_ttgir_loc and ext == "ttgir":
-            ttgir_full_name = fn_cache_manager.get_file(ir_filename)
-            next_module.create_location_snapshot(ttgir_full_name)
-            print(f"Create new locations for {ttgir_full_name}")
-        module = next_module
-    # write-back metadata
-    metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
-                                                             binary=False)
-    fn_cache_manager.put_group(metadata_filename, metadata_group)
-    # return handle to compiled kernel
-    return CompiledKernel(src, metadata_group, hash)
+    return backend.compile(src, target=None, options=None)
 
 
 def make_backend(target):

@@ -602,7 +602,7 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     packages=get_packages(),
-    package_dir=helper.CommonUtils.get_package_dir(get_packages()),
+    #package_dir=helper.CommonUtils.get_package_dir(get_packages()),
     entry_points=get_entry_points(),
     install_requires=get_install_requires(),
     package_data=package_data,
