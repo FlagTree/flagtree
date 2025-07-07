@@ -45,8 +45,6 @@ endif()
 project(triton CXX C)
 include(CTest)
 
-
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # Options

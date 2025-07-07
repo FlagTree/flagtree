@@ -1,5 +1,5 @@
 add_subdirectory(Passes)
-
+add_triton_library(Registrar Registrar.cc)
 execute_process(
   COMMAND ${Python3_EXECUTABLE} -c "import mlir; print(str(mlir.__path__).split(\"'\")[1])"
   OUTPUT_VARIABLE MLIR_PYTHON_PATH

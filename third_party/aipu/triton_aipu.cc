@@ -22,8 +22,6 @@
 #include "triton-shared/Conversion/TritonToLinalg/TritonToLinalg.h"
 #include "triton-shared/Conversion/TritonToLinalgExperimental/TritonToLinalgExperimental.h"
 
-#include "unified_hardware_aipu.h"
-
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -90,7 +88,4 @@ void init_triton_aipu(py::module &&m) {
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
-  // register passes here
-  py::class_<mlir::aipu::UnifiedHardwareAIPU>(m, "UnifiedHardwareAIPU")
-        .def(py::init<>());    // flagtree
 }
