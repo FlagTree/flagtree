@@ -80,19 +80,21 @@ struct TritonXPUStoreControl
 
   bool isSameSize(triton::xpu::ReduceOp &reduceOp,
                   triton::xpu::StoreOp storeOp) {
-    llvm::ArrayRef<int64_t> redResShape = {1};
+    SmallVector<int64_t> redResShape = {1};
     auto redRes = reduceOp.getResult()[0];
     if (auto redResTy = dyn_cast<RankedTensorType>(redRes.getType())) {
       auto sliceEncoding =
           cast<triton::gpu::SliceEncodingAttr>(redResTy.getEncoding());
-      redResShape = redResTy.getShape();
+      redResShape = SmallVector<int64_t>(redResTy.getShape().begin(),
+                                         redResTy.getShape().end());
     }
-    llvm::ArrayRef<int64_t> storeValShape = {1};
+    SmallVector<int64_t> storeValShape = {1};
     auto storeVal = storeOp.getValue();
     if (auto storeValTy = dyn_cast<RankedTensorType>(storeVal.getType())) {
-      storeValShape = storeValTy.getShape();
+      storeValShape = SmallVector<int64_t>(storeValTy.getShape().begin(),
+                                           storeValTy.getShape().end());
     }
-    if (product(redResShape) == product(storeValShape)) {
+    if (product(redResShape) == product(storeValShape) && !storeOp.getIndex()) {
       return true;
     }
     return false;
@@ -108,8 +110,8 @@ struct TritonXPUStoreControl
       SetVector<Operation *> ifBodyOps;
       if (auto op = findDefOpBwd<triton::xpu::ReduceOp>(storeOp.getValue())) {
         auto reduceOp = cast<triton::xpu::ReduceOp>(op);
-        ReduceOpHelper help(reduceOp);
-        auto srcShape = help.getSrcShape();
+        ReduceOpHelper helper(reduceOp);
+        auto srcShape = helper.getSrcShape();
         if (srcShape.size() > 1 && reduceOp.getAxis() != srcShape.size() - 1) {
           return;
         }
@@ -119,7 +121,6 @@ struct TritonXPUStoreControl
         auto allocaOp = storeOp.getPtr().getDefiningOp();
         for (Operation *user : allocaOp->getUsers()) {
           if (auto lm2gmOp = dyn_cast<triton::xpu::LM2GMOp>(user)) {
-            ifBodyOps.insert(allocaOp);
             ifBodyOps.insert(storeOp);
             ifBodyOps.insert(lm2gmOp);
           }
@@ -147,6 +148,15 @@ struct TritonXPUStoreControl
             usedCoreNum);
         auto cond = builder.create<arith::AndIOp>(
             loc, builder.getI1Type(), isCoreId0InsideGroup, sltUsedCoreNum);
+        if (srcShape.size() == 1) {
+          auto loopNum = builder.create<arith::ConstantIntOp>(
+              loc, reduceOp.getLoopNum() - 1, 32);
+          auto lastLoopCond = builder.create<arith::CmpIOp>(
+              loc, builder.getI1Type(), arith::CmpIPredicate::eq,
+              reduceOp.getLoopIndex(), loopNum);
+          cond = builder.create<arith::AndIOp>(loc, builder.getI1Type(), cond,
+                                               lastLoopCond);
+        }
         auto ifOp = builder.create<scf::IfOp>(loc, cond,
                                               /*withElseRegion=*/false);
         ifBodyMap[ifOp] = ifBodyOps;

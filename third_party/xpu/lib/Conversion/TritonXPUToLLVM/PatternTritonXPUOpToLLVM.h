@@ -18,7 +18,7 @@
 #include "triton/Analysis/Allocation.h"             // ModuleAllocation
 
 
-#include "triton/Analysis/Utility.h"
+#include "triton/Analysis/UtilityXPU.h"
 #include "xpu/lib/Conversion/TritonXPUToLLVM/Utility.h"
 
 #include "xpu/lib/Conversion/TritonXPUToLLVM/TargetInfo.h"  // TargetInfo
@@ -115,10 +115,23 @@ void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     PatternBenefit benefit);
 
 //===----------------------------------------------------------------------===//
+// triton::xpu::ScanOp -> calculation logic
+//===----------------------------------------------------------------------===//
+void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                  RewritePatternSet &patterns,
+                                  const TargetInfo &targetInfo,
+                                  PatternBenefit benefit);
+
+//===----------------------------------------------------------------------===//
 // triton::FuncOp -> LLVM::FuncOp
 //===----------------------------------------------------------------------===//
 void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
+                                     PatternBenefit benefit);
+
+void populateXPUPrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns,
+                                     const TargetInfo &targetInfo,
                                      PatternBenefit benefit);
 
 //===----------------------------------------------------------------------===//

@@ -1,8 +1,4 @@
-//===----------------------------------------------------------------------===//
-//
-// Copyright (C) 2025 by Kunlunxin. All rights reserved.
-//
-//===----------------------------------------------------------------------===//
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonXPU/IR/Dialect.h"
 #include "triton/Dialect/TritonXPU/Transforms/Passes.h"
 
@@ -33,7 +29,8 @@ public:
 
     if (loadOp_1->getBlock() == loadOp_2->getBlock() &&
         loadOp_1->isBeforeInBlock(loadOp_2)) {
-      auto gm2lmOp_1 = cast<triton::xpu::GM2LMOp>(loadOp_1->getPrevNode());
+      auto gm2lmOp_1 =
+          cast<triton::xpu::GM2LMOp>(loadOp_1.getPtr().getDefiningOp());
       gm2lmOp_1->setAttr("async", builder.getBoolAttr(true));
       loadOp_1->moveAfter(loadOp_2);
       if (dumpFlag)
@@ -46,10 +43,11 @@ public:
 
     mod->walk([&](triton::xpu::GM2LMOp gm2lmOp_1) {
       // Pruning
-      if (gm2lmOp_1.getAsync())
+      if (gm2lmOp_1.getSyncMode() == MemorySyncMode::ASYNC)
         return;
 
-      auto loadOp_1 = cast<triton::xpu::LoadOp>(gm2lmOp_1->getNextNode());
+      auto loadOp_1 =
+          cast<triton::xpu::LoadOp>(*(gm2lmOp_1->getUsers().begin()));
 
       auto loadop_user_begin = loadOp_1->user_begin();
       auto loadop_user_end = loadOp_1->user_end();

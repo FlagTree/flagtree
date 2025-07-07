@@ -27,9 +27,12 @@ struct TritonXPUCoreTilingPass
       TritonXPUCoreTilingPass>::TritonXPUCoreTilingBase;
 
   TritonXPUCoreTilingPass() = default;
-  TritonXPUCoreTilingPass(bool dumpFlag, unsigned bufferSize) {
+  TritonXPUCoreTilingPass(bool dumpFlag, unsigned bufferSize, unsigned coreNum,
+                          unsigned groupsPerCluster) {
     this->dumpFlag = dumpFlag;
     this->bufferSize = bufferSize;
+    this->coreNum = coreNum;
+    this->groupsPerCluster = groupsPerCluster;
   }
 
   inline bool isAxisNone(triton::ReduceOp &reduceOp) {
@@ -73,7 +76,6 @@ struct TritonXPUCoreTilingPass
       std::vector<unsigned> newCoresPerGroup;
       std::vector<unsigned> newGroupsPerCluster;
       std::vector<unsigned> order;
-      unsigned isReduceOpt = 1;
 
       if (rank == 1) {
         order = {0};
@@ -106,8 +108,8 @@ struct TritonXPUCoreTilingPass
         llvm_unreachable("Reduce Optimization With Rank > 2 Unsupported");
       }
       newEncoding = triton::xpu::ClusterLayoutAttr::get(
-          context, newSizePerCore, newCoresPerGroup, newGroupsPerCluster, order,
-          isReduceOpt);
+          context, newSizePerCore, newCoresPerGroup, newGroupsPerCluster,
+          order);
     }
 
     return newEncoding;
@@ -177,28 +179,30 @@ struct TritonXPUCoreTilingPass
       auto reduceOpTensorShape = helper.getSrcShape();
 
       if (reduceOpTensorShape.size() == 2) {
-        assert(reduceOp.getAxis() == 1);
-        colSize = std::max(colSize, static_cast<int>(reduceOpTensorShape[1]));
-        canBeOpt = true;
+        if (reduceOp.getAxis() == 1) {
+          colSize = std::max(colSize, static_cast<int>(reduceOpTensorShape[1]));
+          canBeOpt = true;
 
-        // rowsPerCore Upper = [128 / 16, 128 / 32, 128 / 64]
-        unsigned rowsPerCoreUpper = bufferSize / reduceOpTensorShape[1];
-        unsigned rowsPerCoreLower = 1;
+          // rowsPerCore Upper = [128 / 16, 128 / 32, 128 / 64]
+          unsigned rowsPerCoreUpper = this->bufferSize / reduceOpTensorShape[1];
+          unsigned rowsPerCoreLower = 1;
 
-        unsigned rowsPerCoreCal;
-        for (rowsPerCoreCal = rowsPerCoreUpper;
-             rowsPerCoreCal > rowsPerCoreLower; rowsPerCoreCal /= 2) {
-          if (reduceOpTensorShape[0] % (rowsPerCoreCal * core_num) == 0)
-            break;
+          unsigned rowsPerCoreCal;
+          for (rowsPerCoreCal = rowsPerCoreUpper;
+               rowsPerCoreCal > rowsPerCoreLower; rowsPerCoreCal /= 2) {
+            if (reduceOpTensorShape[0] % (rowsPerCoreCal * core_num) == 0)
+              break;
+          }
+
+          rowsPerCore = std::min<unsigned>(rowsPerCoreUpper, rowsPerCoreCal);
+          rowsPerCore = std::max<unsigned>(rowsPerCore, rowsPerCoreLower);
+          if (!getTensorColSize(mod) || colSize < rawColSize)
+            rowsPerCore = 1;
+
+          auto tensorType =
+              cast<RankedTensorType>(reduceOp.getOperandTypes()[0]);
+          checkGroupInfo(tensorType);
         }
-
-        rowsPerCore = std::min<unsigned>(rowsPerCoreUpper, rowsPerCoreCal);
-        rowsPerCore = std::max<unsigned>(rowsPerCore, rowsPerCoreLower);
-        if (!getTensorColSize(mod) || colSize < rawColSize)
-          rowsPerCore = 1;
-
-        auto tensorType = cast<RankedTensorType>(reduceOp.getOperandTypes()[0]);
-        checkGroupInfo(tensorType);
       } else if (isAxisNone(reduceOp)) {
         canBeOpt = true;
       } else if (canBeOpt) {
@@ -343,7 +347,8 @@ struct TritonXPUCoreTilingPass
         size_t ncore = _ngroup * _groupsize;
         size_t m = shape.front();
         size_t n = shape.back();
-        size_t newgroupsize = ceil<size_t>(n, static_cast<size_t>(bufferSize));
+        size_t newgroupsize =
+            ceil<size_t>(n, static_cast<size_t>(this->bufferSize));
         newgroupsize = roundupPow2(newgroupsize);
         // min is for not using the whole 64 cores case
         size_t newngroup = std::min(ceil<size_t>(ncore, newgroupsize), m);
@@ -361,28 +366,35 @@ struct TritonXPUCoreTilingPass
     };
 
     // Step 0. Get Group Info
-    mod.walk([&](mlir::Operation *op) {
-      if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
-        if (auto tensorType =
-                dyn_cast<RankedTensorType>(reduceOp.getOperandTypes()[0])) {
-          if (tensorType.getShape().size() == 2) {
-            getGroupInfo(tensorType);
-          } else if (isAxisNone(reduceOp)) {
-            auto defOp = reduceOp.getSrcs()[0].getDefiningOp();
-            if (auto reshapeOp = dyn_cast<triton::ReshapeOp>(defOp)) {
-              if (auto reshapeResTy = dyn_cast<RankedTensorType>(
-                      reshapeOp.getResult().getType())) {
-                if (reshapeResTy.getShape().size() == 1) {
-                  auto reshapeSrcTy =
-                      cast<RankedTensorType>(reshapeOp.getOperand().getType());
-                  getGroupInfo(reshapeSrcTy);
+    if (this->groupsPerCluster > 1) {
+      ngroup = this->groupsPerCluster;
+      assert(this->coreNum % ngroup == 0 &&
+             "groups_per_cluster only could be 1, 2, 4, 8, 16, 32, 64");
+      groupsize = ceil<size_t>(this->coreNum, ngroup);
+    } else {
+      mod.walk([&](mlir::Operation *op) {
+        if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
+          if (auto tensorType =
+                  dyn_cast<RankedTensorType>(reduceOp.getOperandTypes()[0])) {
+            if (tensorType.getShape().size() == 2) {
+              getGroupInfo(tensorType);
+            } else if (isAxisNone(reduceOp)) {
+              auto defOp = reduceOp.getSrcs()[0].getDefiningOp();
+              if (auto reshapeOp = dyn_cast<triton::ReshapeOp>(defOp)) {
+                if (auto reshapeResTy = dyn_cast<RankedTensorType>(
+                        reshapeOp.getResult().getType())) {
+                  if (reshapeResTy.getShape().size() == 1) {
+                    auto reshapeSrcTy = cast<RankedTensorType>(
+                        reshapeOp.getOperand().getType());
+                    getGroupInfo(reshapeSrcTy);
+                  }
                 }
               }
             }
           }
         }
-      }
-    });
+      });
+    }
     LLVM_DEBUG(llvm::dbgs() << "[Reduction SoftGroup]: "
                             << "GroupNum = " << ngroup
                             << ", GroupSize = " << groupsize << "\n");
@@ -542,10 +554,9 @@ struct TritonXPUCoreTilingPass
           std::vector<unsigned> newCoresPerGroup = {ncore};
           std::vector<unsigned> newGroupsPerCluster = {1};
           std::vector<unsigned> order = {0};
-          unsigned isReduceOpt = 1;
           Attribute newReshapeResEncoding = triton::xpu::ClusterLayoutAttr::get(
               context, newSizePerCore, newCoresPerGroup, newGroupsPerCluster,
-              order, isReduceOpt);
+              order);
           auto newReshapeResTy = RankedTensorType::get(
               reshapeResShape, reshapeResTy.getElementType(),
               newReshapeResEncoding);
@@ -563,7 +574,7 @@ struct TritonXPUCoreTilingPass
           cast<triton::xpu::ClusterLayoutAttr>(resTy.getEncoding());
       auto finEncoding = triton::xpu::ClusterLayoutAttr::get(
           context, resEncoding.getSizePerCore(), resEncoding.getCoresPerGroup(),
-          resEncoding.getGroupsPerCluster(), {0, 1}, 1);
+          resEncoding.getGroupsPerCluster(), {0, 1});
       auto finTy = RankedTensorType::get(
           resTy.getShape(), getElementTypeOrSelf(resTy), finEncoding);
 
@@ -610,8 +621,7 @@ struct TritonXPUCoreTilingPass
       if (resShape.size() == 2 && resShape[0] > core_num) {
         OpBuilder builder(loadOp);
         loadOp->setAttr("tensorColSize",
-                        builder.getSI32IntegerAttr(
-                            std::min((unsigned)resShape[1], rawColSize)));
+                        builder.getSI32IntegerAttr(resShape[1]));
       }
     });
 
@@ -622,8 +632,7 @@ struct TritonXPUCoreTilingPass
       if (resShape.size() == 2 && resShape[0] > core_num) {
         OpBuilder builder(storeOp);
         storeOp->setAttr("tensorColSize",
-                         builder.getSI32IntegerAttr(
-                             std::min((unsigned)resShape[1], rawColSize)));
+                         builder.getSI32IntegerAttr(resShape[1]));
       }
     });
   }
@@ -633,7 +642,7 @@ struct TritonXPUCoreTilingPass
     mlir::ModuleOp mod = getOperation();
 
     // Step 1. Check If Can Be Optimized
-    if (!canBeOptimized(mod))
+    if (!canBeOptimized(mod) && this->groupsPerCluster == 1)
       return;
 
     // Step 2. Collect allOpTrees && innerChains && outerChains

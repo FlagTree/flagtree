@@ -164,12 +164,10 @@ struct TritonExpandDimsPattern
     SmallVector<unsigned, 4> retOrder(retShape.size());
     std::iota(retOrder.begin(), retOrder.end(), 0);
 
-    bool isReduceOpt = argEncoding.getIsReduceOpt();
-
     triton::xpu::ClusterLayoutAttr retEncoding =
-        triton::xpu::ClusterLayoutAttr::get(
-            getContext(), retSizePerCore, retCoresPerGroup, retGroupsPerCluster,
-            retOrder, isReduceOpt);
+        triton::xpu::ClusterLayoutAttr::get(getContext(), retSizePerCore,
+                                            retCoresPerGroup,
+                                            retGroupsPerCluster, retOrder);
 
     // convert operand to slice of return type
     Attribute newArgEncoding = triton::gpu::SliceEncodingAttr::get(
@@ -320,7 +318,6 @@ struct TritonScanPattern : public OpConversionPattern<triton::ScanOp> {
   LogicalResult
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    llvm_unreachable("TODO[dyq]: Check Logic");
     auto newScan = rewriter.create<triton::ScanOp>(
         op.getLoc(), adaptor.getOperands(), adaptor.getAxis(), op.getReverse());
     addNamedAttrs(newScan, adaptor.getAttributes());
@@ -340,7 +337,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::FuncOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    llvm_unreachable("TODO[dyq]: Check Logic");
     auto converter = getTypeConverter();
     auto newOp = rewriter.replaceOpWithNewOp<triton::FuncOp>(
         op, op.getName(), op.getFunctionType());
@@ -378,6 +374,7 @@ void populateTritonPatterns(TritonXPUTypeConverter &typeConverter,
       GenericOpPattern<triton::StoreOp>, GenericOpPattern<triton::HistogramOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
+      GenericOpPattern<triton::xpu::XPUPrintOp>,
       GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
       GenericOpPattern<triton::ExperimentalDescriptorLoadOp>,

@@ -25,7 +25,7 @@ jobs:
           source ~/env.sh
           export FLAGTREE_BACKEND=xpu
           cd python
-          pip3 install . --no-build-isolation
+          MAX_JOBS=32 pip3 install . --no-build-isolation
 
       - name: FlagTree Test on Kunlun
         shell: bash

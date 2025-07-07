@@ -1,8 +1,3 @@
-//===----------------------------------------------------------------------===//
-//
-// Copyright (C) 2025 by Kunlunxin. All rights reserved.
-//
-//===----------------------------------------------------------------------===//
 #include "xpu/lib/Conversion/TritonXPUToLLVM/PatternTritonXPUOpToLLVM.h"
 
 namespace {
