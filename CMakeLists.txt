@@ -14,6 +14,10 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 # FLAGTREE Options
 set(FLAGTREE_BACKEND "$ENV{FLAGTREE_BACKEND}")
+if(FLAGTREE_BACKEND)
+    add_definitions(-DFLAGTREE_BACKEND=\"${FLAGTREE_BACKEND}\")
+endif()
+
 if(NOT FLAGTREE_BACKEND)
   add_definitions(-D__NVIDIA__)
   add_definitions(-D__AMD__)
@@ -40,6 +44,8 @@ endif()
 
 project(triton CXX C)
 include(CTest)
+
+
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
