@@ -30,4 +30,4 @@ jobs:
       - name: FlagTree Test on Kunlun
         shell: bash
         run: |
-          pytest -s third_party/xpu/python/test/unit
+          python3 -m pytest -s third_party/xpu/python/test/unit
