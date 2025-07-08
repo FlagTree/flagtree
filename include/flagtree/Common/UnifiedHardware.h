@@ -19,10 +19,12 @@ public:
   UnifiedHardware() = default;
 #ifdef FLAGTREE_BACKEND
   static bool registered;
-  int getHardwareTag();
+  int getDMATag();
+  int getSharedMemoryTag();
   std::string getFlagTreeBackend() { return FLAGTREE_BACKEND; }
 #else
-  void *getHardwareTag() { return nullptr; }
+  void *getDMATag() { return nullptr; }
+  void *getSharedMemoryTag() { return nullptr; }
   std::string getFlagTreeBackend() { return "default"; }
   static constexpr bool registered = false;
 #endif
