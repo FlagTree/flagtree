@@ -5,6 +5,8 @@
 #include "xpu/kernel/xtdk_io.h"
 #include "xpu/kernel/xtdk_fp16.h"
 
+#include <limits>
+
 #define inline __attribute__((always_inline))
 #define PI 3.14159265358979323846f
 // Value of ln2 and ln10
