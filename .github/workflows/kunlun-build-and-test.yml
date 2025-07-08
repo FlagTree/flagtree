@@ -1,5 +1,5 @@
 
-name: Kunlun-Build-And-Test
+name: Xpu-Build-And-Test
 
 on:
   push:
@@ -12,14 +12,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  kunlun-build-and-test:
-    runs-on: kunlun
+  xpu-build-and-test:
+    runs-on: xpu
     if: ${{ github.repository == 'FlagTree/flagtree' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: FlagTree Build on Kunlun
+      - name: FlagTree Build on Xpu
         shell: bash
         run: |
           source ~/env.sh
@@ -27,7 +27,7 @@ jobs:
           cd python
           MAX_JOBS=32 pip3 install . --no-build-isolation
 
-      - name: FlagTree Test on Kunlun
+      - name: FlagTree Test on Xpu
         shell: bash
         run: |
           python3 -m pytest -s third_party/xpu/python/test/unit
