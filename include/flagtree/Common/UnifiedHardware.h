@@ -23,10 +23,10 @@ public:
   int getSharedMemoryTag();
   std::string getFlagTreeBackend() { return FLAGTREE_BACKEND; }
 #else
+  static constexpr bool registered = false;
   void *getDMATag() { return nullptr; }
   void *getSharedMemoryTag() { return nullptr; }
   std::string getFlagTreeBackend() { return "default"; }
-  static constexpr bool registered = false;
 #endif
 };
 
