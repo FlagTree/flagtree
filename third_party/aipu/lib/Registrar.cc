@@ -1,2 +1,2 @@
 #include "flagtree/Common/UnifiedHardware.h"
-FLAGTREE_REGISTRAR(HardwareTag, 11)
+FLAGTREE_REGISTRAR(DMATag, 11)
