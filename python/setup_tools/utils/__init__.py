@@ -20,7 +20,7 @@ flagtree_backends = (
     FlagTreeBackend(name="cambricon", url="https://github.com/Cambricon/triton-linalg.git",
                     tag="00f51c2e48a943922f86f03d58e29f514def646d"),
     FlagTreeBackend(name="flir", url="git@github.com:FlagTree/flir.git",
-                    tag="243690fb1c8b9f032c1f938271414831a6cfe406"),
+                    tag="0d422c20b74ffefc83507e1acdd683ee2f833e3b"),
     FlagTreeBackend(name="ascend", url="https://gitee.com/ascend/triton-ascend.git"),
 )
 
