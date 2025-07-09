@@ -79,6 +79,111 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                 evict, isVolatile);
 }
 
+/********************** TritonXPU *********************************/
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   CacheModifier cache, EvictionPolicy evict, bool isVolatile,
+                   OffsetStatePolicy offsetState) {
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
+                /*boundaryCheck=*/ArrayRef<int32_t>{}, /*padding=*/std::nullopt,
+                cache, evict, isVolatile, offsetState);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   ArrayRef<int32_t> boundaryCheck,
+                   std::optional<PaddingOption> padding, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   OffsetStatePolicy offsetState) {
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, boundaryCheck,
+                padding, cache, evict, isVolatile, offsetState);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, CacheModifier cache, EvictionPolicy evict,
+                   bool isVolatile, OffsetStatePolicy offsetState) {
+  LoadOp::build(builder, state, ptr, mask, /*other=*/{},
+                /*boundaryCheck=*/ArrayRef<int32_t>{},
+                /*padding=*/std::nullopt, cache, evict, isVolatile,
+                offsetState);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   OffsetStatePolicy offsetState) {
+  LoadOp::build(builder, state, ptr, mask, other,
+                /*boundaryCheck=*/ArrayRef<int32_t>{},
+                /*padding=*/std::nullopt, cache, evict, isVolatile,
+                offsetState);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, ArrayRef<int32_t> boundaryCheck,
+                   std::optional<PaddingOption> padding, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   OffsetStatePolicy offsetState) {
+  auto paddingAttr =
+      padding.has_value()
+          ? PaddingOptionAttr::get(builder.getContext(), padding.value())
+          : PaddingOptionAttr();
+  LoadOp::build(builder, state, ptr, mask, other,
+                builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
+                evict, isVolatile, offsetState);
+}
+
+/********************** TritonXPU *********************************/
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   CacheModifier cache, EvictionPolicy evict, bool isVolatile,
+                   OffsetStatePolicy offsetState, MemorySyncMode syncMode) {
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
+                /*boundaryCheck=*/ArrayRef<int32_t>{}, /*padding=*/std::nullopt,
+                cache, evict, isVolatile, offsetState, syncMode);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   ArrayRef<int32_t> boundaryCheck,
+                   std::optional<PaddingOption> padding, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   OffsetStatePolicy offsetState, MemorySyncMode syncMode) {
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, boundaryCheck,
+                padding, cache, evict, isVolatile, offsetState, syncMode);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, CacheModifier cache, EvictionPolicy evict,
+                   bool isVolatile, OffsetStatePolicy offsetState,
+                   MemorySyncMode syncMode) {
+  LoadOp::build(builder, state, ptr, mask, /*other=*/{},
+                /*boundaryCheck=*/ArrayRef<int32_t>{},
+                /*padding=*/std::nullopt, cache, evict, isVolatile, offsetState,
+                syncMode);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   OffsetStatePolicy offsetState, MemorySyncMode syncMode) {
+  LoadOp::build(builder, state, ptr, mask, other,
+                /*boundaryCheck=*/ArrayRef<int32_t>{},
+                /*padding=*/std::nullopt, cache, evict, isVolatile, offsetState,
+                syncMode);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, ArrayRef<int32_t> boundaryCheck,
+                   std::optional<PaddingOption> padding, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile,
+                   OffsetStatePolicy offsetState, MemorySyncMode syncMode) {
+  auto paddingAttr =
+      padding.has_value()
+          ? PaddingOptionAttr::get(builder.getContext(), padding.value())
+          : PaddingOptionAttr();
+  LoadOp::build(builder, state, ptr, mask, other,
+                builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
+                evict, isVolatile, offsetState, syncMode);
+}
+
+/********************** TritonXPU *********************************/
+
 // load(ptr, splat(1), ...)        -> load(ptr, ...)
 // load(ptr, splat(0), other, ...) -> other
 struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
@@ -146,6 +251,58 @@ void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                         builder.getDenseI32ArrayAttr(boundaryCheck), cache,
                         evict);
 }
+
+/********************** TritonXPU *********************************/
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, CacheModifier cache, EvictionPolicy evict,
+                    OffsetStatePolicy offsetState) {
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                        /*boundaryCheck=*/{}, cache, evict, offsetState);
+}
+
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, Value mask, CacheModifier cache,
+                    EvictionPolicy evict, OffsetStatePolicy offsetState) {
+  return StoreOp::build(builder, state, ptr, value, mask, /*boundaryCheck=*/{},
+                        cache, evict, offsetState);
+}
+
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, ArrayRef<int32_t> boundaryCheck,
+                    CacheModifier cache, EvictionPolicy evict,
+                    OffsetStatePolicy offsetState) {
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                        builder.getDenseI32ArrayAttr(boundaryCheck), cache,
+                        evict, offsetState);
+}
+
+/********************** TritonXPU *********************************/
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, CacheModifier cache, EvictionPolicy evict,
+                    OffsetStatePolicy offsetState, MemorySyncMode syncMode) {
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                        /*boundaryCheck=*/{}, cache, evict, offsetState,
+                        syncMode);
+}
+
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, Value mask, CacheModifier cache,
+                    EvictionPolicy evict, OffsetStatePolicy offsetState,
+                    MemorySyncMode syncMode) {
+  return StoreOp::build(builder, state, ptr, value, mask, /*boundaryCheck=*/{},
+                        cache, evict, offsetState, syncMode);
+}
+
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, ArrayRef<int32_t> boundaryCheck,
+                    CacheModifier cache, EvictionPolicy evict,
+                    OffsetStatePolicy offsetState, MemorySyncMode syncMode) {
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                        builder.getDenseI32ArrayAttr(boundaryCheck), cache,
+                        evict, offsetState, syncMode);
+}
+
+/********************** TritonXPU *********************************/
 
 // store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
 // store(ptr, value, splat(0), ...) -> [none]
@@ -284,10 +441,14 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
 LogicalResult DotOp::verify() {
   auto aTy = getA().getType();
   auto bTy = getB().getType();
-  if (aTy.getElementType().getIntOrFloatBitWidth() !=
-      bTy.getElementType().getIntOrFloatBitWidth())
-    return emitError(
-        "element types of operands A and B must have same bit width");
+  auto aBitWidth = aTy.getElementType().getIntOrFloatBitWidth();
+  auto bBitWidth = bTy.getElementType().getIntOrFloatBitWidth();
+  if (aBitWidth != bBitWidth) {
+    if (!(aBitWidth == 8 && bBitWidth == 4)) {
+      return emitError(
+          "element types of operands A and B must have the same bit width");
+    }
+  }
   auto aEncoding = aTy.getEncoding();
   auto bEncoding = bTy.getEncoding();
   if (!aEncoding && !bEncoding)
