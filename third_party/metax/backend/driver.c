@@ -60,9 +60,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   mcDeviceGet(&device, device_id);
 
   // create a struct to hold device properties
-  int max_shared_mem =
-      64 *
-      1024; // 64KB, no CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN
+  int max_shared_mem = 64 * 1024; // 64KB, no CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN
   int max_num_regs;
   int multiprocessor_count;
   int warp_size = 64;
@@ -73,8 +71,8 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
       &max_num_regs, mcDeviceAttributeMaxSharedMemoryPerBlock, device));
   MACA_CHECK_AND_RETURN_NULL(mcDeviceGetAttribute(
       &multiprocessor_count, mcDeviceAttributeMultiProcessorCount, device));
-  MACA_CHECK_AND_RETURN_NULL(
-      mcDeviceGetAttribute(&sm_clock_rate, mcDeviceAttributeClockRate, device));
+  MACA_CHECK_AND_RETURN_NULL(mcDeviceGetAttribute(
+      &sm_clock_rate, mcDeviceAttributeClockRate, device));
   MACA_CHECK_AND_RETURN_NULL(mcDeviceGetAttribute(
       &mem_clock_rate, mcDeviceAttributeMemoryClockRate, device));
   MACA_CHECK_AND_RETURN_NULL(mcDeviceGetAttribute(
@@ -106,6 +104,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   MCcontext pctx = 0;
 
   Py_BEGIN_ALLOW_THREADS;
+  // TODO: MCcontext implement not found
   MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(mcCtxGetCurrent(&pctx));
   if (!pctx) {
     MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
@@ -113,22 +112,19 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(mcCtxSetCurrent(pctx));
   }
   MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(mcModuleLoadData(&mod, data));
-  MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-      mcModuleGetFunction(&fun, mod, name));
+  MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(mcModuleGetFunction(&fun, mod, name));
   // get allocated registers and spilled registers from the function
   MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
       mcFuncGetAttribute(&n_regs, MC_FUNC_ATTRIBUTE_NUM_REGS, fun));
   MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
       mcFuncGetAttribute(&n_spills, MC_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun));
   n_spills /= 4;
-
   Py_END_ALLOW_THREADS;
 
   if (PyErr_Occurred()) {
     return NULL;
   }
-  return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs,
-                       n_spills);
+  return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs, n_spills);
 }
 
 static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
@@ -141,6 +137,33 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
     return NULL;
   }
 
+  Py_BEGIN_ALLOW_THREADS;
+
+  // Ensure we have an active context.
+  // MCcontext ctx = NULL;
+  // TODO: CU_LIMIT_PRINTF_FIFO_SIZE implement not found
+  // MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(mcCtxGetCurrent(&ctx));
+  // if (!ctx) {
+  //   MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+  //       mcDevicePrimaryCtxRetain(&ctx, /*device=*/0));
+  //   MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(mcCtxSetCurrent(ctx));
+  // }
+
+  // // We can't set the fifo size after running a kernel that calls printf.  This
+  // // is true even if the set() call is a nop and the new size is the same as the
+  // // old size.
+  // //
+  // // This is unfriendly, so check if the old size matches the new size, and skip
+  // // the set() call if so.
+  // size_t oldSize = 0;
+  // MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+  //     mcCtxGetLimit(&oldSize, CU_LIMIT_PRINTF_FIFO_SIZE));
+  // if (oldSize != size) {
+  //   MACA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+  //       mcCtxSetLimit(CU_LIMIT_PRINTF_FIFO_SIZE, size));
+  // }
+
+  Py_END_ALLOW_THREADS;
   return Py_None;
 }
 
