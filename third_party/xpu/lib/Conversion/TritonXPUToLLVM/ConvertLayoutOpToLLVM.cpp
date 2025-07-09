@@ -44,8 +44,10 @@ struct XPUConvertLayoutOpConversion
                              ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
-    RankedTensorType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
+    Value src = op.getSrc();
+    Value dst = op.getResult();
+    auto srcTy = cast<RankedTensorType>(src.getType());
+    auto dstTy = cast<RankedTensorType>(dst.getType());
 
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     Value ret = packLLElements(loc, typeConverter, vals, rewriter, dstTy);

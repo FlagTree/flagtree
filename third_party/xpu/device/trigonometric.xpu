@@ -1,13 +1,11 @@
-//===----------------------------------------------------------------------===//
-//
-// Copyright (C) 2025 by Kunlunxin. All rights reserved.
-//
-//===----------------------------------------------------------------------===//
 #include "xpu/kernel/xtdk.h"
 #include "xpu/kernel/xtdk_math.h"
 #include "xpu/kernel/xtdk_simd.h"
 #include "xpu/kernel/xtdk_atomic_sm_xpu3.h"
 #include "xpu/kernel/xtdk_io.h"
+#include "xpu/kernel/xtdk_fp16.h"
+
+#include <limits>
 
 #define inline __attribute__((always_inline))
 #define PI 3.14159265358979323846f
@@ -39,6 +37,8 @@ typedef struct {
 typedef _Float16 float16;
 #endif
 
+#define __CHECK_CLUSTER_ID (0)
+
 
 __device__ inline void printTest(int customIdx) {
     printf("[printTest_%d] cluster_id[%d] cid[%d/%d]\n", customIdx, cluster_id(), core_num(), core_id());
@@ -47,7 +47,7 @@ __device__ inline void printTest(int customIdx) {
 __device__ inline void printBool(bool b, int customIdx) {
     int clusterId = cluster_id();
     int coreId = core_id();
-    if (clusterId == 0 && coreId == 0) {
+    if (clusterId == __CHECK_CLUSTER_ID && coreId == 0) {
         if (b) {
             printf("[printBool_%d] cluster_id = %d, core_id = %d, local_x[0] = true \n", customIdx, clusterId, coreId);
         } else {
@@ -59,48 +59,121 @@ __device__ inline void printBool(bool b, int customIdx) {
 __device__ inline void printFloat(float a, int customIdx) {
     int clusterId = cluster_id();
     int coreId = core_id();
-    if (clusterId == 0 && coreId == 0) {
+    if (clusterId == __CHECK_CLUSTER_ID && coreId == 0) {
         printf("[printFloat_%d] cluster_id = %d, core_id = %d, local_x[0] = %f \n", customIdx, clusterId, coreId, a);
     }
+}
+
+__device__ inline void printFloat_spec(float a, int clu_id, int cid, int customIdx) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == __CHECK_CLUSTER_ID && coreId == cid) {
+        printf("[printFloat_%d] cluster_id = %d, core_id = %d, local_x[0] = %f \n", customIdx, clusterId, coreId, a);
+    }
+}
+
+__device__ inline void printFloat_all(float a, int customIdx) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    printf("[printFloat_%d] cluster_id = %d, core_id = %d, local_x[0] = %f \n", customIdx, clusterId, coreId, a);
 }
 
 __device__ inline void printInt(int a, int customIdx) {
     int clusterId = cluster_id();
     int coreId = core_id();
-    if (clusterId == 0 && coreId == 0) {
+    if (clusterId == __CHECK_CLUSTER_ID && coreId == 0) {
         printf("[printInt_%d] cluster_id = %d, core_id = %d, local_x[0] = %d \n", customIdx, clusterId, coreId, a);
     }
 }
 
-__device__ inline void printMMaOp(int a, int b, int c) {
+__device__ inline void printInt64(int64_t a, int customIdx) {
     int clusterId = cluster_id();
     int coreId = core_id();
-    if (clusterId == 0) {
-        printf("[printMMAOp] cluster_id = %d, core_id = %d, mma %d %d %d\n", clusterId, coreId, a, b, c);
+    if (clusterId == __CHECK_CLUSTER_ID && coreId == 0) {
+        printf("[printInt64_%d] cluster_id = %d, core_id = %d, local_x[0] = %ld \n", customIdx, clusterId, coreId, a);
+    }
+}
+
+__device__ inline void printMMaOp(int a, int b, int c, int isAcc) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printMMAOp] cluster_id = %d, core_id = %d, mma %d %d %d isAcc %d\n", clusterId, coreId, a, b, c, isAcc);
     }
 }
 
 __device__ inline void printDsOp(int a, int b) {
     int clusterId = cluster_id();
     int coreId = core_id();
-    if (clusterId == 0) {
-        printf("[printDsOp] cluster_id = %d, core_id = %d, ds %d %d\n", clusterId, coreId, a, b);
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printDsOp l1d] cluster_id = %d, core_id = %d, ds %d %d\n", clusterId, coreId, a, b);
     }
 }
 
-__device__ inline void printDmaOp(int a) {
+ __device__ inline void printGatherOp(int a, int b) {
     int clusterId = cluster_id();
     int coreId = core_id();
-    if (clusterId == 0) {
-        printf("[printDmaOp] cluster_id = %d, core_id = %d, dma %d\n", clusterId, coreId, a);
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printGatherOp gather] cluster_id = %d, core_id = %d, gather line and mask: %d %d\n", clusterId, coreId, a, b);
+    }
+}
+
+ __device__ inline void printScatterOp(int a, int b) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printScatterOp scatter] cluster_id = %d, core_id = %d, scatter line and mask: %d %d\n", clusterId, coreId, a, b);
+    }
+}
+
+__device__ inline void printDmaOp(int64_t a, int b, int c, int is_cached) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printDmaOp] cluster_id = %d, core_id = %d, dma is_cached? %d src 0x%lx unisram 0x%x len %d\n", clusterId, coreId, is_cached, a, b, c);
+    }
+}
+
+__device__ inline void printDmaolOp(int64_t a) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printDmaolOp] cluster_id = %d, core_id = %d, dmao %ld\n", clusterId, coreId, a);
     }
 }
 
 __device__ inline void printDmaoOp(int a) {
     int clusterId = cluster_id();
     int coreId = core_id();
-    if (clusterId == 0) {
+    if (clusterId == __CHECK_CLUSTER_ID) {
         printf("[printDMAOop] cluster_id = %d, core_id = %d, dmao %d\n", clusterId, coreId, a);
+    }
+}
+
+__device__ inline void printDsCachedL1d(int isCached, int offset, int bufferAddr) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printDsIscached] cluster_id = %d, core_id = %d, ds cached? %d, unisram %d l1d %d\n",
+            clusterId, coreId, isCached, offset, bufferAddr);
+    }
+}
+
+__device__ inline void printDsCachedL1w(int isCached, int offset, int bufferAddr) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printDsIscached] cluster_id = %d, core_id = %d, ds cached? %d, unisram %d l1w %d\n",
+            clusterId, coreId, isCached, offset, bufferAddr);
+    }
+}
+
+__device__ inline void printGetCacheOp(int is_cached, int offset, int bufferIdx, int addr) {
+    int clusterId = cluster_id();
+    int coreId = core_id();
+    if (clusterId == __CHECK_CLUSTER_ID) {
+        printf("[printGetCacheOp] cluster_id = %d, core_id = %d, ds cached? %d, offset %d bufferIdx %d, l1dw %d\n",
+            clusterId, coreId, is_cached, offset, bufferIdx, addr);
     }
 }
 
@@ -109,14 +182,11 @@ __device__ void inline fp16tofp32(const float16* x, float* y, int len) {
     x = x + start;
     y = y + start;
     for (int i = start; i >= 0; i -= 32) {
-        float16x32_t X;
-        float32x16_t X_l;
-        float32x16_t X_h;
-        __asm__ __volatile__("vload.mz %0{mr1}, 0(%1)":"=&v"(X):"r"(x));
-        __asm__ __volatile__("vfp162float_l.rn %0, %1":"=&v"(X_l):"v"(X));
-        __asm__ __volatile__("vfp162float_h.rn %0, %1":"=&v"(X_h):"v"(X));
-        __asm__ __volatile__("vstore_mask16.mz %0{mr1}, 0(%1)"::"v"(X_h), "r"(y + 16));
-        __asm__ __volatile__("vstore_mask16.mz %0{mr1}, 0(%1)"::"v"(X_l), "r"(y));
+        float16x32_t X = vload_lm_float16x32(x);
+        float32x16_t X_l = vfp162float_l(X);
+        float32x16_t X_h = vfp162float_h(X);
+        vstore_lm_float32x16_mz(y + 16, X_h, 0);
+        vstore_lm_float32x16_mz(y, X_l, 0);
         x -= 32;
         y -= 32;
     }
@@ -126,12 +196,12 @@ __device__ void inline fp16tofp32(const float16* x, float* y, int len) {
 
 __device__ void inline fp32tofp16(const float* x, float16* y, int len) {
     for (int i = 0; i < len; i += 32) {
-        float32x16_t Y_h = __builtin_xpu2_vload_mask16_mr1(x + 16, 0);
         float32x16_t Y_l = __builtin_xpu2_vload_mask16_mr1(x, 0);
-        __asm__ __volatile__("vfloat2fp16_l.rn vr0, %0\t\n"
-                "vfloat2fp16_h.rn vr0, %1\t\n"
-                "vstore.mz vr0{mr1}, 0(%2)"
-                ::"v"(Y_l), "v"(Y_h), "r"(y):"vr0");
+        float32x16_t Y_h = __builtin_xpu2_vload_mask16_mr1(x + 16, 0);
+        float16x32_t Y;
+        Y = vfloat2fp16_l(Y_l, Y);
+        Y = vfloat2fp16_h(Y_h, Y);
+        vstore_lm_float16x32_mz(y, Y, 0);
         x += 32;
         y += 32;
     }
@@ -219,9 +289,9 @@ __device__ inline float32x16_t vsinf(float32x16_t input) {
     // 把转成float32的数在LM进行处理，使得处于区间[-pi, pi]
     __simd__ float tmp_lm[16];
     vstore_lm_float32x16(tmp_lm, input);
-    __asm__("mfence{lm}");
+    mfence_lm();
     translation_sin(tmp_lm, 16);
-    __asm__("mfence{lm}");
+    mfence_lm();
 
     float32x16_t tmp1, tmp2, v0l;
     v0l = vload_lm_float32x16(tmp_lm);
@@ -283,9 +353,9 @@ __device__ inline float32x16_t vcosf(float32x16_t input) {
     // 把转成float32的数在LM进行处理，使得处于区间[-pi, pi]
     __simd__ float tmp_lm[16];
     vstore_lm_float32x16(tmp_lm, input);
-    __asm__("mfence{lm}");
+    mfence_lm();
     translation_cos(tmp_lm, 16);
-    __asm__("mfence{lm}");
+    mfence_lm();
 
     float32x16_t tmp1, tmp2, v0l;
     v0l = vload_lm_float32x16(tmp_lm);
@@ -455,20 +525,52 @@ __device__ inline float atanf(float input) {
     return result;
 }
 
-__device__ inline float atan2f(float input, float other) {
-    if (other > 0) {
-        return atanf(input / other);
-    } else if (other < 0 && input >= 0) {
-        return atanf(input / other) + PI;
-    } else if (other < 0 && input < 0) {
-        return atanf(input / other) - PI;
-    } else if (other == 0 && input > 0) {
-        return PI / 2;
-    } else if (other == 0 && input < 0) {
-        return -PI / 2;
-    } else {
-        return 0;
-    }
+#define BUILTIN_DIV_F32(X, Y)           \
+  ({                                    \
+    float _div_x = X;                   \
+    float _div_y = Y;                   \
+    float _div_ret = _div_x / _div_y;   \
+    _div_ret;                           \
+  })
+
+__attribute__((const)) __device__ float MATH_PRIVATE_F32_atanred(float v) {
+  float t = v * v;
+  float z = __builtin_fmaf(
+      t,
+      __builtin_fmaf(
+          t,
+          __builtin_fmaf(
+              t,
+              __builtin_fmaf(
+                  t,
+                  __builtin_fmaf(t, __builtin_fmaf(t, __builtin_fmaf(t, 0x1.5a54bp-9f, -0x1.f4b218p-7f), 0x1.53f67ep-5f),
+                               -0x1.2fa9aep-4f),
+                  0x1.b26364p-4f),
+              -0x1.22c1ccp-3f),
+          0x1.99717ep-3f),
+      -0x1.5554c4p-2f);
+  z = __builtin_fmaf(v, t * z, v);
+  return z;
+}
+
+__device__ inline float atan2f(float y, float x) {
+  const float pi = 0x1.921fb6p+1f;
+  const float piby2 = 0x1.921fb6p+0f;
+  const float piby4 = 0x1.921fb6p-1f;
+  const float threepiby4 = 0x1.2d97c8p+1f;
+  float ax = __builtin_fabsf(x);
+  float ay = __builtin_fabsf(y);
+  float v = __builtin_fminf(ax, ay);
+  float u = __builtin_fmaxf(ax, ay);
+  float vbyu = BUILTIN_DIV_F32(v, u);
+  float a = MATH_PRIVATE_F32_atanred(vbyu);
+  float t = piby2 - a;
+  a = ay > ax ? t : a;
+  t = pi - a;
+  a = x < 0.0f ? t : a;
+  t = ((int)(x)) < 0 ? pi : 0.0f;
+  a = y == 0.0f ? t : a;
+  return __builtin_copysignf(a, y);
 }
 
 __device__ inline float sinhf(float input) {
@@ -565,6 +667,59 @@ __device__ inline double __dsqrt_rn(double __a) {
   double dsqrt = sqrt(__a);
   double rounded_dsqrt = static_cast<double>(dsqrt);
   return rounded_dsqrt;
+}
+
+__device__ inline float32x16_t vrsqrtf(float32x16_t input) {
+    int len = 16;
+    __simd__ float input_lm[len];
+    __simd__ float res_lm[len];
+    vstore_lm_float32x16(input_lm, input);
+    __builtin_xpu2_mfence(1);
+    for (int k = 0; k < len; k++) {
+        float input_tmp = *(input_lm + k);
+        float rsqrt_tmp = rsqrtf(input_tmp);
+        *(res_lm + k) = rsqrt_tmp;
+    }
+    __builtin_xpu2_mfence(1);
+    float32x16_t res = vload_lm_float32x16(res_lm);
+    return res;
+}
+
+static __device__ inline float32x16_t calc_fast_rsqrt(float32x16_t v0_l, int mask_l = -1) {
+    float32x16_t v1_l, v2_l;
+    // x2 = 0.5f * x
+    v1_l = svmul_float32x16(0.5f, v0_l);
+    // i = *(*long)(&x)
+    // i = 0x5f3759df - (i >> 1)
+    // y = *(float *)&i
+    v0_l = reinterpret_cast<float32x16_t>(svsrl_int32x16(1, reinterpret_cast<int32x16_t>(v0_l)));
+    v0_l = reinterpret_cast<float32x16_t>(svsub_int32x16(0x5f3759df, reinterpret_cast<int32x16_t>(v0_l)));
+    // y = y * (1.5f - (x2 * y * y)), 迭代3次
+    v2_l = vvmul_float32x16(v1_l, v0_l);
+    v2_l = vvmul_float32x16(v0_l, v2_l);
+    v2_l = svsub_float32x16(1.5f, v2_l);
+    v0_l = vvmul_float32x16(v0_l, v2_l);
+    v2_l = vvmul_float32x16(v1_l, v0_l);
+    v2_l = vvmul_float32x16(v0_l, v2_l);
+    v2_l = svsub_float32x16(1.5f, v2_l);
+    v0_l = vvmul_float32x16(v0_l, v2_l);
+    v2_l = vvmul_float32x16(v1_l, v0_l);
+    v2_l = vvmul_float32x16(v0_l, v2_l);
+    v2_l = svsub_float32x16(1.5f, v2_l);
+    float32x16_t res = vvmul_float32x16_mz(v0_l, v2_l, mask_l);
+    return res;
+}
+
+__device__ inline float32x16_t vrsqrtf_fast(float32x16_t v0_l) {
+    int ge_zero_mask_l = svle_float32x16(0.0f, v0_l);
+    int neq_inf_mask_l = svneq_float32x16(std::numeric_limits<float>::infinity(), v0_l);
+    int eq_zero_mask_l = sveq_float32x16(0.0f, v0_l);
+    float32x16_t v0_l_or_inf = svor_float32x16_mz(std::numeric_limits<float>::infinity(), v0_l, eq_zero_mask_l);
+    int no_modified_flag_all_l = ~((~ge_zero_mask_l) | (~neq_inf_mask_l) | (eq_zero_mask_l));
+    float32x16_t calc_res = calc_fast_rsqrt(v0_l, no_modified_flag_all_l);
+    calc_res = vvor_float32x16(calc_res, v0_l_or_inf);
+    float32x16_t res = svor_float32x16_mh(std::numeric_limits<float>::quiet_NaN(), (calc_res), (calc_res), ~ge_zero_mask_l);
+    return res;
 }
 
 __device__ inline float pow(float input1, float input2) {
@@ -1229,6 +1384,74 @@ __device__ inline int __signbitf(float a) {
   return a < 0.f;
 }
 
+// ge
+__device__ inline uint32_t vvgefp32(float32x16_t vx, float32x16_t vy) {
+  uint32_t mask = (static_cast<uint32_t>(vvle_float32x16(vy, vx)) & 0x0000FFFF);
+  return mask;
+}
+
+__device__ inline uint32_t vvgefp16(float16x32_t vx, float16x32_t vy) {
+  uint32_t mask = static_cast<uint32_t>(vvle_float16x32(vy, vx));
+  return mask;
+}
+
+// le
+__device__ inline uint32_t vvlefp32(float32x16_t vx, float32x16_t vy) {
+  uint32_t mask = (~static_cast<uint32_t>(vvlt_float32x16(vy, vx)) & 0x0000FFFF);
+  return mask;
+}
+
+__device__ inline uint32_t vvlefp16(float16x32_t vx, float16x32_t vy) {
+  uint32_t mask = static_cast<uint32_t>(~vvlt_float16x32(vy, vx));
+  return mask;
+}
+
+// lt
+__device__ inline uint32_t vvltfp32(float32x16_t vx, float32x16_t vy) {
+  uint32_t mask = (static_cast<uint32_t>(vvlt_float32x16(vx, vy)) & 0x0000FFFF);
+  return mask;
+}
+
+__device__ inline uint32_t vvltfp16(float16x32_t vx, float16x32_t vy) {
+  uint32_t mask = static_cast<uint32_t>(vvlt_float16x32(vx, vy));
+  return mask;
+}
+
+// gt
+__device__ inline uint32_t vvgtfp32(float32x16_t vx, float32x16_t vy) {
+  uint32_t mask = (static_cast<uint32_t>(vvlt_float32x16(vy, vx)) & 0x0000FFFF);
+  return mask;
+}
+
+__device__ inline uint32_t vvgtfp16(float16x32_t vx, float16x32_t vy) {
+  uint32_t mask = static_cast<uint32_t>(vvlt_float16x32(vy, vx));
+  return mask;
+}
+
+// ne
+__device__ inline uint32_t vvnefp32(float32x16_t vx, float32x16_t vy) {
+  uint32_t mask = (static_cast<uint32_t>(vvneq_float32x16(vy, vx)) & 0x0000FFFF);
+  return mask;
+}
+
+__device__ inline uint32_t vvnefp16(float16x32_t vx, float16x32_t vy) {
+  uint32_t mask = static_cast<uint32_t>(vvneq_float16x32(vy, vx));
+  return mask;
+}
+
+__device__ inline void vstorei8(uint32_t mask0, uint32_t mask1, uint32_t mask2, uint32_t mask3, int8_t* z) {
+  int8x64_t res(0x01);
+  unsigned long long mask = mask0 | 0x0000000000000000;
+  unsigned long long mask_tmp = mask2 | 0x0000000000000000;
+  mask1 = mask1 << 16;
+  mask = mask1 | mask;
+  mask3 = mask3 << 16;
+  mask_tmp = mask3 | mask_tmp;
+  mask_tmp = mask_tmp << 32;
+  mask = mask_tmp | mask;
+  vstore_lm_int8x64_mz(z, res, mask);
+}
+
 // float16
 #ifdef __arch_xpu3__
 __device__ inline float fp16tofp32(float16 input) {
@@ -1439,6 +1662,230 @@ __device__ float16 atomicAdd(__global_ptr__ float16 *address, float16 val) {
     ticket_unlock_mix();
     return x;
   }
+}
+
+
+__device__ float atomicMul(__global_ptr__ float *address, float val) {
+  if ((long)address >= GM_BASE_ADDR) {
+    xtransLock();
+    float x = *address;
+    *address = x * val;
+    xtransUnlock();
+    return x;
+  } else {
+    ticket_lock_mix();
+    float x = *address;
+    *address = x * val;
+    ticket_unlock_mix();
+    return x;
+  }
+}
+
+__device__ float16 atomicMul(__global_ptr__ float16 *address, float16 val) {
+  if ((long)address >= GM_BASE_ADDR) {
+    xtransLock();
+    float16 x = *address;
+    *address = __hmul(x, val);
+    xtransUnlock();
+    return x;
+  } else {
+    ticket_lock_mix();
+    float16 x = *address;
+    *address = __hmul(x, val);
+    ticket_unlock_mix();
+    return x;
+  }
+}
+
+__device__ uint8_t fp32_to_fp8_e4m3_fnuz_rne(float f) {
+    // 通过 union 重解释浮点数，避免 memcpy
+    union { float f; uint32_t u; } v = { f };
+    uint32_t bits = v.u;
+    uint32_t sign = bits >> 31;                       // 提取符号
+    int32_t exp = ((bits >> 23) & 0xFF) - 127;          // 去偏后的FP32指数
+
+    // FP8 E4M3 的有效指数范围为 [-6, 7]，超出部分直接饱和或冲零
+    if(exp > 7) return (uint8_t)((sign << 7) | 0x7F);   // 溢出，返回最大值（符号位不变）
+    if(exp < -6) return (uint8_t)(sign << 7);           // 下溢，冲零
+
+    int new_exp = exp + 7;                            // 重新偏移为 FP8 的指数（偏移 7）
+    // 取出 FP32 尾数并加上隐含的 1
+    uint32_t sig = (bits & 0x7FFFFF) | 0x800000;
+    // 为 FP8，我们只需要 4 位：1位隐含整数部分+3位尾数
+    // 这里先右移 20 位，余下的低 20 位用于舍入判断
+    uint32_t base = sig >> 20;            // 初步截断后的 4 位
+    uint32_t r = sig & ((1u << 20) - 1);    // 余下的 20 位
+    const uint32_t half = 1u << 19;         // 舍入位（中间值）
+
+    // 计算舍入增量：round-to-nearest-even
+    // 若余数大于 half 或等于 half 且低位为奇数，则加 1
+    uint32_t incr = ((r > half) || ((r == half) && (base & 1))) ? 1 : 0;
+    base += incr;
+
+    // 如果舍入后进位溢出 4 位，则右移一位并调整指数
+    if(base >= 16) {
+        base >>= 1;
+        new_exp++;
+    }
+    return (uint8_t)((sign << 7) | (new_exp << 3) | (base & 0x7));
+}
+
+__device__ uint8_t fp32_to_fp8_e5m2_funz_rne(float f) {
+    // 通过 union 重解释浮点数，避免 memcpy 带来的开销
+    union { float f; uint32_t u; } v = { f };
+    uint32_t bits = v.u;
+    uint32_t sign = bits >> 31;                   // 提取符号
+    int32_t exp = ((bits >> 23) & 0xFF) - 127;      // FP32 去偏指数
+    uint32_t mant = bits & 0x7FFFFF;                // FP32 尾数
+
+    // FP8 E5M2 的有效正规数范围对应 FP32 指数 e ∈ [-14, 15]
+    if(exp > 15)
+        // 超出最大值时饱和为最大有限值：符号不变，指数设为 30（即 15+15-1），尾数全 1
+        return (uint8_t)((sign << 7) | ((30 << 2) | 0x3));
+    if(exp < -14)
+        // 下溢：直接冲零（FUNZ规则，不产生子正规数）
+        return (uint8_t)(sign << 7);
+
+    // 重新偏移 FP8 指数：new_exp = e + 15
+    int new_exp = exp + 15;
+
+    // 组合隐含1与 FP32 尾数得到 24 位有效数字
+    uint32_t sig = (1u << 23) | mant;
+    // 为 FP8 E5M2，我们需要 3 位精度（1隐含位 + 2尾数位），故右移 (24 - 3) = 21 位
+    uint32_t base = sig >> 21;
+    // 余下的 21 位用于判断舍入
+    uint32_t r = sig & ((1u << 21) - 1);
+    const uint32_t half = 1u << 20;  // 舍入中间值
+
+    // round-to-nearest-even 舍入
+    if ((r > half) || ((r == half) && (base & 1))) {
+        base++;
+        // 若舍入导致隐含位溢出（3位数溢出为 4 位），则右移一位并增加指数
+        if (base == 8) {
+            base >>= 1;
+            new_exp++;
+            // 若指数溢出，则饱和为最大有限值
+            if (new_exp >= 31)
+                return (uint8_t)((sign << 7) | ((30 << 2) | 0x3));
+        }
+    }
+    // 最终 FP8 E5M2 结果：符号 | (new_exp << 2) | (低2位为尾数)
+    return (uint8_t)((sign << 7) | (new_exp << 2) | (base & 0x3));
+}
+
+__device__ float fp8e4m3_fnuz_to_fp32(uint8_t fp8) {
+    // 提取各字段：1 位符号，4 位指数，3 位尾数
+    uint32_t sign = fp8 >> 7;         // 最高位为符号位
+    uint32_t exp  = (fp8 >> 3) & 0xF;   // 接下来 4 位为指数
+    uint32_t mant = fp8 & 0x7;         // 低 3 位为尾数
+
+    union {
+        uint32_t u;
+        float f;
+    } out;
+
+    if(exp == 0) {
+        // FP8中零或下溢（FNUZ），直接转换为 0（符号保留）
+        out.u = sign << 31;
+    } else {
+        // FP8 的指数偏移为 7，FP32 的指数偏移为 127，两者相差 120
+        uint32_t new_exp = exp + 120;
+        // FP8 的尾数 3 位，转换到 FP32 需放到最高的 3 位（左移 20 位）
+        uint32_t new_mant = mant << 20;
+        out.u = (sign << 31) | (new_exp << 23) | new_mant;
+    }
+    return out.f;
+}
+
+__device__ float fp8e5m2_fnuz_to_fp32(uint8_t fp8) {
+    // 提取符号、指数和尾数
+    uint32_t sign = fp8 >> 7;           // 最高位为符号位
+    uint32_t exp  = (fp8 >> 2) & 0x1F;    // 接下来 5 位为指数
+    uint32_t mant = fp8 & 0x3;            // 低 2 位为尾数
+
+    union {
+        uint32_t u;
+        float f;
+    } out;
+
+    if(exp == 0) {
+        // 下溢，直接返回 0（保留符号）
+        out.u = sign << 31;
+    } else {
+        // FP8 E5M2 的正规数转换：
+        // FP32 指数 = exp + 112 （因为 127 - 15 = 112）
+        uint32_t new_exp = exp + 112;
+        // 将 FP8 尾数左移 21 位（23-2）填入 FP32 尾数域
+        uint32_t new_mant = mant << 21;
+        out.u = (sign << 31) | (new_exp << 23) | new_mant;
+    }
+    return out.f;
+}
+
+__device__ int32_t findCacheIndex(int32_t *cache_index, int32_t bufNum, int32_t offset) {
+    for (int i = 0; i < bufNum; i++) {
+        if (offset == cache_index[i + 1]) {
+            cache_index[0] = i;
+            return 1;
+        }
+    }
+    int result_index = cache_index[0] % bufNum;
+    cache_index[0] = result_index;
+    // first cached index is the result index
+    cache_index[result_index + 1] = offset;
+    return 0;
+}
+
+__device__ void printTensorFloat(_shared_ptr_ float *tensor, int32_t m, int32_t n, int32_t stride_n) {
+    int cid = core_id();
+    int cls_id = cluster_id();
+    if (cls_id == __CHECK_CLUSTER_ID) {
+        printf("\nprintTensorFp32 cluster_id=%d core_id=%d, {%d %d, s %d}\n", cls_id, cid, m, n, stride_n);
+        int step = (m + 15) / 16;
+        for (int32_t i = 0; i < m; i+=step) {
+            printf("%d,%d/m{%d}[", cls_id, cid, i);
+            for (int32_t j = 0; j < min(8, n); j++) {
+                printf("%6.1f ", tensor[i * stride_n + j]);
+            }
+            printf("]\n");
+        }
+    }
+}
+
+__device__ void printTensorFloat16(_shared_ptr_ float16 *tensor, int32_t m, int32_t n, int32_t stride_n) {
+    int cid = core_id();
+    int cls_id = cluster_id();
+    if (cls_id == __CHECK_CLUSTER_ID) {
+        printf("\nprintTensorFp16 cluster_id=%d core_id=%d, {%d %d, s %d}\n", cls_id, cid, m, n, stride_n);
+        int step = (m + 15)/ 16;
+        for (int32_t i = 0; i < m; i+=step) {
+            printf("%d,%d/m{%d}[", cls_id, cid, i);
+            for (int32_t j = 0; j < min(8, n); j++) {
+                printf("%6.1f ", half2float(tensor[i * stride_n + j]));
+            }
+            printf("]\n");
+        }
+    }
+}
+
+__device__ void printTensorI8(_shared_ptr_ int8_t *tensor, int32_t m, int32_t n, int32_t stride_n) {
+    int cid = core_id();
+    int cls_id = cluster_id();
+    if (cls_id == __CHECK_CLUSTER_ID) {
+        printf("\nprintTensorInt8 cluster_id=%d core_id=%d, {%d %d, s %d}\n", cls_id, cid, m, n, stride_n);
+        int step = (m + 15)/ 16;
+        for (int32_t i = 0; i < m; i+=step) {
+            printf("%d,%d/m{%d}[", cls_id, cid, i);
+            for (int32_t j = 0; j < min(4, n); j++) {
+                printf("%d ", tensor[i * stride_n + j]);
+            }
+            printf("... ");
+            for (int32_t j = max(n - 4, 0) ; j < n; j++) {
+                printf("%d ", tensor[i * stride_n + j]);
+            }
+            printf("]\n");
+        }
+    }
 }
 
 #endif

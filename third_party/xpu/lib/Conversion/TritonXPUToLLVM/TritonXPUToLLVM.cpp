@@ -1,8 +1,3 @@
-//===----------------------------------------------------------------------===//
-//
-// Copyright (C) 2025 by Kunlunxin. All rights reserved.
-//
-//===----------------------------------------------------------------------===//
 #include "triton/Conversion/TritonXPUToLLVM/Passes.h"
 // clang-format off
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
@@ -137,13 +132,16 @@ struct ConvertTritonXPUToLLVM
 
     mlir::triton::xpu::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                       targetInfo, benefit);
-    // mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
-    //                                            targetInfo, benefit);
+
+    mlir::triton::xpu::populateScanOpToLLVMPatterns(typeConverter, patterns,
+                                                    targetInfo, benefit);
 
     // mlir::triton::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
     //                                                 targetInfo, benefit);
-    // mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
-    //                                            targetInfo, benefit);
+    mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
+                                               targetInfo, benefit);
+    mlir::triton::xpu::populateXPUPrintOpToLLVMPattern(typeConverter, patterns,
+                                                       targetInfo, benefit);
     mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                      benefit);
     mlir::triton::xpu::populateSPMDOpToLLVMPattern(typeConverter, patterns,
@@ -155,8 +153,8 @@ struct ConvertTritonXPUToLLVM
                                                     xpuBenefit);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
-    // mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
-    //                                             targetInfo, benefit);
+    mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
+                                                targetInfo, benefit);
     // mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, targetInfo,
     //                                             patterns, benefit);
     mlir::triton::xpu::populateMakeRangeOpToLLVMPattern(

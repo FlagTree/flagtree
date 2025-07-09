@@ -7,6 +7,7 @@
 // TODO: Pass Description
 //===----------------------------------------------------------------------===//
 
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonXPU/IR/Dialect.h"
 #include "triton/Dialect/TritonXPU/Transforms/Passes.h"
 
@@ -405,22 +406,43 @@ public:
     }
   }
 
+  void addOneCoreCalculationCond(mlir::ModuleOp m) {
+    m.walk([&](triton::FuncOp func) {
+      auto &initOp = *(func.getOps().begin());
+      //   llvm::errs() << "initOp:";
+      //   initOp.dump();
+      //   llvm::errs() << "\n";
+
+      OpBuilder builder(&initOp);
+      auto loc = initOp.getLoc();
+      auto threadIdOp = builder.create<mlir::triton::xpu::GetCoreIdOp>(
+          loc, builder.getI32Type());
+      auto core0Op = builder.create<mlir::arith::ConstantIntOp>(loc, 0, 32);
+
+      auto cond = builder.create<mlir::arith::CmpIOp>(
+          loc, builder.getI1Type(), mlir::arith::CmpIPredicate::eq, core0Op,
+          threadIdOp);
+
+      auto scfIfOp = builder.create<mlir::scf::IfOp>(loc, cond,
+                                                     /*withElseRegion=*/false);
+
+      builder.setInsertionPointToStart(&scfIfOp.getThenRegion().front());
+      Operation *yieldOp = scfIfOp.getThenRegion().front().getTerminator();
+      Operation *nextOp = initOp.getNextNode();
+      initOp.moveBefore(yieldOp);
+      while (nextOp) {
+        Operation *currentOp = nextOp;
+        nextOp = nextOp->getNextNode();
+        if (!isa<scf::YieldOp>(currentOp) &&
+            !isa<triton::ReturnOp>(currentOp)) {
+          currentOp->moveBefore(yieldOp);
+        }
+      }
+    });
+  }
+
   void runOnOperation() override {
     mlir::ModuleOp m = getOperation();
-
-    // Check Core Tiling Optimization
-    // TODO[dyq]: Open core tiling pass
-    // m.walk([&](triton::ReduceOp redOp) {
-    //   isReduceOpt = isReduceOptimized(redOp.operand().getType());
-
-    //   if (auto reduceSrcTy =
-    //           redOp.operand().getType().dyn_cast<RankedTensorType>()) {
-    //     auto sizePerCore = reduceSrcTy.getEncoding()
-    //                            .cast<triton::xpu::GlobalEncodingAttr>()
-    //                            .getSizePerCore();
-    //     rowsPerCore = sizePerCore[0];
-    //   }
-    // });
 
     // Step 0. Convert CmpOp+SplatOp to SplatOp+CmpOp
     m.walk([&](triton::SplatOp splatOp) {
@@ -524,18 +546,6 @@ public:
 
       OpBuilder builder(op);
       auto loc = op->getLoc();
-      // TODO[dyq]: Open coretiling pass
-      //   if (isReduceOpt && rowsPerCore != 1) {
-      //     auto resTensorType = rhs.getType().cast<RankedTensorType>();
-      //     SmallVector<Attribute, 4> values(
-      //         resTensorType.getNumElements(),
-      //         builder.getI32IntegerAttr(rowsPerCore));
-      //     auto denseValues = DenseElementsAttr::get(resTensorType, values);
-      //     auto rowsPerCoreValue =
-      //         builder.create<arith::ConstantOp>(loc, denseValues);
-      //     rhs = builder.create<mlir::arith::MulIOp>(loc, rhs,
-      //     rowsPerCoreValue);
-      //   }
 
       auto elemLenOp =
           builder.create<mlir::arith::SubIOp>(loc, rhs.getType(), rhs, lhs);
@@ -627,16 +637,13 @@ public:
       for (int j = sortedOpsToMoveAndErase.size() - 1; j >= 0; --j) {
         auto bodyOp = sortedOpsToMoveAndErase[j];
         auto newBodyOp = builder.clone(*bodyOp, mapping); // Clone bodyOps
-        // TODO[dyq]: Open core tiling pass
-        // if (auto reduceOp = dyn_cast<triton::ReduceOp>(bodyOp)) {
-        //   // for shared memory init
-        //   auto newReduceOp = cast<triton::ReduceOp>(newBodyOp);
-        //   ReduceOpHelper helper(reduceOp);
-        //   ReduceOpHelper newHelper(newReduceOp);
-        //   newHelper.setReduceId(helper.getReduceId());
-        //   newHelper.setOriginResShape(helper.getOriginResShape());
-        // } else
-        if (auto storeOp = dyn_cast<triton::xpu::StoreSMOp>(bodyOp)) {
+        if (auto reduceOp = dyn_cast<triton::xpu::ReduceOp>(bodyOp)) {
+          auto newReduceOp = cast<triton::xpu::ReduceOp>(newBodyOp);
+          ReduceOpHelper helper(reduceOp);
+          ReduceOpHelper newHelper(newReduceOp);
+          newHelper.setReduceId(helper.getReduceId());
+          newHelper.setReduceNum(helper.getReduceNum());
+        } else if (auto storeOp = dyn_cast<triton::xpu::StoreSMOp>(bodyOp)) {
           SMHelper helper(storeOp);
           SMHelper newHelper(newBodyOp);
           newHelper.setOffset(helper.getOffset());
@@ -696,6 +703,9 @@ public:
 
     // Step 4. Add AtomicOp Simulation Conditon
     addAtomicSimulationCond(m);
+
+    if (oneCoreActOnly)
+      addOneCoreCalculationCond(m);
   }
 
 private:
