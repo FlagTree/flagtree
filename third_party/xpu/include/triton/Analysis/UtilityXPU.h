@@ -42,12 +42,25 @@ template <> struct is_xpu_memory_op<triton::xpu::SM2GMOp> {
   triton::xpu::SvaddFOp, triton::xpu::SvmulFOp, triton::xpu::SvsubFOp,         \
       triton::xpu::SvmaxFOp
 
+#define COMBINE_BINARY_OP                                                      \
+  arith::AddFOp, arith::MulFOp, arith::MaxNumFOp, arith::MinNumFOp,            \
+      arith::OrIOp, arith::XOrIOp, arith::AndIOp
+
+#define COMBINE_OP COMBINE_BINARY_OP, arith::CmpFOp
+
 enum class OffsetState {
   Unknown = -1,
   DiscreteSame = 0,
   Continuous = 1,
   Discrete = 2,
   LocallyContinuous = 3
+};
+
+enum class ElemState {
+  SS = 0, /*00*/
+  SV = 1, /*01*/
+  VS = 2, /*10*/
+  VV = 3  /*11*/
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const OffsetState &state);
@@ -88,6 +101,8 @@ private:
   static std::map<Operation *, int64_t> smOffsetMap;
 };
 
+size_t previousPowerOf2(size_t n);
+
 Type addrspaceCast(Type type, int addressSpace);
 
 bool inOpChain(llvm::SetVector<Operation *> &opChain, Operation *op);
@@ -99,6 +114,7 @@ void getOpTreeBwd(llvm::SetVector<Operation *> &opTree,
 void getOpTreeBwd(llvm::SetVector<Operation *> &opTree,
                   llvm::SetVector<Operation *> &visitedOps, Operation *op,
                   Block *block);
+void checkDefUseShapeMatch(ModuleOp &m, MLIRContext *context);
 
 llvm::SmallVector<Operation *>
 sortOpTreeBwd(llvm::SmallVector<Operation *> &opTree);
@@ -108,6 +124,10 @@ llvm::SetVector<Operation *> sortOpTree(llvm::SetVector<Operation *> &opTree);
 
 bool inSameSCFIfBlock(llvm::SetVector<Operation *> &storeOps,
                       Operation *storeOp);
+
+void getOpLine(ModuleOp &m, DenseMap<mlir::Operation *, unsigned> &op2Line);
+
+int64_t getTensorSize(Type type);
 
 template <typename opType>
 Operation *findUserOpImpl(Operation *op,

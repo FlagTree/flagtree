@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "xpu/lib/Conversion/TritonXPUToLLVM/PatternTritonXPUOpToLLVM.h"
 
 namespace {
@@ -63,6 +64,117 @@ private:
   StringRef funcName;
 };
 
+struct FpToFpOpConversion
+    : public triton::gpu::ElementwiseOpConversionBase<triton::FpToFpOp,
+                                                      FpToFpOpConversion> {
+  using Base = triton::gpu::ElementwiseOpConversionBase<triton::FpToFpOp,
+                                                        FpToFpOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  Value convertFloat8E4M3FNUZToFloat32(Value v,
+                                       ConversionPatternRewriter &rewriter,
+                                       Location loc, Operation *op) const {
+    std::string callFunc = "_ZN3xpu20fp8e4m3_fnuz_to_fp32Eh";
+    ValueRange args{v};
+    Type resultType = rewriter.getF32Type();
+    return mlir::LLVM::XPU::createDeviceCall(callFunc, rewriter, op, resultType,
+                                             args, loc);
+  }
+
+  Value convertFloat8E5M2FNUZToFloat32(Value v,
+                                       ConversionPatternRewriter &rewriter,
+                                       Location loc, Operation *op) const {
+    std::string callFunc = "_ZN3xpu20fp8e5m2_fnuz_to_fp32Eh";
+    ValueRange args{v};
+    Type resultType = rewriter.getF32Type();
+    return mlir::LLVM::XPU::createDeviceCall(callFunc, rewriter, op, resultType,
+                                             args, loc);
+  }
+
+  Value convertFloat32ToFloat8E4M3FNUZ_RTNE(Value v,
+                                            ConversionPatternRewriter &rewriter,
+                                            Location loc, Operation *op) const {
+    std::string callFunc = "_ZN3xpu25fp32_to_fp8_e4m3_fnuz_rneEf";
+    ValueRange args{v};
+    Type resultType = rewriter.getI8Type();
+    return mlir::LLVM::XPU::createDeviceCall(callFunc, rewriter, op, resultType,
+                                             args, loc);
+  }
+
+  Value convertFloat32ToFloat8E5M2FNUZ_RTNE(Value v,
+                                            ConversionPatternRewriter &rewriter,
+                                            Location loc, Operation *op) const {
+    std::string callFunc = "_ZN3xpu25fp32_to_fp8_e5m2_funz_rneEf";
+    ValueRange args{v};
+    Type resultType = rewriter.getI8Type();
+    return mlir::LLVM::XPU::createDeviceCall(callFunc, rewriter, op, resultType,
+                                             args, loc);
+  }
+
+  SmallVector<Value>
+  createDestOps(triton::FpToFpOp op, OpAdaptor adaptor,
+                ConversionPatternRewriter &rewriter, Type elemTy,
+                mlir::triton::gpu::MultipleOperandsRange operands,
+                Location loc) const {
+    auto getElementType = [&](Value v) {
+      if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
+        return tensorType.getElementType();
+      }
+      return v.getType();
+    };
+
+    auto srcElementType = getElementType(op.getSrc());
+    auto dstElementType = getElementType(op.getResult());
+    auto roundingMode = op.getRounding();
+
+    // LLVM_DEBUG({
+    // op->dump();
+    // adaptor.getSrc().getType().dump();
+    // dstElementType.dump();
+    // });
+
+    SmallVector<Value> outVals;
+
+    if (isa<mlir::Float8E4M3FNUZType>(srcElementType) &&
+        isa<mlir::Float32Type>(dstElementType)) {
+      for (Value v : operands[0]) {
+        outVals.push_back(convertFloat8E4M3FNUZToFloat32(v, rewriter, loc, op));
+      }
+      return outVals;
+    } else if (isa<mlir::Float8E5M2FNUZType>(srcElementType) &&
+               isa<mlir::Float32Type>(dstElementType)) {
+      for (auto v : operands[0]) {
+        outVals.push_back(convertFloat8E5M2FNUZToFloat32(v, rewriter, loc, op));
+      }
+      return outVals;
+    } else if (isa<mlir::Float32Type>(srcElementType) &&
+               isa<mlir::Float8E4M3FNUZType>(dstElementType)) {
+      if (roundingMode.value_or(RoundingMode::RTNE) != RoundingMode::RTNE) {
+        op->emitError("only support RoundingMode rtne\n");
+      }
+      for (auto v : operands[0]) {
+        outVals.push_back(
+            convertFloat32ToFloat8E4M3FNUZ_RTNE(v, rewriter, loc, op));
+      }
+      return outVals;
+    } else if (isa<mlir::Float32Type>(srcElementType) &&
+               isa<mlir::Float8E5M2FNUZType>(dstElementType)) {
+      if (roundingMode.value_or(RoundingMode::RTNE) != RoundingMode::RTNE) {
+        op->emitError("only support RoundingMode rtne\n");
+      }
+      for (auto v : operands[0]) {
+        outVals.push_back(
+            convertFloat32ToFloat8E5M2FNUZ_RTNE(v, rewriter, loc, op));
+      }
+      return outVals;
+    }
+
+    op.emitError("Unsupported source element type");
+    return outVals;
+  }
+};
+
 } // namespace
 
 void mlir::triton::xpu::populateElementwiseOpToLLVMPatterns(
@@ -96,4 +208,6 @@ void mlir::triton::xpu::populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::MinimumFOp, LLVM::MinimumOp) // minimum
   POPULATE_BINARY_OP(triton::PreciseDivFOp, LLVM::FDivOp)
 #undef POPULATE_BINARY_OP
+
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 }
