@@ -394,17 +394,17 @@ cache.store(
     post_hock=set_llvm_env,
 )
 
-# xpu(kunlunxin)
+# klx xpu
 cache.store(
     file="XTDK-llvm19-ubuntu2004_x86_64",
     condition=("xpu" == flagtree_backend),
-    url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar.gz",
+    url="https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
 cache.store(file="xre-Linux-x86_64", condition=("xpu" == flagtree_backend),
-            url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/xre-Linux-x86_64.tar.gz",
+            url="https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/xre-Linux-x86_64.tar.gz",
             copy_dst_path='python/_deps/xre3')
 
 cache.store(
@@ -438,7 +438,7 @@ cache.store(
     post_hock=set_llvm_env,
 )
 
-# aipu
+# arm aipu
 cache.store(
     file="llvm-a66376b0-ubuntu-x64",
     condition=("aipu" == flagtree_backend),
