@@ -41,7 +41,7 @@ def test_compile_in_subproc() -> None:
     cc = major * 10 + minor
     config = triton.compiler.AttrsDescriptor(tuple(range(4)), ())
 
-    multiprocessing.set_start_method('fork')
+    multiprocessing.set_start_method('spawn')  # Sometimes 'fork' return -11 (-SIGSEGV)
     proc = multiprocessing.Process(target=compile_fn, args=(config, cc))
     proc.start()
     proc.join()

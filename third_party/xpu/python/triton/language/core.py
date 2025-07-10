@@ -10,6 +10,7 @@ import builtins
 from ..runtime.jit import jit
 import inspect
 import os
+import sys
 
 from .._C.libtriton import ir
 from . import semantic
@@ -17,8 +18,6 @@ from . import semantic
 T = TypeVar('T')
 # ===-------------------- For Triton XPU -----------------------===
 # Triton XPU don't need the maxTensorNumElements (legalize pass)
-import sys
-
 TRITON_MAX_TENSOR_NUMEL = sys.maxsize
 # ===-----------------------------------------------------------===
 
@@ -1025,7 +1024,8 @@ class tensor:
     def cast(self, dtype, fp_downcast_rounding=None, bitcast=False) -> tensor:
         ...
 
-    def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="") -> tensor:
+    def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", offset_state_policy="",
+              mem_sync_mode="") -> tensor:
         ...
 
     def advance(self, offsets) -> tensor:
@@ -1053,6 +1053,9 @@ class tensor:
         ...
 
     def atomic_xor(self, val, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_mul(self, val, mask=None, sem=None, scope=None) -> tensor:
         ...
 
     def exp(self) -> tensor:
@@ -1548,7 +1551,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
 @builtin
 def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-         volatile=False, _builder=None):
+         volatile=False, offset_state_policy="", mem_sync_mode="", _builder=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
 
@@ -1601,8 +1604,10 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     volatile = _constexpr_to_value(volatile)
+    offset_state_policy = _constexpr_to_value(offset_state_policy)
+    mem_sync_mode = _constexpr_to_value(mem_sync_mode)
     return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
-                         volatile, _builder)
+                         volatile, offset_state_policy, mem_sync_mode, _builder)
 
 
 @builtin
@@ -1630,7 +1635,8 @@ def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
 
 @_tensor_member_fn
 @builtin
-def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _builder=None):
+def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", offset_state_policy="",
+          mem_sync_mode="", _builder=None):
     """
     Store a tensor of data into memory locations defined by `pointer`.
 
@@ -1674,7 +1680,10 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
         mask = _to_tensor(mask, _builder)
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
-    return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, _builder)
+    offset_state_policy = _constexpr_to_value(offset_state_policy)
+    mem_sync_mode = _constexpr_to_value(mem_sync_mode)
+    return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, offset_state_policy,
+                          mem_sync_mode, _builder)
 
 
 @builtin
@@ -1825,6 +1834,17 @@ def atomic_xor(pointer, val, mask=None, sem=None, scope=None, _builder=None):
     scope = _constexpr_to_value(scope)
     mask = _constexpr_to_value(mask)
     return semantic.atomic_xor(pointer, val, mask, sem, scope, _builder)
+
+
+@_tensor_member_fn
+@builtin
+@_add_atomic_docstr("mul")
+def atomic_mul(pointer, val, mask=None, sem=None, scope=None, _builder=None):
+    val = _to_tensor(val, _builder)
+    sem = _constexpr_to_value(sem)
+    scope = _constexpr_to_value(scope)
+    mask = _constexpr_to_value(mask)
+    return semantic.atomic_mul(pointer, val, mask, sem, scope, _builder)
 
 
 # -----------------------

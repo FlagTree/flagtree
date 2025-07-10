@@ -193,6 +193,20 @@ def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
     let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
+def TT_GeluOp : TT_Op<"gelu", [Elementwise,
+                                     SameOperandsAndResultShape,
+                                     SameOperandsAndResultEncoding,
+                                     Pure,
+                                     /*DeclareOpInterfaceMethods<CastOpInterface>*/]> {
+    let summary = "Gelu Act";
+
+    let arguments = (ins TT_Type:$src);
+
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+}
+
 //
 // Pointer Arith Ops
 //
