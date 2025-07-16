@@ -126,11 +126,13 @@ def test_softmax(BLOCK, WIDTH, is_dense, device, Z=2, H=2, is_causal=True, scale
     # initialize data
     a_shape = (Z, H, M, N)
     a_ref, a_tri = make_pair(a_shape)
+    a_ref = a_ref.cpu()
     dout_ref, dout_tri = make_pair(a_shape)
+    dout_ref = dout_ref.cpu()
     # compute [torch]
     a_ref = mask_tensor(a_ref, layout, BLOCK, value=float("-inf"))
     a_ref.retain_grad()
-    at_mask = torch.ones((M, N), device=device)
+    at_mask = torch.ones((M, N), device=device).cpu()
     if is_causal:
         at_mask = torch.tril(at_mask)
     M = at_mask[None, None, :, :] + torch.zeros_like(a_ref)
@@ -148,6 +150,8 @@ def test_softmax(BLOCK, WIDTH, is_dense, device, Z=2, H=2, is_causal=True, scale
     out_tri.backward(dout_tri)
     da_tri = a_tri.grad
     # compare
+    out_tri = out_tri.cpu()
+    da_tri = da_tri.cpu()
     torch.testing.assert_close(out_tri, out_ref, equal_nan=True)
     torch.testing.assert_close(da_tri, da_ref, equal_nan=True)
 
@@ -167,6 +171,9 @@ def test_attention_fwd_bwd(
     capability = torch.cuda.get_device_capability()
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
+    if capability[0] == 8:
+        if dtype == torch.float32:
+            pytest.skip("QS do not support float32 dot now.")
 
     # inputs
     qkv_shape = (batch_size, n_heads, n_ctx, 64)

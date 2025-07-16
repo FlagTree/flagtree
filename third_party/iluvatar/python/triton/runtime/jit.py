@@ -21,47 +21,38 @@ import torch
 
 
 def get_disable_sme():
-    disable_sme = os.getenv("TRITON_DISABLE_SME", default="0")
+    disable_sme = os.getenv("TRITON_DISABLE_SME", default="0") == "1"
     cc = torch.cuda.get_device_capability()
     cc = cc[0] * 10 + cc[1]
     if cc == 70:  # for ivcore10
-        disable_sme = "1"
+        disable_sme = True
 
     return disable_sme
 
 
-def get_corex_sme(args, constexpr_indices, enable_sme=True):
-    can_use_sme = 0
-    shape_info = ''
+def get_corex_sme(enable_sme=True):
     if not enable_sme:
-        return can_use_sme, shape_info
-    import torch
-    if not (hasattr(torch, "corex") and torch.corex == True):
-        return can_use_sme, shape_info
+        return 0
+    if not (hasattr(torch, "corex") and torch.corex):
+        return 0
     close_sme = get_disable_sme()
-    if close_sme == "1":
-        return can_use_sme, shape_info
-    index = 0
-    shape_info = ''
-    for i, arg in enumerate(args):
-        if i in constexpr_indices:
-            continue
-        if (isinstance(arg, int) and arg == 1):
-            continue
-        if torch.is_tensor(arg) and arg.dtype in [torch.float16, torch.float32, torch.bfloat16, torch.int8
-                                                  ] and arg.dim() >= 2:
-            dim_M = arg.shape[-2]
-            dim_K = arg.shape[-1]
-            shape_info += '_' + str(dim_M) + '_' + str(dim_K)
-            if dim_M == 1 or dim_K == 1:
-                index += 1
-                continue
-            sme_dim = 64 / arg.element_size()
-            if (arg.is_contiguous() and dim_K % sme_dim == 0) or \
-               (not arg.is_contiguous() and dim_M % sme_dim == 0):
-                can_use_sme = (1 << index) | can_use_sme
-        index += 1
-    return can_use_sme, shape_info
+    if close_sme:
+        return 0
+    return 1
+
+
+class CallVisitor(ast.NodeVisitor):
+
+    def __init__(self, globals):
+        super().__init__()
+        self.use_sme = False
+        self.globals = globals
+
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Name):
+            val = self.globals.get(node.func.id, None)
+            if isinstance(val, JITFunction):
+                self.use_sme = val.use_corex_load_inc
 
 
 # -----------------------------------------------------------------------------
@@ -504,6 +495,7 @@ class JITFunction(KernelInterface[T]):
     cache_hook = None
     divisibility = 16
     divisibility_8 = 8
+    corex_divisibility = 64
 
     @staticmethod
     def _key_of(arg):
@@ -559,33 +551,51 @@ class JITFunction(KernelInterface[T]):
                 return True
             return False
 
-        def is_divisible_by_8(x):
-            if isinstance(x, int):
-                if is_corex():
-                    return x % 64 == 0
-                return x % JITFunction.divisibility_8 == 0
-            if x is None:
-                return True
+        def is_corex_param(x, enable_sme):
+            if enable_sme:
+                if hasattr(x, "data_ptr"):
+                    return x.data_ptr() % JITFunction.corex_divisibility == 0
+                elif isinstance(x, int):
+                    return True
             return False
+
+        def get_corex_param(arg):
+            res_stride = (1 << 31) - 1  # max int32_t
+            if hasattr(arg, "data_ptr") and torch.is_tensor(arg) and arg.dtype in [
+                    torch.float16, torch.float32, torch.bfloat16, torch.int8
+            ]:
+                if arg.dim() >= 2:
+                    # Remove dimension of 1
+                    squeezed_arg = arg.squeeze()
+                    if squeezed_arg.dim() >= 2 and (squeezed_arg.stride()[-1] == 1 or squeezed_arg.stride()[-2] == 1):
+                        res_stride = squeezed_arg.stride()[-1] * squeezed_arg.stride()[-2]
+                else:
+                    return 1
+            elif isinstance(arg, int):
+                if arg < res_stride:
+                    res_stride = arg
+            return res_stride
 
         divisible_by_16 = {
             param.num
             for param, arg in zip(self.params, args)
             if is_divisible_by_16(arg) and not param.do_not_specialize
         }
-        divisible_by_8 = {
-            param.num
-            for param, arg in zip(self.params, args)
-            if is_divisible_by_8(arg) and not param.do_not_specialize
-        }
         equal_to_1 = {
             param.num
             for param, arg in zip(self.params, args)
             if isinstance(arg, int) and not isinstance(arg, bool) and arg == 1 and not param.do_not_specialize
         }
+
+        enable_sme = get_corex_sme(self.use_corex_load_inc or self.visitor.use_sme)
+        corex_param = {
+            param.num: get_corex_param(arg)
+            for param, arg in zip(self.params, args)
+            if is_corex_param(arg, enable_sme) and not param.do_not_specialize and not param.is_constexpr
+        }
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
-        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), tuple(divisible_by_8))
+        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), corex_param)
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -698,12 +708,23 @@ class JITFunction(KernelInterface[T]):
         target = driver.active.get_current_target()
         backend = self.make_backend(target)
         options = backend.parse_options(kwargs)
-        options.use_sme, shape_info = get_corex_sme(args, self.constexpr_indices, options.enable_sme)
-        if not shape_info:
-            for arg in args:
-                if torch.is_tensor(arg):
-                    shape_info += '_' + '_'.join(str(_) for _ in list(arg.shape))
-        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs)) + str((options.use_sme, shape_info))
+        only_save_best_config_cache = os.environ.get("TRITON_ONLY_SAVE_BEST_CONFIG_CACHE", "0") == "1"
+        options.use_sme = get_corex_sme(self.use_corex_load_inc or self.visitor.use_sme)
+        #need get sme_param
+        configs = None
+        if options.use_sme:
+            bound_vals = tuple(bound_args.values())
+            configs = (self._get_config(*bound_vals), )
+            options.hash_corex = configs[0].hash()
+        shape_info = ''
+        if only_save_best_config_cache:
+            if not shape_info:
+                for arg in args:
+                    if torch.is_tensor(arg):
+                        shape_info += '_' + '_'.join(str(_) for _ in list(arg.shape))
+            key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs)) + str((options.hash_corex, shape_info))
+        else:
+            key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs)) + str(options.hash_corex)
         kernel = self.cache[device].get(key, None)
 
         pinned_memory_flags = [self._pinned_memory_of(arg) for arg in args]
@@ -734,8 +755,8 @@ class JITFunction(KernelInterface[T]):
             sigkeys = [self.params[i].name for i in self.non_constexpr_indices]
             sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
-
-            configs = (self._get_config(*bound_vals), )
+            if not options.use_sme:
+                configs = (self._get_config(*bound_vals), )
             constants = {
                 p.name: v
                 for (v, p) in zip(bound_vals, self.params)
@@ -842,6 +863,9 @@ class JITFunction(KernelInterface[T]):
         # use to record fn cache files
         self.hash_cache_file = None
         self.so_path = None
+        self.use_corex_load_inc = 'dot' in self.src
+        self.visitor = CallVisitor(self.__globals__)
+        self.visitor.visit(ast.parse(self.src))
 
     @property
     def cache_key(self):

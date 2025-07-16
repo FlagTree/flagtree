@@ -39,9 +39,9 @@ void init_triton_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_reorder_broadcast", createReorderBroadcastPass);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
                      createRewriteTensorPointerPass);
-  ADD_PASS_WRAPPER_4("add_convert_to_ttgpuir",
+  ADD_PASS_WRAPPER_5("add_convert_to_ttgpuir",
                      createConvertTritonToTritonGPUPass, const std::string &,
-                     int, int, int);
+                     int, int, int, int);
 }
 
 void init_triton_passes_ttgpuir(py::module &&m) {

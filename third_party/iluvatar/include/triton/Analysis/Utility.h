@@ -212,8 +212,10 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
 SetVector<Operation *>
 multiRootTopologicalSort(const SetVector<Operation *> &toSort);
 
+#ifdef __ILUVATAR__
+/// This function dones't use assertion check.
 void getBackwardSliceCorex(Operation *op, SetVector<Operation *> *backwardSlice,
-                           TransitiveFilter filter,
+                           TransitiveFilter filter = nullptr,
                            bool omitBlockArguments = false);
 
 void getBackwardSliceImplCorex(Operation *op,
@@ -221,10 +223,13 @@ void getBackwardSliceImplCorex(Operation *op,
                                TransitiveFilter filter,
                                bool omitBlockArguments = false);
 
+#endif
+
 /// This uses the toplogicalSort above
 SetVector<Operation *>
 multiRootGetSlice(Operation *op, TransitiveFilter backwardFilter = nullptr,
-                  TransitiveFilter forwardFilter = nullptr);
+                  TransitiveFilter forwardFilter = nullptr,
+                  bool omitBlockArguments = true);
 
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();

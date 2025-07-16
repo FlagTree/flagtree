@@ -161,11 +161,14 @@ def check_type_supported(dtype, device):
     '''
     if device in ['cuda']:
         cc = torch.cuda.get_device_capability()
-        if not is_corex():
+        if is_corex():
+            if dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn", "float8e4b15", "float64"}:
+                pytest.skip(f"Skipping because {dtype} does not support")
+        else:
             if cc[0] < 8 and (dtype is tl.bfloat16 or dtype == "bfloat16" or dtype is torch.bfloat16):
                 pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
-        if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
-            pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
+            if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
+                pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
     if is_interpreter():
         if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
             pytest.skip("bfloat16 is not supported in the interpreter")
@@ -240,7 +243,10 @@ def is_layout_applicable(layout) -> bool:
     if isinstance(layout, (BlockedLayout, SharedLayout)):
         return True
     elif is_cuda():
-        return isinstance(layout, MmaLayout)
+        if is_corex():
+            return False
+        else:
+            return isinstance(layout, MmaLayout)
     elif is_hip():
         target_arch = triton.runtime.driver.active.get_current_target().arch
         if "gfx11" in target_arch:
@@ -1041,7 +1047,10 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     kernel = patch_kernel(kernel, {'PREC_CALC': expr_prec, 'REF_CALC': expr_ref})
 
     kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
-    assert torch.all(out == out_ref)  # bitwise exact
+    if expr_prec == 'tl.math.sqrt_rn(x)' and expr_ref == 'tl.math.sqrt(x)':
+        torch.testing.assert_close(out, out_ref)
+    else:
+        assert torch.all(out == out_ref)  # bitwise exact
 
 
 # ----------------
@@ -1315,7 +1324,6 @@ def noinline_multi_values_fn(x, y, Z):
     tl.store(Z, z)
 
 
-@pytest.mark.skip(reason="compiler do not support func call in llvmir until 2025 Q2")
 @pytest.mark.interpreter
 @pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic", "multi_values"])
 def test_noinline(mode, device):
@@ -1532,25 +1540,20 @@ def test_atomic_cas(sem, num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_tensor_atomic_cas(sem, num_ctas, device):
+@pytest.mark.parametrize("dtype", [torch.int64, torch.int32, torch.int16, torch.float32, torch.float16])
+def test_tensor_atomic_cas(sem, num_ctas, dtype, device):
+    if is_corex() and dtype is torch.int64:
+        pytest.skip("corex do not support 64bit atomic_cas")
 
     @triton.jit
     def change_value(X, BLOCK_SIZE: tl.constexpr, sem: tl.constexpr, USE_INT64: tl.constexpr = True):
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        if USE_INT64:
-            dtype = tl.int64
-        else:
-            dtype = tl.int32
-        t1 = tl.full((BLOCK_SIZE, ), 0, dtype=dtype)
-        t2 = tl.full((BLOCK_SIZE, ), 2, dtype=dtype)
+        t1 = tl.full((BLOCK_SIZE, ), 0, dtype=X.dtype.element_ty)
+        t2 = tl.full((BLOCK_SIZE, ), 2, dtype=X.dtype.element_ty)
         tl.atomic_cas(X + offsets, t1, t2, sem=sem)
 
-    if is_corex():
-        dtype = torch.int32
-    else:
-        dtype = torch.int64
     X = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device=device, dtype=dtype)
     Y = torch.tensor([2, 1, 2, 1, 2, 1, 2, 1], device=device, dtype=dtype)
 
@@ -1806,6 +1809,10 @@ def test_join_scalars(device):
 
 @pytest.mark.interpreter
 def test_join_with_mma(device):
+    if is_corex():
+        capability = torch.cuda.get_device_capability()
+        if capability[0] == 8:
+            pytest.skip("Skipping because QS does not support float32 mma now")
 
     @triton.jit
     def kernel(X, Z):
@@ -2485,7 +2492,7 @@ def test_scan_layouts(M, N, src_layout, axis, device):
 
     ir = f"""
     #blocked = {src_layout}
-    module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+    module attributes {{"triton_gpu.dot.num-stages" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
       %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
       %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, noWarpReduce=false, parent = #blocked}}>>
@@ -2640,7 +2647,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
     #blocked = {blocked}
     #src = {src_layout}
     #one_d_layout = {one_d_layout}
-    module attributes {{"triton_gpu.num-warps" = {num_warps} : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+    module attributes {{"triton_gpu.dot.num-stages" = 1 : i32, "triton_gpu.num-warps" = {num_warps} : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel_0d1d2c3d4c(%arg0: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg1: i32 {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, noWarpReduce=false, parent = #blocked}}>>
         %1 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, noWarpReduce=false, parent = #blocked}}>> -> tensor<{M}x1xi32, #blocked>
@@ -2699,7 +2706,7 @@ def test_store_op(M, src_layout, device):
 
     ir = f"""
     #src = {src_layout}
-    module attributes {{"{GPU_DIALECT}.num-warps" = 4 : i32, "{GPU_DIALECT}.num-ctas" = 1 : i32, "{GPU_DIALECT}.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+    module attributes {{"triton_gpu.dot.num-stages" = 1 : i32, "{GPU_DIALECT}.num-warps" = 4 : i32, "{GPU_DIALECT}.num-ctas" = 1 : i32, "{GPU_DIALECT}.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
         tt.func public @kernel(%arg0: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) {{
             %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, noWarpReduce=false, parent = #src}}>>
             %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<{M}x!tt.ptr<f32>, #{GPU_DIALECT}.slice<{{dim = 1, noWarpReduce=false, parent = #src}}>>
@@ -2751,7 +2758,7 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
     ir = f"""
     #dst = {dst_layout}
     #src = {src_layout}
-    module attributes {{"{GPU_DIALECT}.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+    module attributes {{"triton_gpu.dot.num-stages" = 1 : i32, "{GPU_DIALECT}.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
         tt.func public @kernel(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
             %0 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<{M}x!tt.ptr<i32>, #{GPU_DIALECT}.slice<{{dim = {src_dim}, noWarpReduce=false, parent = #src}}>>
             %1 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = {src_dim}, noWarpReduce=false, parent = #src}}>>
@@ -2821,7 +2828,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
         tt.reduce.return %14 : i32"""
     ir = f"""
     #src = {src_layout}
-    module attributes {{"{GPU_DIALECT}.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+    module attributes {{"triton_gpu.dot.num-stages" = 1 : i32, "{GPU_DIALECT}.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, noWarpReduce=false, parent = #src}}>>
@@ -3068,6 +3075,13 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                     pytest.skip("float8e5/float8e4nv not supported on iluvatar devices")
                 if out_dtype != "float32":
                     pytest.skip("iluvatar devices only support out_dtype==float32")
+                if capability[0] == 8:
+                    if in_dtype == 'float32' or in_dtype == 'int8':
+                        pytest.skip("tl.dot do not support float32 or int8 on QS now")
+                    if out_dtype == 'float16':
+                        pytest.skip("tl.dot do not support out_dtype=float16 on QS now)")
+                    if in_dtype == 'bfloat16':
+                        pytest.skip("tl.dot do not support in_dtype=bfloat16(which will upcast to float32) on QS now)")
             else:
                 if capability[0] < 7:
                     pytest.skip("Only test tl.dot() on devices with sm >= 70")
@@ -3425,7 +3439,10 @@ def test_max_num_imprecise_acc(device):
 def test_dot_mulbroadcasted(in_dtype, device):
     if is_cuda():
         capability = torch.cuda.get_device_capability()
-        if not is_corex():
+        if is_corex():
+            if capability[0] == 8:
+                pytest.skip("tl.dot do not support float32 on QS now")
+        else:
             if capability[0] < 8:
                 pytest.skip("Requires sm >= 80 to run")
 
@@ -3711,7 +3728,10 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 def test_masked_load_shared_memory(dtype, device):
-
+    capability = torch.cuda.get_device_capability()
+    if capability[0] == 8:
+        if dtype == torch.float32:
+            pytest.skip("tl.dot do not support float32 on QS now")
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
 
     M = 32
@@ -3850,9 +3870,10 @@ def test_store_cache_modifier(cache, device):
         x = tl.load(src + offsets)
         tl.store(dst + offsets, x, cache_modifier=CACHE)
 
+    pgm = _kernel[(1, )](dst, src, CACHE=cache)
+    torch.testing.assert_close(src, dst)
     if not is_cuda() or is_corex():
         return
-    pgm = _kernel[(1, )](dst, src, CACHE=cache)
     ptx = pgm.asm['ptx']
     if cache == '':
         assert 'st.global.wb' not in ptx
@@ -4247,7 +4268,6 @@ def test_num_warps_pow2(device):
     _kernel[(1, )](dst=dst, num_warps=4)
 
 
-@pytest.mark.skip
 @pytest.mark.interpreter
 @pytest.mark.parametrize("func_str", ['sqrt', 'rsqrt', 'exp', 'exp2', 'log', 'log2', 'sin', 'cos'])
 def test_unary_math(func_str, device):
@@ -4891,7 +4911,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
         cc = torch.cuda.get_device_capability()
         CC_INT = cc[0] * 10 + cc[1]
         ir = layouts + f"""
-                module attributes {{"triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32, triton_gpu.target = "cuda:{CC_INT}"}} {{
+                module attributes {{"triton_gpu.dot.num-stages" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = {THREADS_PER_WARP} : i32, triton_gpu.target = "cuda:{CC_INT}"}} {{
             tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
                 %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
                 %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, noWarpReduce=false, parent = #src}}>>
@@ -4993,6 +5013,8 @@ mma_pairs = [
 def test_convertmma2mma(M, N, mma_pair, dtype, device):
     if is_hip():
         pytest.skip("test_mma2mma is not supported in HIP")
+    if is_corex():
+        pytest.skip("test_mma2mma is not supported in ILUVATAR")
 
     src_layout, _ = mma_pair
     num_warps = np.cumprod(src_layout.warps_per_cta)[-1]
@@ -5009,7 +5031,7 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         """
 
         ir = layouts + f"""
-        module attributes {{"triton_gpu.num-warps" = {num_warps} : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
+        module attributes {{"triton_gpu.dot.num-stages" = 1 : i32, "triton_gpu.num-warps" = {num_warps} : i32, "triton_gpu.num-ctas" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32}} {{
         tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #triton_gpu.slice<{{dim = 1, noWarpReduce=false, parent = #src}}>>
@@ -5379,10 +5401,11 @@ def test_tl_range(device):
         torch.testing.assert_close(ref_out, c, rtol=1e-3, atol=1e-3)
     if device in ['cuda']:
         capability = torch.cuda.get_device_capability()
-        if capability[0] >= 8:
-            ptx = pgm.asm['ptx']
-            # check that the loop got pipelined with the right number of stages.
-            assert 'cp.async.wait_group 0x6' in ptx
+        if not is_corex():
+            if capability[0] >= 8:
+                ptx = pgm.asm['ptx']
+                # check that the loop got pipelined with the right number of stages.
+                assert 'cp.async.wait_group 0x6' in ptx
 
 
 @triton.jit(noinline=True)
@@ -5414,8 +5437,11 @@ def test_maxnreg(device):
     # Ensure that .maxnreg is set on the kernel function (marked with .entry)
     # and not on either of the noinline functions (marked with .func).
     try:
-        assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
-        assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
+        if is_corex():
+            assert re.search(r'!"maxnreg", i32 42', k.asm["llir"])
+        else:
+            assert re.search(r'\.visible \.entry [^{;]*\.maxnreg 42', k.asm["ptx"])
+            assert not re.search(r'\.visible \.func [^{;]*\.maxnreg', k.asm["ptx"])
     except AssertionError:
         print("Failing ptx:\n", k.asm["ptx"])
         raise

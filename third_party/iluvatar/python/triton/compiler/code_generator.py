@@ -1285,10 +1285,10 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns):
     function_name = fn.repr(specialization)
     tys = list(specialization.signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs.equal_to_1}
-    new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
-    for k in attrs.divisible_by_8:
+    new_attrs = {k[0]: [("tt.corex_stride", k[1])] for k in attrs.corexLoad.items()}
+    for k in attrs.divisible_by_16:
         attr = new_attrs[k] if k in new_attrs else []
-        attr.append(("tt.max_divisibility", 8))
+        attr.append(("tt.divisibility", 16))
         new_attrs[k] = attr
 
     all_constants = constants.copy()

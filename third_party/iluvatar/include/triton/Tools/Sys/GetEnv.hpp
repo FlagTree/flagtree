@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <cstdlib>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>

@@ -58,9 +58,8 @@ def get_configs_compute_bound():
     if hasattr(torch, "corex"):
         for block_m in [32, 64, 128, 256]:
             for block_n in [32, 64, 128, 256]:
-                for block_k in [32, 64, 128, 256]:
-                    # for num_stages in [1, 2]:
-                    for num_stages in [1, 2]:
+                for block_k in [32, 64, 128]:
+                    for num_stages in [1, 2, 3]:
                         num_warps = 16 if block_m >= 128 or block_n >= 128 or block_k >= 128 else 8
                         configs.append(
                             Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': 1},
@@ -103,7 +102,7 @@ def get_nv_configs():
     prune_configs_by={
         'early_config_prune': early_config_prune,
         'perf_model': estimate_matmul_time,
-        'top_k': 10,
+        'top_k': 15,
     },
 )
 @heuristics({
@@ -123,14 +122,16 @@ def _kernel(A, B, C, M, N, K,  #
     # matrix multiplication
     pid = tl.program_id(0)
     pid_z = tl.program_id(1)
-    grid_m = tl.cdiv(M, BLOCK_M)
+    # grid_m = tl.cdiv(M, BLOCK_M)
     grid_n = tl.cdiv(N, BLOCK_N)
-    # re-order program ID for better L2 performance
-    width = GROUP_M * grid_n
-    group_id = pid // width
-    group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
-    pid_m = group_id * GROUP_M + (pid % group_size)
-    pid_n = (pid % width) // (group_size)
+    # # re-order program ID for better L2 performance
+    # width = GROUP_M * grid_n
+    # group_id = pid // width
+    # group_size = min(grid_m - group_id * GROUP_M, GROUP_M)
+    # pid_m = group_id * GROUP_M + (pid % group_size)
+    # pid_n = (pid % width) // (group_size)
+    pid_m = pid // grid_n
+    pid_n = pid % grid_n
     # do matrix multiplication
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
