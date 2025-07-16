@@ -27,9 +27,9 @@ Complete build commands for each backend:
 ```shell
 # Recommended: Use Ubuntu 20.04
 mkdir -p ~/.flagtree/iluvatar; cd ~/.flagtree/iluvatar
-wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatar-llvm18-x86_64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/iluvatar-llvm18-x86_64.tar.gz
 tar zxvf iluvatar-llvm18-x86_64.tar.gz
-wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz
 tar zxvf iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=iluvatar
@@ -40,9 +40,9 @@ python3 -m pip install . --no-build-isolation -v
 # Recommended: Use the Docker image (22GB) https://su.bcebos.com/klx-sdk-release-public/xpytorch/docker/ubuntu2004_v030/ubuntu_2004_x86_64_v30.tar
 # Contact kunlunxin-support@baidu.com for support
 mkdir -p ~/.flagtree/xpu; cd ~/.flagtree/xpu
-wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar.gz
 tar zxvf XTDK-llvm19-ubuntu2004_x86_64.tar.gz
-wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/xre-Linux-x86_64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/xre-Linux-x86_64.tar.gz
 tar zxvf xre-Linux-x86_64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=xpu
