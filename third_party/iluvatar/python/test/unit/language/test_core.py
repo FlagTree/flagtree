@@ -1324,6 +1324,7 @@ def noinline_multi_values_fn(x, y, Z):
     tl.store(Z, z)
 
 
+@pytest.mark.skip(reason="iluvatar, should export UMD_CUDAMODULELOADING=0 in 4.3.0 sdk")
 @pytest.mark.interpreter
 @pytest.mark.parametrize("mode", ["simple", "call_graph", "shared", "dynamic", "multi_values"])
 def test_noinline(mode, device):
