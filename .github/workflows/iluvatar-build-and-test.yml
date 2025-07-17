@@ -57,4 +57,4 @@ jobs:
       - name: FlagTree Test on Iluvatar
         shell: bash
         run: |
-          CUDA_VISIBLE_DEVICES=15 pytest -s third_party/iluvatar/python/test/unit
+          CUDA_VISIBLE_DEVICES=13 pytest -s third_party/iluvatar/python/test/unit
