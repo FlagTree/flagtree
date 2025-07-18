@@ -48,13 +48,13 @@ def check_dot_use_sme(lines, use_smes):
 
 
 def check_mlir(F, use_smes):
-    time.sleep(3)
     context = ir.context()
     ir.load_dialects(context)
     # backend.load_dialects(context)
     # codegen_fns = backend.get_codegen_implementation()
     path = get_ttgir_file(F.src.fn.hash_cache_file, F.src.fn.__name__)
     print(path)
+    time.sleep(3)
     mod = ir.parse_mlir_module(path, context)
     lines = mod.str().split("\n")
     return check_dot_use_sme(lines, use_smes)
