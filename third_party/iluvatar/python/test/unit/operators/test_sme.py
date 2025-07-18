@@ -639,7 +639,7 @@ def test_batch_mla():
 
 
 if __name__ == "__main__":
-    pytest.skip("iluvatar: ir.parse_mlir_module failed in CI.")
+    pass  # iluvatar: ir.parse_mlir_module failed in CI.
     test_16x32_f16_dot()
     test_16x32_i8_dot()
     test_16x32_f16_trans_dot()
