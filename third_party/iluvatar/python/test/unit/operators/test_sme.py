@@ -12,6 +12,7 @@ import inspect
 import random
 import math
 import pytest
+import time
 
 triton_cache_dir = os.environ.get('TRITON_CACHE_DIR', '/root/.triton/cache')
 
@@ -47,6 +48,7 @@ def check_dot_use_sme(lines, use_smes):
 
 
 def check_mlir(F, use_smes):
+    time.sleep(3)
     context = ir.context()
     ir.load_dialects(context)
     # backend.load_dialects(context)
