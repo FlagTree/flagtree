@@ -57,4 +57,5 @@ jobs:
       - name: FlagTree Test on Iluvatar
         shell: bash
         run: |
+          export TRITON_CACHE_DIR=./triton_cache
           CUDA_VISIBLE_DEVICES=15 pytest -s third_party/iluvatar/python/test/unit
