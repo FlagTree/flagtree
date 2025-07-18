@@ -122,6 +122,9 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             pytest.skip("Iluvatar devices do not support float8 for now")
         if (ADTYPE == "int8" and BDTYPE == "bfloat16") or (ADTYPE == "float16" and BDTYPE == "int8"):
             pytest.skip("Iluvatar devices do not support this for now")
+        if capability[0] == 8:
+            if ADTYPE == "float32" or BDTYPE == "float32":
+                pytest.skip("matmuls do not support float32 on QS now")
     else:
         if capability[0] < 7:
             pytest.skip("Only test tl.dot() on devices with sm >= 70")

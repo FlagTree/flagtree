@@ -295,7 +295,7 @@ void init_triton_llvm(py::module &&m) {
         // should work on using NVPTX target instead and address the performance
         // regressions with some scheduling solution.
         // tuningOptions.SLPVectorization = true;
-        tuningOptions.SLPVectorization = true;
+        tuningOptions.SLPVectorization = false;
 
         if (!triple.empty())
           mod->setTargetTriple(triple.c_str());

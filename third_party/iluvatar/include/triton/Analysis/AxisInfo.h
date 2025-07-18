@@ -25,15 +25,18 @@ public:
   typedef SmallVector<int64_t> DimVectorT;
 
 public:
-  AxisInfo() : AxisInfo({}, {}, {}) {}
-
-  AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy)
-      : AxisInfo(contiguity, divisibility, constancy, std::nullopt) {}
+  AxisInfo() : AxisInfo({}, {}, {}, {}) {}
 
   AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy,
-           std::optional<int64_t> constantValue)
+           DimVectorT corexFlag)
+      : AxisInfo(contiguity, divisibility, constancy, std::nullopt, corexFlag) {
+  }
+
+  AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy,
+           std::optional<int64_t> constantValue, DimVectorT corexFlag)
       : contiguity(contiguity), divisibility(divisibility),
-        constancy(constancy), constantValue(constantValue) {
+        constancy(constancy), corexFlag(corexFlag),
+        constantValue(constantValue) {
     assert(divisibility.size() == contiguity.size());
     assert(constancy.size() == contiguity.size());
   }
@@ -107,6 +110,11 @@ public:
   int64_t getConstancy(size_t dim) const { return constancy[dim]; }
   const DimVectorT &getConstancy() const { return constancy; }
 
+  // corexFlag is used to determine whether special instructions can be used to
+  // accelerate data loading.
+  int64_t getCorexFlag(size_t dim) const { return corexFlag[dim]; }
+  const DimVectorT &getCorexFlag() const { return corexFlag; }
+
   int getRank() const { return contiguity.size(); }
 
   std::optional<int64_t> getConstantValue() const { return constantValue; }
@@ -114,12 +122,13 @@ public:
   template <class T>
   static void
   initPessimisticStateFromFunc(int argNumber, T funcOp, DimVectorT *contiguity,
-                               DimVectorT *divisibility, DimVectorT *constancy);
+                               DimVectorT *divisibility, DimVectorT *constancy,
+                               DimVectorT *corex_stride);
 
   bool operator==(const AxisInfo &other) const {
     return contiguity == other.contiguity &&
            divisibility == other.divisibility && constancy == other.constancy &&
-           constantValue == other.constantValue;
+           corexFlag == other.corexFlag && constantValue == other.constantValue;
   }
 
   static AxisInfo getPessimisticValueState(Value value);
@@ -136,6 +145,7 @@ public:
     print("contiguity", contiguity);
     print(", divisibility", divisibility);
     print(", constancy", constancy);
+    print(", corexflag", corexFlag);
     os << ", constant_value = ";
     if (constantValue)
       os << *constantValue;
@@ -147,9 +157,9 @@ private:
   DimVectorT contiguity;
   DimVectorT divisibility;
   DimVectorT constancy;
-
   // The constant value of the lattice if we can infer it.
   std::optional<int64_t> constantValue;
+  DimVectorT corexFlag;
 };
 
 // Module level axis info analysis based on the call graph, assuming that we do

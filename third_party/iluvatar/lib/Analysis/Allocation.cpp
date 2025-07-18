@@ -662,6 +662,24 @@ private:
     }
   }
 
+  void dump() const {
+    llvm::outs() << "DUMP: "
+                 << "\n";
+    for (auto bufferIter : bufferRange) {
+      llvm::outs() << "ID= " << bufferIter.first->id << "\n";
+      if (bufferIter.first->kind == BufferT::BufferKind::Explicit)
+        llvm::outs() << "     Kind= Explict\n";
+      else if (bufferIter.first->kind == BufferT::BufferKind::Scratch)
+        llvm::outs() << "     Kind= Scratch\n";
+      else if (bufferIter.first->kind == BufferT::BufferKind::Virtual)
+        llvm::outs() << "     Kind= Virtual\n";
+      llvm::outs() << "     Size= " << bufferIter.first->size << "\n";
+      llvm::outs() << "     Offs= " << bufferIter.first->offset << "\n";
+      llvm::outs() << "     Interval= [" << bufferIter.second.start() << ", "
+                   << bufferIter.second.end() << ")\n";
+    }
+  }
+
 private:
   Operation *operation;
   Allocation::FuncAllocMapT *funcAllocMap;

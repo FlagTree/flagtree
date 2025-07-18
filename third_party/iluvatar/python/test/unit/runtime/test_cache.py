@@ -405,14 +405,21 @@ def test_jit_warmup_cache() -> None:
         torch.randn(32, dtype=torch.float32, device="cuda"),
         32,
     ]
+    only_save_best_config_cache = os.environ.get("TRITON_ONLY_SAVE_BEST_CONFIG_CACHE", "0") == "1"
     device = torch.cuda.current_device()
     assert len(kernel_add.cache[device]) == 0
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
     kernel_add.warmup(*args, grid=(1, ))
-    assert len(kernel_add.cache[device]) == 2
+    if only_save_best_config_cache:
+        assert len(kernel_add.cache[device]) == 2
+    else:
+        assert len(kernel_add.cache[device]) == 1
     kernel_add.warmup(*args, grid=(1, ))
-    assert len(kernel_add.cache[device]) == 2
+    if only_save_best_config_cache:
+        assert len(kernel_add.cache[device]) == 2
+    else:
+        assert len(kernel_add.cache[device]) == 1
 
 
 def test_jit_debug() -> None:

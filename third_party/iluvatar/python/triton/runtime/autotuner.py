@@ -15,6 +15,8 @@ from .jit import KernelInterface
 from .errors import OutOfResources
 from .cache import default_cache_dir
 
+import filelock
+
 
 def build_best_config_hash(args_names, key):
     cache_dir = os.environ.get('TRITON_CACHE_DIR', default_cache_dir())
@@ -43,12 +45,16 @@ def save_best_config(cfg, args_names, key):
     if os.path.exists(cfg_hash_dir):
         return
     os.makedirs(cfg_hash_dir, exist_ok=True)
-    with open(cfg_hash_file, "w") as fd:
-        fd.write(json.dumps({
-            **cfg.kwargs,
-            "num_warps": cfg.num_warps,
-            "num_stages": cfg.num_stages,
-        }))
+    lock = filelock.FileLock(f"{cfg_hash_file}.lock")
+    with lock:
+        if os.path.exists(cfg_hash_file):
+            return
+        with open(cfg_hash_file, "w") as fd:
+            fd.write(json.dumps({
+                **cfg.kwargs,
+                "num_warps": cfg.num_warps,
+                "num_stages": cfg.num_stages,
+            }))
 
 
 class Autotuner(KernelInterface):
@@ -200,6 +206,7 @@ class Autotuner(KernelInterface):
             raise RuntimeError(msg)
 
     def run(self, *args, **kwargs):
+        only_save_best_config_cache = os.environ.get("TRITON_ONLY_SAVE_BEST_CONFIG_CACHE", "0") == "1"
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
@@ -218,13 +225,8 @@ class Autotuner(KernelInterface):
                     key.append(arg)
             key = tuple(key)
             if key not in self.cache:
-                load_config = load_best_config(self.arg_names, key)
-                if load_config:
-                    best_config, num_warps, num_stages = load_config
-                    config = Config(best_config, num_warps, num_stages)
-                    self.cache[key] = config
-                    self.pre_hook(args, reset_only=True)
-                else:
+                # else:
+                if not only_save_best_config_cache:
                     # prune configs
                     used_cached_result = False
                     pruned_configs = self.prune_configs(kwargs)
@@ -233,26 +235,41 @@ class Autotuner(KernelInterface):
                     bench_end = time.time()
                     self.bench_time = bench_end - bench_start
                     self.cache[key] = builtins.min(timings, key=timings.get)
-                    list_keys = list(timings.keys())
-                    best_key_index = list_keys.index(builtins.min(timings, key=timings.get))
-                    save_best_config(self.cache[key], self.arg_names, key)
                     self.pre_hook(args, reset_only=True)
                     self.configs_timings = timings
-                    cache_key = str(self.get_jit_func().cache_key)
-                    check_key = self.cache_fn_map.get(cache_key, None)
-                    if check_key:
-                        best_cache_file = self.cache_fn_map[cache_key][0][best_key_index]
-                        best_so_path = self.cache_fn_map[cache_key][1][best_key_index]
-                        ck_list = [best_cache_file, best_so_path]
-                        for i in range(len(ck_list)):
-                            for tmp_key in check_key[i]:
-                                if ck_list[i] != tmp_key:
-                                    del_cache_file = os.path.join(
-                                        os.environ.get('TRITON_CACHE_DIR', default_cache_dir()), tmp_key)
-                                    import shutil
-                                    shutil.rmtree(del_cache_file, ignore_errors=True)
-                    self.cache_fn_map.clear()
-
+                else:
+                    load_config = load_best_config(self.arg_names, key)
+                    if load_config:
+                        best_config, num_warps, num_stages = load_config
+                        config = Config(best_config, num_warps, num_stages)
+                        self.cache[key] = config
+                        self.pre_hook(args, reset_only=True)
+                    else:
+                        pruned_configs = self.prune_configs(kwargs)
+                        bench_start = time.time()
+                        timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                        bench_end = time.time()
+                        self.bench_time = bench_end - bench_start
+                        self.cache[key] = builtins.min(timings, key=timings.get)
+                        list_keys = list(timings.keys())
+                        best_key_index = list_keys.index(builtins.min(timings, key=timings.get))
+                        save_best_config(self.cache[key], self.arg_names, key)
+                        self.pre_hook(args, reset_only=True)
+                        self.configs_timings = timings
+                        cache_key = str(self.get_jit_func().cache_key)
+                        check_key = self.cache_fn_map.get(cache_key, None)
+                        if check_key:
+                            best_cache_file = self.cache_fn_map[cache_key][0][best_key_index]
+                            best_so_path = self.cache_fn_map[cache_key][1][best_key_index]
+                            ck_list = [best_cache_file, best_so_path]
+                            for i in range(len(ck_list)):
+                                for tmp_key in check_key[i]:
+                                    if ck_list[i] != tmp_key:
+                                        del_cache_file = os.path.join(
+                                            os.environ.get('TRITON_CACHE_DIR', default_cache_dir()), tmp_key)
+                                        import shutil
+                                        shutil.rmtree(del_cache_file, ignore_errors=True)
+                        self.cache_fn_map.clear()
             config = self.cache[key]
         else:
             config = self.configs[0]

@@ -754,11 +754,12 @@ public:
   ConvertTritonToTritonGPU() = default;
   // constructor with some parameters set explicitly.
   ConvertTritonToTritonGPU(const std::string &target, int numWarps,
-                           int threadsPerWarp, int numCTAs) {
+                           int threadsPerWarp, int numCTAs, int numStages) {
     this->numWarps = numWarps;
     this->threadsPerWarp = threadsPerWarp;
     this->numCTAs = numCTAs;
     this->target = target;
+    this->numStages = numStages;
   }
 
   void runOnOperation() override {
@@ -799,6 +800,12 @@ public:
     mod->setAttr(AttrTargetName,
                  StringAttr::get(context, this->target.getValue()));
 
+#ifdef __ILUVATAR__
+    mod->setAttr(
+        AttrNumStagesForDot,
+        IntegerAttr::get(i32_ty, llvm::APInt(32, numStages.getValue())));
+#endif
+
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
 
@@ -815,9 +822,9 @@ std::unique_ptr<OperationPass<ModuleOp>>
 mlir::triton::createConvertTritonToTritonGPUPass(const std::string &target,
                                                  int numWarps,
                                                  int threadsPerWarp,
-                                                 int numCTAs) {
-  return std::make_unique<::ConvertTritonToTritonGPU>(target, numWarps,
-                                                      threadsPerWarp, numCTAs);
+                                                 int numCTAs, int numStages) {
+  return std::make_unique<::ConvertTritonToTritonGPU>(
+      target, numWarps, threadsPerWarp, numCTAs, numStages);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

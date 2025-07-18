@@ -75,9 +75,7 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
     return false;
 
   bool foundSchedule = false;
-#ifndef __ILUVATAR__
   foundSchedule = preProcessLoopAndGetSchedule(forOp, numStages, options);
-#endif
 
   // TODO: add more pipelines strategy.
   if (!foundSchedule)
@@ -118,16 +116,28 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
         loops.push_back(forOp);
     });
 
-    if (loops.empty())
+#ifdef __ILUVATAR__
+    ModuleOp mod = getOperation();
+    auto i32_ty = IntegerType::get(mod->getContext(), 32);
+#endif
+
+    if (loops.empty()) {
+#ifdef __ILUVATAR__
+      mod->setAttr("triton_gpu.dot.num-stages",
+                   IntegerAttr::get(i32_ty, llvm::APInt(32, 1)));
+#endif
       return;
+    }
 
     llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
     for (scf::ForOp forOp : loops) {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
       bool pipelined = pipelineLoop(forOp, loopNumStages);
+#ifndef __ILUVATAR__
       if (pipelined && outerLoop && getNumStagesOrDefault(outerLoop) > 1)
         outerLoops.insert(outerLoop);
+#endif
     }
 
     // schedule the waits
@@ -140,9 +150,15 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     RewritePatternSet patterns(getOperation().getContext());
     arithDialect->getCanonicalizationPatterns(patterns);
     if (applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))
-            .failed())
+            .failed()) {
+#ifdef __ILUVATAR__
+      mod->setAttr("triton_gpu.dot.num-stages",
+                   IntegerAttr::get(i32_ty, llvm::APInt(32, 1)));
+#endif
       return signalPassFailure();
+    }
 
+#ifndef __ILUVATAR__
     // Try to pipeline the outer loop to overlap the prologue and epilogue of
     // the inner loop.
     for (scf::ForOp outerLoop : outerLoops)
@@ -156,7 +172,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
         loops.push_back(forOp);
     });
 
-#ifndef __ILUVATAR__
     for (scf::ForOp forOp : loops) {
       mlir::triton::pipelineTMAStores(forOp);
     }

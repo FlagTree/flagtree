@@ -585,9 +585,6 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
         continue;
     }
 
-    if (auto nestedForOp = dyn_cast<scf::ForOp>(op))
-      return loadToInfo;
-
     if (auto dot = dyn_cast<tt::DotOp>(use)) {
       loadInfo.usedByDot = true;
       if (loadIsMMAv3(op)) {
@@ -1065,7 +1062,6 @@ static void createTMABarrierAndWait(
 }
 #endif
 
-#ifndef __ILUVATAR__
 // Convert load ops into their asyn version and apply multi-buffering based on
 // the required number of buffers.
 static SmallVector<Value>
@@ -1083,6 +1079,9 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
           llvm::make_second_range(loadToInfo).end(),
           [](auto &lhs, auto &rhs) { return lhs.distToUse < rhs.distToUse; })
           ->distToUse;
+#ifdef __ILUVATAR__
+  numBuffers++;
+#else
   bool hasMMAV3 =
       llvm::any_of(loadToInfo, [](auto &kv) { return kv.second.loadIsMMAV3; });
   if (hasMMAV3) {
@@ -1090,6 +1089,7 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     // pipelining post-processing.
     numBuffers++;
   };
+#endif
 
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
@@ -1154,9 +1154,10 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, one);
     phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
   }
+#ifndef __ILUVATAR__
   createTMABarrierAndWait(forOp, asyncLoads, insertIdx, extractIdx, phase,
                           numBuffers, schedule, barriers, loadToInfo);
-
+#endif
   // Create a cluster for the prefetches. It may end up being empty, but this
   // is OK.
   CoarseSchedule::Cluster prefetchCluster = schedule.clusters.newAtBack();
@@ -1165,11 +1166,13 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
     if (auto loadOp = dyn_cast<tt::LoadOp>(asyncLoad.loadOp)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       schedule, prefetchCluster, loadToInfo, numStages);
+#ifndef __ILUVATAR__
     } else {
       auto descLoad = cast<tt::ExperimentalDescriptorLoadOp>(asyncLoad.loadOp);
       createTMAAsyncCopy(forOp, descLoad, asyncLoad.alloc, insertIdx,
                          extractIdx, asyncLoad.barrier, asyncLoad.waitOp, phase,
                          schedule, loadToInfo, numStages);
+#endif
     }
   }
   SmallVector<Value> newYieldOperands = {insertIdx, extractIdx};
@@ -1180,7 +1183,6 @@ createAsyncOps(scf::ForOp &forOp, CoarseSchedule &schedule,
 
   return allocs;
 }
-#endif
 
 #ifndef __ILUVATAR__
 static void invalidateBarriers(OpBuilder &builder,
@@ -1201,7 +1203,6 @@ static void invalidateBarriers(OpBuilder &builder,
 }
 #endif
 
-#ifndef __ILUVATAR__
 bool mlir::triton::preProcessLoopAndGetSchedule(
     scf::ForOp &forOp, int numStages, mlir::triton::PipeliningOption &options) {
   // Schedule the loads and root ops (dot ops) in the loop. This will give us
@@ -1274,14 +1275,15 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
   builder.create<ttg::AsyncWaitOp>(forOp.getLoc(), ValueRange({}), 0);
+#ifndef __ILUVATAR__
   // Invalidate any mbarrier create
   invalidateBarriers(builder, barriers);
+#endif
   // Explicitly deallocate allocated tensors after the wait op
   for (auto alloc : allocs)
     builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
   return true;
 }
-#endif
 
 /// Find the minimum number of async_commit_group ops between the wait
 /// and the associated async_commit_group. This can be safely used as the wait

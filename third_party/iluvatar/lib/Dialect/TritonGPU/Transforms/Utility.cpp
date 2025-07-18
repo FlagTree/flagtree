@@ -464,6 +464,10 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferSrcEncoding(reshape, encoding);
+#ifdef __ILUVATAR__
+  if (auto load = dyn_cast<triton::LoadOp>(op))
+    return encoding;
+#endif
 
   return std::nullopt;
 }
