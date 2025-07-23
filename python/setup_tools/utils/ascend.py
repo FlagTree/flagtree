@@ -28,6 +28,23 @@ def get_package_dir():
     package_dict["triton/triton_patch/language"] = f"{triton_patch_root_rel_dir}/language"
     package_dict["triton/triton_patch/compiler"] = f"{triton_patch_root_rel_dir}/compiler"
     package_dict["triton/triton_patch/runtime"] = f"{triton_patch_root_rel_dir}/runtime"
+    patch_paths = {
+        "language/_utils.py",
+        "compiler/compiler.py",
+        "compiler/code_generator.py",
+        "compiler/errors.py",
+        "runtime/autotuner.py",
+        "runtime/autotiling_tuner.py",
+        "runtime/jit.py",
+        "runtime/tile_generator.py",
+        "runtime/utils.py",
+        "runtime/libentry.py",
+        "runtime/code_cache.py",
+        "testing.py",
+    }
+
+    for path in patch_paths:
+        package_dict[f"triton/{path}"] = f"{triton_patch_root_rel_dir}/{path}"
     return package_dict
 
 
