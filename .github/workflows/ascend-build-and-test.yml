@@ -30,3 +30,11 @@ jobs:
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           python3.9 third_party/tests/ascend/vector-add.py
+
+      - name: FlagGems Test on FlagTree
+        shell: bash
+        run: |
+          git clone https://github.com/FlagOpen/FlagGems.git
+          cd FlagGems
+          python3.9 -m pip install . --no-build-isolation
+          python3.9 -c "import flag_gems; flag_gems.enable()"
