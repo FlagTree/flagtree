@@ -19,7 +19,6 @@ python/triton/backends/
 !python/triton/backends/driver.py
 
 # flagtree backend
-third_party/cambricon/
 third_party/iluvatar/iluvatarTritonPlugin.so
 third_party/triton_shared/
 third_party/xpu/backend/xpu3
