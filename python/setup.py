@@ -593,22 +593,21 @@ def get_install_requires():
     install_requires = ["filelock"]
     return install_requires
 
-
-setup(
-    name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
-    author="Philippe Tillet",
-    author_email="phil@openai.com",
-    description="A language and compiler for custom Deep Learning operations",
-    long_description="",
-    packages=get_packages(),
-    #package_dir=helper.CommonUtils.get_package_dir(get_packages()),
-    entry_points=get_entry_points(),
-    install_requires=get_install_requires(),
-    package_data=package_data,
-    include_package_data=True,
-    ext_modules=[CMakeExtension("triton", helper.ext_sourcedir)],
-    cmdclass={
+packages = get_packages()
+common_kwargs = {
+    "name": os.environ.get("TRITON_WHEEL_NAME", "triton"),
+    "version": "3.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    "author": "Philippe Tillet",
+    "author_email": "phil@openai.com",
+    "description": "A language and compiler for custom Deep Learning operations",
+    "long_description": "",
+    "packages": packages,
+    "entry_points": get_entry_points(),
+    "install_requires": get_install_requires(),
+    "package_data": package_data,
+    "include_package_data": True,
+    "ext_modules": [CMakeExtension("triton", helper.ext_sourcedir)],
+    "cmdclass": {
         "build_ext": CMakeBuild,
         "build_py": CMakeBuildPy,
         "clean": CMakeClean,
@@ -617,11 +616,10 @@ setup(
         "bdist_wheel": plugin_bdist_wheel,
         "egg_info": plugin_egginfo,
     },
-    zip_safe=False,
-    # for PyPI
-    keywords=["Compiler", "Deep Learning"],
-    url="https://github.com/triton-lang/triton/",
-    classifiers=[
+    "zip_safe": False,
+    "keywords": ["Compiler", "Deep Learning"],
+    "url": "https://github.com/triton-lang/triton/",
+    "classifiers": [
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
@@ -632,8 +630,8 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
     ],
-    test_suite="tests",
-    extras_require={
+    "test_suite": "tests",
+    "extras_require": {
         "build": [
             "cmake>=3.20",
             "GitPython",
@@ -654,4 +652,11 @@ setup(
             "tabulate",
         ],
     },
-)
+}
+
+# 根据环境变量决定是否添加 package_dir
+if os.environ.get("FLAGTREE_BACKEND", "").lower() != "iluvatar":
+    common_kwargs["package_dir"] = helper.CommonUtils.get_package_dir(packages)
+
+# 最后执行 setup
+setup(**common_kwargs)

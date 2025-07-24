@@ -1,19 +1,13 @@
-# TODO: 0624
 import importlib
+from triton.backend_context import get_backend
 
-_backend_cache = {}
-
-def get_backend(platform: str):
-    if platform in _backend_cache:
-        return _backend_cache[platform]
-
+def load_backend(platform: str):
     try:
-        module = importlib.import_module(
-            f"triton.backends.{platform}.backend_impl"
-        )
-        backend = module.get_backend()
-        _backend_cache[platform] = backend
-        return backend
-    except ImportError as e:
-        raise RuntimeError(f"Backend for platform '{platform}' not found") from e
+        importlib.import_module(f"triton.backends.{platform}.backend_impl")
+    except ImportError:
+        raise RuntimeError(f"Backend for platform '{platform}' not found")
 
+    backend = get_backend(platform)
+    if backend is None:
+        raise RuntimeError(f"Backend '{platform}' failed to register itself")
+    return backend
