@@ -24,7 +24,6 @@ def install_extension(*args, **kargs):
 
 
 def create_symlink_for_triton(link_map):
-    #triton_ascend
     for target, source in link_map.items():
         target_path = Path(os.path.join(root_dir, "python", target))
         source_path = Path(os.path.join(root_dir, source))
@@ -52,7 +51,7 @@ def create_symlink_for_triton(link_map):
 
 def get_package_dir():
     package_dict = {}
-    triton_patch_prefix_dir = os.path.join("third_party/ascend/triton_patch/python/triton_patch")
+    triton_patch_prefix_dir = os.path.join(root_dir, "third_party/ascend/triton_patch/python/triton_patch")
     package_dict["triton/triton_patch"] = f"{triton_patch_prefix_dir}"
     package_dict["triton/triton_patch/language"] = f"{triton_patch_prefix_dir}/language"
     package_dict["triton/triton_patch/compiler"] = f"{triton_patch_prefix_dir}/compiler"
