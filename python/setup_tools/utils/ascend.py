@@ -2,6 +2,8 @@ import os
 import shutil
 from pathlib import Path
 
+root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
 
 def get_backend_cmake_args(*args, **kargs):
     build_ext = kargs['build_ext']
@@ -21,10 +23,36 @@ def install_extension(*args, **kargs):
     shutil.copy(src_ext_path, dst_ext_path)
 
 
+def create_symlink_for_triton(link_map):
+    #triton_ascend
+    for target, source in link_map.items():
+        target_path = Path(os.path.join(root_dir, "python", target))
+        source_path = Path(os.path.join(root_dir, source))
+        if target_path.exists():
+            if target_path.is_file():
+                os.unlink(target_path)
+            elif target_path.is_dir():
+                shutil.rmtree(target_path)
+
+        if source_path.is_dir():
+            os.makedirs(target_path, exist_ok=True)
+            for src_file in source_path.glob("*"):
+                if src_file.is_file():
+                    dest_file = target_path / src_file.name
+                    os.symlink(src_file, dest_file)
+                    print(f"Created symlink: {dest_file} -> {src_file}")
+        elif source_path.is_file():
+            if target_path.exists():
+                os.unlink(target_path)
+            os.symlink(source_path, target_path)
+            print(f"Created symlink: {target_path} -> {source_path}")
+        else:
+            print("[ERROR]: wrong file mapping")
+
+
 def get_package_dir():
     package_dict = {}
-    root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-    triton_patch_prefix_dir = os.path.join(root_dir, "third_party/ascend/triton_patch/python/triton_patch")
+    triton_patch_prefix_dir = os.path.join("third_party/ascend/triton_patch/python/triton_patch")
     package_dict["triton/triton_patch"] = f"{triton_patch_prefix_dir}"
     package_dict["triton/triton_patch/language"] = f"{triton_patch_prefix_dir}/language"
     package_dict["triton/triton_patch/compiler"] = f"{triton_patch_prefix_dir}/compiler"
@@ -46,6 +74,7 @@ def get_package_dir():
 
     for path in patch_paths:
         package_dict[f"triton/{path}"] = f"{triton_patch_prefix_dir}/{path}"
+    create_symlink_for_triton(package_dict)
     return package_dict
 
 
@@ -100,6 +129,3 @@ def precompile_hock(*args, **kargs):
     except Exception as e:
         print(f"[ERROR]: Unknown error: {str(e)}")
     return False
-
-
-print(get_package_dir())
