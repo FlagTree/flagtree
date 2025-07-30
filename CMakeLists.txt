@@ -214,7 +214,7 @@ include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
 # link_directories(${LLVM_LIBRARY_DIR})
-if (FLAGTREE_BACKEND STREQUAL "cambricon" OR FLAGTREE_BACKEND STREQUAL "ascend")
+if (FLAGTREE_BACKEND STREQUAL "ascend")
   include_directories(${PROJECT_SOURCE_DIR}/include)
   include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
   add_subdirectory(include)
@@ -422,8 +422,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
-  if(FLAGTREE_BACKEND STREQUAL "cambricon")
-    add_library(triton SHARED)
+  if(FLAGTREE_BACKEND STREQUAL "metax")
+    add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
+                ${PYTHON_SRC_PATH}/interpreter.cc
+                ${PYTHON_SRC_PATH}/llvm.cc)
   else()
     if(FLAGTREE_BACKEND STREQUAL "ascend")
       set(PYTHON_IR_SRC_PATH ${PATCHED_PYTHON_SRC_PATH})
