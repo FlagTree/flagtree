@@ -116,6 +116,16 @@ def configure_cambricon_packages_and_data(packages, package_dir, package_data):
         return packages, package_dir, package_data
 
 
+def configure_cambricon_packages_and_data(packages, package_dir, package_data):
+    try:
+        current_file = os.path.abspath(__file__)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
+        deps_dir = os.path.join(project_root, "deps")
+        return backend_utils.configure_packages_and_data(packages, package_dir, package_data, deps_dir)
+    except Exception:
+        return packages, package_dir, package_data
+
+
 def post_install():
     try:
         activated_module.post_install()
