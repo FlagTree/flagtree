@@ -373,8 +373,8 @@ download_flagtree_third_party("triton_ascend", condition=(flagtree_backend == "a
                               hock=utils.ascend.precompile_hock, required=True)
 
 if hasattr(utils, "aipu"):
-  download_flagtree_third_party("flir", condition=(flagtree_backend == "aipu"), hock=utils.aipu.precompile_hock,
-                                required=True)
+    download_flagtree_third_party("flir", condition=(flagtree_backend == "aipu"), hock=utils.aipu.precompile_hock,
+                                  required=True)
 
 handle_flagtree_backend()
 
