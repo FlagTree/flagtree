@@ -654,9 +654,9 @@ common_kwargs = {
     },
 }
 
-# 根据环境变量决定是否添加 package_dir
+# decide whether to add package_dir based on the environment variables
 if os.environ.get("FLAGTREE_BACKEND", "").lower() != "iluvatar":
     common_kwargs["package_dir"] = helper.CommonUtils.get_package_dir(packages)
 
-# 最后执行 setup
+# setup
 setup(**common_kwargs)
