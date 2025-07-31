@@ -10,7 +10,10 @@ from triton.runtime.build import is_corex
 
 def nvsmi(attrs):
     attrs = ','.join(attrs)
-    cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
+    if is_corex():
+        cmd = ['ixsmi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
+    else:
+        cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
     out = subprocess.check_output(cmd)
     ret = out.decode(sys.stdout.encoding).split(',')
     ret = [int(x) for x in ret]

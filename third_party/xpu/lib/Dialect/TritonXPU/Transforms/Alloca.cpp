@@ -23,9 +23,16 @@ struct TritonXPUAllocaPass
 public:
   using impl::TritonXPUAllocaBase<TritonXPUAllocaPass>::TritonXPUAllocaBase;
 
+  TritonXPUAllocaPass() = default;
+  TritonXPUAllocaPass(unsigned bufferSize, unsigned coreNum) {
+    this->bufferSize = bufferSize;
+    this->coreNum = coreNum;
+  }
+
   void runOnOperation() override {
     mlir::ModuleOp m = getOperation();
 
+    SetVector<Operation *> visitedOps;
     m.walk([&](triton::xpu::LoadOp loadOp) {
       auto loc = loadOp.getLoc();
       OpBuilder builder(loadOp);
@@ -37,23 +44,30 @@ public:
               ? product(mlir::cast<RankedTensorType>(gmPtrType).getShape())
               : 1;
       if (auto gm2lmOp =
-              dyn_cast<triton::xpu::GM2LMOp>(loadOp->getPrevNode())) {
-        auto allocaOp =
-            builder.create<triton::xpu::AllocaOp>(loc, lmPtrType, size);
+              dyn_cast<triton::xpu::GM2LMOp>(loadOp.getPtr().getDefiningOp())) {
+        if (!visitedOps.count(gm2lmOp)) {
+          visitedOps.insert(gm2lmOp);
+          auto offsetState = static_cast<OffsetState>(gm2lmOp.getOffsetState());
+          size = offsetState == OffsetState::DiscreteSame
+                     ? std::min(static_cast<int64_t>(coreNum), size)
+                     : size;
+          auto allocaOp =
+              builder.create<triton::xpu::AllocaOp>(loc, lmPtrType, size);
 
-        auto operandSegmentSizesAttr =
-            gm2lmOp->getAttrOfType<DenseI32ArrayAttr>("operandSegmentSizes");
-        SmallVector<int32_t> operandSegmentSizes(
-            operandSegmentSizesAttr.asArrayRef());
-        ++operandSegmentSizes[2]; // 0: ptr, 1: len, 2: bufPtr
-        gm2lmOp->setAttr("operandSegmentSizes",
-                         builder.getDenseI32ArrayAttr(operandSegmentSizes));
+          auto operandSegmentSizesAttr =
+              gm2lmOp->getAttrOfType<DenseI32ArrayAttr>("operandSegmentSizes");
+          SmallVector<int32_t> operandSegmentSizes(
+              operandSegmentSizesAttr.asArrayRef());
+          ++(operandSegmentSizes.back()); // 0: ptr, 1: len, 2: other, 3: bufPtr
+          gm2lmOp->setAttr("operandSegmentSizes",
+                           builder.getDenseI32ArrayAttr(operandSegmentSizes));
 
-        gm2lmOp->insertOperands(gm2lmOp->getNumOperands(), {allocaOp});
+          gm2lmOp->insertOperands(gm2lmOp->getNumOperands(), {allocaOp});
 
-        allocaOp->moveBefore(gm2lmOp);
+          allocaOp->moveBefore(gm2lmOp);
+        }
       } else {
-        llvm_unreachable("Only support GM2LM as previous node of load");
+        llvm_unreachable("Only support GM2LM as definingOp of load ptr");
       }
     });
 
@@ -106,6 +120,35 @@ public:
           &(*(cast<triton::FuncOp>(ancestorOp).getBody().front().begin()));
       allocaOp->moveBefore(firstOp);
     });
+
+    // Eliminate Redundant Load-Store Pairs(TODO: Create a New pass for this)
+    SmallVector<Operation *> loadStoreOps;
+    m.walk([&](triton::xpu::LoadOp loadOp) {
+      auto res = loadOp.getResult();
+      if (res.hasOneUse() &&
+          (loadOp.getStride() == 1 || loadOp.getStride() == -1) &&
+          !loadOp.getIsDiscrete()) {
+        for (auto user : res.getUsers()) {
+          if (auto storeOp = dyn_cast<triton::xpu::StoreOp>(user)) {
+            if (auto lm2gmOp =
+                    dyn_cast<triton::xpu::LM2GMOp>(storeOp->getNextNode())) {
+              if (auto gmlmOp = dyn_cast<triton::xpu::GM2LMOp>(
+                      loadOp.getPtr().getDefiningOp())) {
+                if (gmlmOp.getPtr().getType() == lm2gmOp.getPtr().getType()) {
+                  lm2gmOp->setOperand(lm2gmOp->getNumOperands() - 1,
+                                      loadOp.getPtr());
+                  loadStoreOps.push_back(storeOp);
+                  loadStoreOps.push_back(loadOp);
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+    for (auto op : loadStoreOps) {
+      op->erase();
+    }
   }
 };
 

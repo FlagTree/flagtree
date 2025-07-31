@@ -1,9 +1,5 @@
-//===----------------------------------------------------------------------===//
-//
-// Copyright (C) 2025 by Kunlunxin. All rights reserved.
-//
-//===----------------------------------------------------------------------===//
 #include "mlir/IR/IRMapping.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonXPU/IR/Dialect.h"
 #include "triton/Dialect/TritonXPU/Transforms/Passes.h"
 
@@ -15,10 +11,6 @@ namespace xpu {
 
 #define GEN_PASS_DEF_TRITONXPUUNROLLCONTROL
 #include "triton/Dialect/TritonXPU/Transforms/Passes.h.inc"
-
-#define COMBINE_OP                                                             \
-  arith::AddFOp, arith::MulFOp, arith::MaxNumFOp, arith::MinNumFOp,            \
-      arith::OrIOp, arith::XOrIOp, arith::AndIOp
 
 template <typename OP> struct COMOp;
 
@@ -42,6 +34,12 @@ public:
   using impl::TritonXPUUnrollControlBase<
       TritonXPUUnrollControl>::TritonXPUUnrollControlBase;
 
+  TritonXPUUnrollControl() = default;
+  TritonXPUUnrollControl(unsigned bufferSize, unsigned coreNum) {
+    this->bufferSize = bufferSize;
+    this->coreNum = coreNum;
+  }
+
   template <typename T> static decltype(auto) createCombineVectorizedOp(T op) {
     OpBuilder builder(op);
     return builder.create<typename COMOp<T>::type>(
@@ -50,30 +48,60 @@ public:
 
   void processOpVecTy(ModuleOp &m) {
     m.walk([&](Operation *op) {
-      TypeSwitch<Operation *>(op).Case<COMBINE_OP>([&](auto combineOp) {
-        if (auto tensorTy =
-                dyn_cast<RankedTensorType>(combineOp.getResult().getType())) {
-          if (isa<VectorType>(getElementTypeOrSelf(tensorTy))) {
-            auto vecOp = createCombineVectorizedOp(combineOp);
-            combineOp.replaceAllUsesWith(vecOp.getResult());
-            combineOp.erase();
-          }
-        }
-      });
+      TypeSwitch<Operation *>(op)
+          .Case<COMBINE_BINARY_OP>([&](auto combineBinaryOp) {
+            if (auto tensorTy = dyn_cast<RankedTensorType>(
+                    combineBinaryOp.getResult().getType())) {
+              if (isa<VectorType>(getElementTypeOrSelf(tensorTy))) {
+                auto vecOp = createCombineVectorizedOp(combineBinaryOp);
+                combineBinaryOp.replaceAllUsesWith(vecOp.getResult());
+                combineBinaryOp.erase();
+              }
+            }
+          })
+          .Case<arith::CmpFOp>([&](auto cmpFOp) {
+            if (auto tensorTy =
+                    dyn_cast<RankedTensorType>(cmpFOp.getResult().getType())) {
+              if (isa<VectorType>(getElementTypeOrSelf(tensorTy))) {
+                OpBuilder builder(cmpFOp);
+                auto vecOp = builder.create<triton::xpu::VCmpFOp>(
+                    cmpFOp.getLoc(), cmpFOp.getResult().getType(),
+                    cmpFOp.getPredicate(), cmpFOp.getLhs(), cmpFOp.getRhs());
+                ;
+                cmpFOp.replaceAllUsesWith(vecOp.getResult());
+                cmpFOp.erase();
+              }
+            }
+          });
     });
   }
 
-  bool isAncestorOf(Operation *op1, Operation *op2) {
+  bool isAncestorOf(Operation *op1, Operation *op2, bool needBefore = false) {
     Block *block1 = op1->getBlock();
     for (Block *block2 = op2->getBlock(); block2 != nullptr;) {
       if (block1 == block2) {
+        if (needBefore && !op1->isBeforeInBlock(op2)) {
+          return false;
+        }
         return true;
       }
-      Operation *parentOp = block2->getParentOp();
-      if (parentOp == nullptr) {
+      op2 = block2->getParentOp();
+      if (op2 == nullptr) {
         break;
       }
-      block2 = parentOp->getBlock();
+      block2 = op2->getBlock();
+    }
+    return false;
+  }
+
+  bool isForBlockSizeArgument(Operation *op, Value operand) {
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      Block *block = forOp.getBody();
+      for (BlockArgument arg : block->getArguments()) {
+        if (arg == operand) {
+          return true;
+        }
+      }
     }
     return false;
   }
@@ -81,10 +109,142 @@ public:
   void getUnrollTree(Operation *op, SetVector<Operation *> &opTree,
                      SetVector<Operation *> &visitedOps,
                      SetVector<Operation *> &excludeChainOps, Operation *rootOp,
-                     bool isTop2Bottom = true) {
+                     bool isTop2Bottom = true, bool needBefore = false) {
     if (!op || visitedOps.count(op) ||
         isa<triton::xpu::GM2LMOp, triton::xpu::LM2GMOp, scf::YieldOp,
-            triton::xpu::ReduceOp, triton::xpu::ReduceReturnOp>(op)) {
+            triton::xpu::ReduceOp, triton::xpu::ReduceReturnOp,
+            triton::xpu::ScanOp, triton::xpu::ScanReturnOp>(op)) {
+      return;
+    }
+
+    visitedOps.insert(op);
+    if (isAncestorOf(op, rootOp, needBefore) ||
+        op->getBlock() == rootOp->getBlock()) {
+      opTree.insert(op);
+    }
+
+    // Search definedOp of childOp
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      // Then
+      auto &ifThenBlock = ifOp.getThenRegion().front();
+      for (auto &inBlockOp : ifThenBlock) {
+        getUnrollTree(&inBlockOp, opTree, visitedOps, excludeChainOps, rootOp,
+                      isTop2Bottom, needBefore);
+      }
+      // Else
+      auto &ifElseRegion = ifOp.getElseRegion();
+      if (!ifElseRegion.empty()) {
+        auto &ifElseBlock = ifElseRegion.front();
+        for (auto &inBlockOp : ifElseBlock) {
+          getUnrollTree(&inBlockOp, opTree, visitedOps, excludeChainOps, rootOp,
+                        isTop2Bottom, needBefore);
+        }
+      }
+    }
+
+    // from bottom to top
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      Block *body = forOp.getBody();
+      for (auto &op : body->getOperations()) {
+        if (isa<triton::xpu::LoadOp, arith::ConstantOp, triton::xpu::VConstOp>(
+                &op)) {
+        } else if (auto storeOp = dyn_cast<triton::xpu::StoreOp>(&op)) {
+          auto defOp = storeOp.getValue().getDefiningOp();
+          if (!isAncestorOf(forOp.getOperation(), defOp)) {
+            getUnrollTree(defOp, opTree, visitedOps, excludeChainOps, rootOp,
+                          isTop2Bottom, needBefore);
+          }
+        } else {
+          for (auto operand : op.getOperands()) {
+            if (isForBlockSizeArgument(forOp.getOperation(), operand))
+              continue;
+            auto defOp = operand.getDefiningOp();
+            if (!isAncestorOf(forOp.getOperation(), defOp)) {
+              getUnrollTree(defOp, opTree, visitedOps, excludeChainOps, rootOp,
+                            isTop2Bottom, needBefore);
+            }
+          }
+        }
+      }
+    } else if (isa<triton::xpu::LoadOp, arith::ConstantOp,
+                   triton::xpu::VConstOp>(op)) {
+    } else if (auto storeOp = dyn_cast<triton::xpu::StoreOp>(op)) {
+      auto defOp = storeOp.getValue().getDefiningOp();
+      getUnrollTree(defOp, opTree, visitedOps, excludeChainOps, rootOp,
+                    isTop2Bottom, needBefore);
+    } else {
+      for (auto operand : op->getOperands()) {
+        auto defOp = operand.getDefiningOp();
+        getUnrollTree(defOp, opTree, visitedOps, excludeChainOps, rootOp,
+                      isTop2Bottom, needBefore);
+      }
+    }
+
+    if (isTop2Bottom) {
+      // from top to bottom
+      if (excludeChainOps.count(op) ||
+          isa<arith::ConstantOp, triton::xpu::VConstOp>(op)) {
+      } else {
+        for (auto userOp : op->getUsers()) {
+          getUnrollTree(userOp, opTree, visitedOps, excludeChainOps, rootOp,
+                        isTop2Bottom, needBefore);
+        }
+      }
+    }
+    return;
+  }
+
+  bool isOuterBroadcast(Operation *op) {
+    if (auto broadcastOp = dyn_cast<triton::xpu::BroadcastOp>(op)) {
+      auto src = broadcastOp.getSrc();
+      auto result = broadcastOp.getResult();
+      if (auto srcTy = dyn_cast<RankedTensorType>(src.getType())) {
+        if (auto resTy = dyn_cast<RankedTensorType>(result.getType())) {
+          int64_t srcElemNum = 1;
+          if (auto vecTy = dyn_cast<VectorType>(getElementTypeOrSelf(srcTy))) {
+            srcElemNum = vecTy.getNumElements();
+          }
+          int64_t resElemNum = 1;
+          if (auto vecTy = dyn_cast<VectorType>(getElementTypeOrSelf(resTy))) {
+            resElemNum = vecTy.getNumElements();
+          }
+          auto srcShape = srcTy.getShape();
+          auto resShape = resTy.getShape();
+          int64_t srcInnerNum = srcElemNum * srcShape.back();
+          int64_t resInnerNum = resElemNum * resShape.back();
+          if (srcInnerNum != resInnerNum) { // unequal dim 1 shape means in
+                                            // the inner axis op chain
+            assert(srcShape.front() == resShape.front() && "Invalid BroadCast");
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  template <typename T> Operation *getVdefOp(T op) {
+    Operation *vDefOp;
+    auto elemState = static_cast<ElemState>(op.getElemState());
+    if (elemState == ElemState::SV) {
+      vDefOp = op.getRhs().getDefiningOp();
+    } else if (elemState == ElemState::VS) {
+      vDefOp = op.getLhs().getDefiningOp();
+    } else {
+      llvm_unreachable(
+          "[Unroll Control]: ElemState the SVOp Only Could be SV/VS.");
+    }
+    return vDefOp;
+  }
+
+  void getPostReduceUnrollTree(Operation *op, SetVector<Operation *> &opTree,
+                               SetVector<Operation *> &visitedOps,
+                               SetVector<Operation *> &excludeChainOps,
+                               Operation *rootOp) {
+    if (!op || visitedOps.count(op) ||
+        isa<triton::xpu::GM2LMOp, triton::xpu::LM2GMOp, scf::YieldOp,
+            triton::xpu::ReduceOp, triton::xpu::ReduceReturnOp,
+            triton::xpu::ScanOp, triton::xpu::ScanReturnOp>(op)) {
       return;
     }
 
@@ -98,47 +258,43 @@ public:
       // Then
       auto &ifThenBlock = ifOp.getThenRegion().front();
       for (auto &inBlockOp : ifThenBlock) {
-        getUnrollTree(&inBlockOp, opTree, visitedOps, excludeChainOps, rootOp,
-                      isTop2Bottom);
+        getPostReduceUnrollTree(&inBlockOp, opTree, visitedOps, excludeChainOps,
+                                rootOp);
       }
       // Else
       auto &ifElseRegion = ifOp.getElseRegion();
       if (!ifElseRegion.empty()) {
         auto &ifElseBlock = ifElseRegion.front();
         for (auto &inBlockOp : ifElseBlock) {
-          getUnrollTree(&inBlockOp, opTree, visitedOps, excludeChainOps, rootOp,
-                        isTop2Bottom);
+          getPostReduceUnrollTree(&inBlockOp, opTree, visitedOps,
+                                  excludeChainOps, rootOp);
         }
       }
     }
 
     // from bottom to top
     if (isa<triton::xpu::LoadOp, arith::ConstantOp, triton::xpu::VConstOp>(
-            op)) {
+            op) ||
+        isOuterBroadcast(op)) {
+    } else if (isa<XPU_SVECTORIZED_BINARY_OP>(op)) {
+      TypeSwitch<Operation *>(op).Case<XPU_SVECTORIZED_BINARY_OP>(
+          [&](auto vBinOp) {
+            Operation *vDefOp = getVdefOp(vBinOp);
+            getPostReduceUnrollTree(vDefOp, opTree, visitedOps, excludeChainOps,
+                                    rootOp);
+          });
     } else if (auto storeOp = dyn_cast<triton::xpu::StoreOp>(op)) {
       auto defOp = storeOp.getValue().getDefiningOp();
-      getUnrollTree(defOp, opTree, visitedOps, excludeChainOps, rootOp,
-                    isTop2Bottom);
+      getPostReduceUnrollTree(defOp, opTree, visitedOps, excludeChainOps,
+                              rootOp);
     } else {
       for (auto operand : op->getOperands()) {
         auto defOp = operand.getDefiningOp();
-        getUnrollTree(defOp, opTree, visitedOps, excludeChainOps, rootOp,
-                      isTop2Bottom);
+        getPostReduceUnrollTree(defOp, opTree, visitedOps, excludeChainOps,
+                                rootOp);
       }
     }
 
-    if (isTop2Bottom) {
-      // from top to bottom
-      if (excludeChainOps.count(op) ||
-          isa<arith::ConstantOp, triton::xpu::ConvertLayoutOp,
-              triton::xpu::VConstOp>(op)) {
-      } else {
-        for (auto userOp : op->getUsers()) {
-          getUnrollTree(userOp, opTree, visitedOps, excludeChainOps, rootOp,
-                        isTop2Bottom);
-        }
-      }
-    }
     return;
   }
 
@@ -156,8 +312,8 @@ public:
       return 1;
   }
 
-  int64_t getnumUnroll(Type type) {
-    int64_t numUnroll = numUnrollPerCore * 64;
+  int64_t getNumUnroll(Type type) {
+    int64_t numUnroll = numUnrollPerCore * coreNum;
     if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
       auto clusterEncoding =
           cast<triton::xpu::ClusterLayoutAttr>(tensorTy.getEncoding());
@@ -188,8 +344,7 @@ public:
         ceil<int64_t>(sizePerCore.back(), iterNum);
     auto newEncoding = triton::xpu::ClusterLayoutAttr::get(
         context, sizePerCore, encoding.getCoresPerGroup(),
-        encoding.getGroupsPerCluster(), encoding.getOrder(),
-        encoding.getIsReduceOpt());
+        encoding.getGroupsPerCluster(), encoding.getOrder());
     return newEncoding;
   }
 
@@ -222,6 +377,62 @@ public:
               shape, tensorTy.getElementType(), newClusterEncoding);
         }
         op->getResult(i).setType(controledTensorTy);
+      }
+    }
+  }
+
+  void setHoistedOperand(MLIRContext *context, OpBuilder &builder,
+                         Location &loc, mlir::Block &block, scf::IfOp &ifOp,
+                         int64_t iterNum) {
+    for (auto &inBlockOp : block) {
+      if (auto yieldOp = llvm::dyn_cast<scf::YieldOp>(&inBlockOp)) {
+        unsigned numifOpResults = ifOp.getNumResults();
+        unsigned numyieldOpOperands = yieldOp.getNumOperands();
+        // isOperandValidInSameForBlock denotes two points:
+        // 1. Extraction is required if the operand of YieldOp
+        //    does not match the type expected by the result of IfOp
+        // 2. whether the operand of YieldOp is in the same ForBlock as IfOp.
+        SmallVector<bool, 4> isOperandValidInSameForBlock(numyieldOpOperands);
+        assert((numifOpResults == numyieldOpOperands) &&
+               "The number of IfOp results and YieldOp operands must match.");
+        for (unsigned i = 0; i < numyieldOpOperands; ++i) {
+          Type ifOpResTy = ifOp.getResult(i).getType();
+          isOperandValidInSameForBlock[i] =
+              isOperandOperationInSameForBlock(&inBlockOp, i) ||
+              (inBlockOp.getOperand(i).getType() == ifOpResTy);
+          if (!isOperandValidInSameForBlock[i]) {
+            assert(isa<arith::ConstantOp>(
+                       inBlockOp.getOperand(i).getDefiningOp()) &&
+                   "Unable to extract the non-constant operand.");
+            auto extractSliceOp =
+                getExtractedOperand(context, builder, loc, yieldOp, i, iterNum);
+            extractSliceOp->moveBefore(ifOp);
+            inBlockOp.setOperand(i, extractSliceOp->getResult(0));
+          }
+        }
+      } else if (((&inBlockOp)->hasTrait<OpTrait::SameTypeOperands>() ||
+                  (&inBlockOp)
+                      ->hasTrait<OpTrait::SameOperandsAndResultType>())) {
+        // 1. setOperandTensorType
+        if ((&inBlockOp)->hasTrait<OpTrait::NOperands<2>::Impl>()) {
+          unsigned numOperands = inBlockOp.getNumOperands();
+          SmallVector<bool, 4> isOperandValidInSameForBlock(numOperands);
+          for (size_t i = 0; i < numOperands; ++i) {
+            isOperandValidInSameForBlock[i] =
+                isOperandOperationInSameForBlock(&inBlockOp, i) ||
+                (inBlockOp.getOperand(i).getType() ==
+                 inBlockOp.getOperand(i ^ 1).getType());
+            if (!isOperandValidInSameForBlock[i]) {
+              assert(isa<arith::ConstantOp>(
+                         inBlockOp.getOperand(i).getDefiningOp()) &&
+                     "Unable to extract the non-constant operand.");
+              auto extractSliceOp = getExtractedOperand(context, builder, loc,
+                                                        &inBlockOp, i, iterNum);
+              extractSliceOp->moveBefore(ifOp);
+              inBlockOp.setOperand(i, extractSliceOp->getResult(0));
+            }
+          }
+        }
       }
     }
   }
@@ -289,8 +500,34 @@ public:
     op->insertOperands(op->getNumOperands(), {idxVar});
   }
 
+  void getOpChainBwdPostReduce(llvm::SetVector<Operation *> &opChain,
+                               Operation *op) {
+    if (!op) {
+      return;
+    }
+    opChain.insert(op);
+
+    int noDefCnt = 0;
+    for (auto operand : op->getOperands()) {
+      if (!operand.getDefiningOp()) {
+        noDefCnt++;
+      }
+    }
+
+    if (isa<arith::ConstantOp, triton::xpu::VConstOp, triton::xpu::StoreOp,
+            triton::xpu::ReduceOp>(op) ||
+        noDefCnt == op->getNumOperands()) {
+      return;
+    }
+
+    for (auto operand : op->getOperands()) {
+      getOpChainBwdPostReduce(opChain, operand.getDefiningOp());
+    }
+  }
+
   void getOuterChain(llvm::SetVector<Operation *> &allOpTree,
-                     llvm::SetVector<Operation *> &outerChain) {
+                     llvm::SetVector<Operation *> &outerChain,
+                     bool postReduce = false) {
     for (auto op : allOpTree) {
       if (auto expandDimOp = dyn_cast<triton::ExpandDimsOp>(op)) {
         auto src = expandDimOp.getSrc();
@@ -298,7 +535,11 @@ public:
         if (auto srcTy = dyn_cast<RankedTensorType>(src.getType())) {
           if (auto resTy = dyn_cast<RankedTensorType>(result.getType())) {
             if (expandDimOp.getAxis() == 1) {
-              getOpChainBwd(outerChain, expandDimOp);
+              if (postReduce) {
+                getOpChainBwdPostReduce(outerChain, expandDimOp);
+              } else {
+                getOpChainBwd(outerChain, expandDimOp);
+              }
               outerChain.remove(expandDimOp);
             }
           }
@@ -325,7 +566,13 @@ public:
             int64_t resInnerNum = resElemNum * resShape.back();
             if (srcInnerNum != resInnerNum) { // unequal dim 1 shape means in
                                               // the inner axis op chain
-              getOpChainBwd(outerChain, broadcastOp);
+              assert(srcShape.front() == resShape.front() &&
+                     "Invalid BroadCast");
+              if (postReduce) {
+                getOpChainBwdPostReduce(outerChain, broadcastOp);
+              } else {
+                getOpChainBwd(outerChain, broadcastOp);
+              }
               outerChain.remove(broadcastOp);
             }
           }
@@ -336,23 +583,36 @@ public:
 
   void
   getOuterChains(const SmallVector<llvm::SetVector<Operation *>> &allOpTrees,
-                 SmallVector<llvm::SetVector<Operation *>> &outerChains) {
+                 SmallVector<llvm::SetVector<Operation *>> &outerChains,
+                 bool postReduce = false) {
     for (auto allOpTree : allOpTrees) {
       SetVector<Operation *> outerChain;
-      getOuterChain(allOpTree, outerChain);
+      getOuterChain(allOpTree, outerChain, postReduce);
       outerChains.emplace_back(outerChain);
     }
   }
 
   void getDAG(Operation *op, SetVector<Operation *> &visitedOps,
               SmallVector<SetVector<Operation *>> &unrollOpTrees,
-              SetVector<Operation *> &excludeChainOps,
-              bool isTop2Bottom = true) {
+              SetVector<Operation *> &excludeChainOps, bool isTop2Bottom = true,
+              bool needBefore = false) {
     SetVector<Operation *> opTree;
-    getUnrollTree(op, opTree, visitedOps, excludeChainOps, op, isTop2Bottom);
+    getUnrollTree(op, opTree, visitedOps, excludeChainOps, op, isTop2Bottom,
+                  needBefore);
     if (!opTree.empty()) {
       SetVector<Operation *> sortedOpTree = sortOpTree(opTree);
-      unrollOpTrees.push_back(sortedOpTree);
+      unrollOpTrees.emplace_back(sortedOpTree);
+    }
+  }
+
+  void getPostReduceDAG(Operation *op, SetVector<Operation *> &visitedOps,
+                        SmallVector<SetVector<Operation *>> &unrollOpTrees,
+                        SetVector<Operation *> &excludeChainOps) {
+    SetVector<Operation *> opTree;
+    getPostReduceUnrollTree(op, opTree, visitedOps, excludeChainOps, op);
+    if (!opTree.empty()) {
+      SetVector<Operation *> sortedOpTree = sortOpTree(opTree);
+      unrollOpTrees.emplace_back(sortedOpTree);
     }
   }
 
@@ -362,8 +622,13 @@ public:
     auto lower = builder.create<arith::ConstantIndexOp>(loc, start);
     auto upper = builder.create<arith::ConstantIndexOp>(loc, iterNum);
     auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
-    forOp = builder.create<scf::ForOp>(loc, lower, upper, step, iterArgs);
+    if (iterArgs.empty()) {
+      forOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+    } else {
+      forOp = builder.create<scf::ForOp>(loc, lower, upper, step, iterArgs);
+    }
     builder.setInsertionPointToStart(forOp.getBody());
+
     idxVar = builder.create<arith::IndexCastOp>(loc, builder.getI32Type(),
                                                 forOp.getInductionVar());
   }
@@ -380,7 +645,9 @@ public:
           .Case<triton::xpu::LoadOp>([&](auto loadOp) {
             if (auto tensorTy =
                     dyn_cast<RankedTensorType>(loadOp.getPtr().getType())) {
-              if (!loadOp.getSVOpt() && !loadOp.getIsDiscrete()) {
+              auto shape = tensorTy.getShape();
+              bool isOuter = (shape.size() == 2 && shape.back() == 1);
+              if (!isOuter && !loadOp.getSVOpt() && !loadOp.getIsDiscrete()) {
                 insertIndex(newOp, idxVar);
               }
             }
@@ -388,7 +655,11 @@ public:
           .Case<triton::xpu::StoreOp>([&](auto storeOp) {
             if (auto tensorTy =
                     dyn_cast<RankedTensorType>(storeOp.getPtr().getType())) {
-              insertIndex(newOp, idxVar);
+              auto shape = tensorTy.getShape();
+              bool isOuter = (shape.size() == 2 && shape.back() == 1);
+              if (!isOuter) {
+                insertIndex(newOp, idxVar);
+              }
             }
           })
           .Case<triton::xpu::MakeRangeOp>([&](auto makeRangeOp) {
@@ -403,18 +674,44 @@ public:
               insertIndex(newOp, idxVar);
             }
           })
+          .Case<XPUPrintOp>([&](auto xpuprintOp) {
+            Value idxVar64 = builder.create<arith::ExtSIOp>(
+                loc, builder.getI64Type(), idxVar);
+            Value ucBound = builder.create<arith::ConstantIntOp>(
+                loc, iterNum, builder.getI64Type());
+            auto NewOp = builder.create<XPUPrintOp>(
+                xpuprintOp.getLoc(), xpuprintOp.getPidx(), xpuprintOp.getPidy(),
+                xpuprintOp.getPidz(), xpuprintOp.getOuterIndex(),
+                xpuprintOp.getInnerIndex(), idxVar64,
+                xpuprintOp.getInnerBound(), ucBound, xpuprintOp.getPrefixAttr(),
+                xpuprintOp.getHexAttr(), xpuprintOp.getArgs());
+            newOp->erase();
+          })
           .Case<triton::AddPtrOp>([&](auto addPtrOp) {
             auto ptr = addPtrOp.getPtr();
             auto offset = addPtrOp.getOffset();
-            if (ptr.getType() != offset.getType()) {
-              auto extractOp = builder.create<triton::xpu::ExtractOp>(
-                  loc, getElementTypeOrSelf(ptr), builder.getI32IntegerAttr(0),
-                  ptr);
-              auto splatOp = builder.create<triton::SplatOp>(loc, ptr.getType(),
-                                                             extractOp);
-              setTensorType(context, splatOp, iterNum, isOuter);
-              addPtrOp.setOperand(0, splatOp);
-              addPtrOp->moveAfter(splatOp);
+
+            if (mlir::dyn_cast<mlir::BlockArgument>(ptr)) {
+              // For the time being,
+              // it seems that no additional processing
+              // is needed for this addPtrOp here
+            } else {
+              auto ptrTensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+              auto offsetTensorTy =
+                  dyn_cast<RankedTensorType>(offset.getType());
+              if (ptrTensorTy && offsetTensorTy &&
+                  ptrTensorTy.getShape() != offsetTensorTy.getShape()) {
+                auto extractOp = builder.create<triton::xpu::ExtractOp>(
+                    loc, getElementTypeOrSelf(ptr),
+                    builder.getI32IntegerAttr(0), ptr);
+                auto splatTy = RankedTensorType::get(
+                    offsetTensorTy.getShape(), getElementTypeOrSelf(ptr),
+                    offsetTensorTy.getEncoding());
+                auto splatOp =
+                    builder.create<triton::SplatOp>(loc, splatTy, extractOp);
+                addPtrOp.setOperand(0, splatOp);
+                addPtrOp->moveAfter(splatOp);
+              }
             }
           })
           .Case<arith::ConstantOp>([&](auto constantOp) {
@@ -426,57 +723,61 @@ public:
             constantOp.setValueAttr(value);
           })
           .Case<scf::IfOp>([&](auto ifOp) {
-            // Set IfOp's childOp Type(Then)
-            auto &ifThenBlock = ifOp.getThenRegion().front();
-            for (auto &inBlockOp : ifThenBlock) {
-              setTensorType(context, &inBlockOp, iterNum, isOuter);
-            }
-            // Set IfOp's childOp Type(Else)
-            auto &ifElseRegion = ifOp.getElseRegion();
-            if (!ifElseRegion.empty()) {
-              auto &ifElseBlock = ifElseRegion.front();
-              for (auto &inBlockOp : ifElseBlock) {
-                setTensorType(context, &inBlockOp, iterNum, isOuter);
+            // process ifOp recursively to handle nested ifOp
+            auto processIfOp = [&](auto &self, scf::IfOp ifOp) -> void {
+              auto &thenRegion = ifOp.getThenRegion();
+              if (!thenRegion.empty()) {
+
+                auto &thenBlock = thenRegion.front();
+                for (auto &op : thenBlock) {
+                  if (auto nestedIfOp = dyn_cast<scf::IfOp>(op)) {
+                    self(self, nestedIfOp);
+                  } else {
+                    setTensorType(context, &op, iterNum, isOuter);
+                  }
+                }
+                setHoistedOperand(context, builder, loc, thenBlock, ifOp,
+                                  iterNum);
               }
+              auto &elseRegion = ifOp.getElseRegion();
+              if (!elseRegion.empty()) {
+                auto &elseBlock = elseRegion.front();
+
+                for (auto &op : elseBlock) {
+                  if (auto nestedIfOp = dyn_cast<scf::IfOp>(op)) {
+                    self(self, nestedIfOp);
+                  } else {
+                    setTensorType(context, &op, iterNum, isOuter);
+                  }
+                }
+                setHoistedOperand(context, builder, loc, elseBlock, ifOp,
+                                  iterNum);
+              }
+            };
+            processIfOp(processIfOp, ifOp);
+          })
+          .Case<scf::ForOp>([&](auto forOp) {
+            // step 1 : set iter arg type.
+            unsigned numInitArgs =
+                forOp.getNumOperands() - 3; // 减去初始值、上界和步长
+            Block &entryBlock = forOp.getBodyRegion().front();
+            if (numInitArgs > 0 && entryBlock.getNumArguments() > 1) {
+              for (unsigned i = 0; i < numInitArgs; ++i) {
+                Type initIterArgType = forOp.getOperand(3 + i).getType();
+                Type regionIterArgType =
+                    entryBlock.getArgument(i + 1).getType();
+                if (initIterArgType != regionIterArgType) {
+                  entryBlock.getArgument(i + 1).setType(initIterArgType);
+                }
+              }
+            }
+
+            // step 2 : set ops' type in loop body.
+            Block *body = forOp.getBody();
+            for (auto &op : body->getOperations()) {
+              setTensorType(context, &op, iterNum, isOuter);
             }
           });
-      if (scf::IfOp ifOp = dyn_cast<scf::IfOp>(newOp)) {
-        auto &ifThenBlock = ifOp.getThenRegion().front();
-        for (auto &inBlockOp : ifThenBlock) {
-          unsigned numifOpResults = ifOp.getNumResults();
-          if (auto yieldOp = llvm::dyn_cast<scf::YieldOp>(&inBlockOp)) {
-            // 1. needExtract denotes Extraction is required if the operand of
-            // YieldOp does not match the type expected by the result of IfOp
-            // 2. isSame denotes whether the operand of YieldOp is in the same
-            // ForBlock as IfOp.
-            unsigned numyieldOpOperands = yieldOp.getNumOperands();
-            assert(
-                (numifOpResults == numyieldOpOperands) &&
-                "The number of IfOp results and YieldOp operands must match.");
-            for (unsigned i = 0; i < numyieldOpOperands; ++i) {
-              bool needExtract = false;
-              bool isSame = true;
-              Value result = ifOp.getResult(i);
-              Type resultType = result.getType();
-              Value operand = yieldOp.getOperand(i);
-              Type operandType = operand.getType();
-              if (resultType != operandType) {
-                needExtract = true;
-              }
-              isSame = isOperandOperationInSameForBlock(&inBlockOp, i);
-              if (!isSame && needExtract) {
-                assert(isa<arith::ConstantOp>(
-                           inBlockOp.getOperand(i).getDefiningOp()) &&
-                       "Unable to extract the non-constant operand.");
-                auto extractSliceOp = getExtractedOperand(context, builder, loc,
-                                                          yieldOp, i, iterNum);
-                extractSliceOp->moveBefore(ifOp);
-                inBlockOp.setOperand(i, extractSliceOp->getResult(0));
-              }
-            }
-          }
-        }
-      }
     }
   }
 
@@ -499,11 +800,36 @@ public:
     }
   }
 
-  void moveAllocaAndGM2LM(scf::ForOp forOp) {
+  void moveAllocaAndGM2LM(scf::ForOp forOp,
+                          SetVector<Operation *> &unrollOpTree) {
     ModuleOp m = getOperation();
+    DenseMap<mlir::Operation *, unsigned> op2Line;
+    getOpLine(m, op2Line);
 
-    SmallVector<triton::xpu::GM2LMOp> gm2lmOps;
-    m.walk([&](triton::xpu::GM2LMOp gm2lmOp) { gm2lmOps.push_back(gm2lmOp); });
+    SmallVector<Operation *> gm2lmOps;
+    SmallVector<Operation *> allocaOps;
+    for (auto op : unrollOpTree) {
+      if (auto loadOp = dyn_cast<triton::xpu::LoadOp>(op)) {
+        auto gm2lmOp = findDefOpBwd<triton::xpu::GM2LMOp>(loadOp.getPtr());
+        if (gm2lmOp) {
+          gm2lmOps.emplace_back(gm2lmOp);
+        }
+      }
+      if (auto storeOp = dyn_cast<triton::xpu::StoreOp>(op)) {
+        auto alloca = findDefOpBwd<triton::xpu::AllocaOp>(storeOp.getPtr());
+        if (alloca) {
+          allocaOps.emplace_back(alloca);
+        }
+      }
+    }
+
+    // move alloca when merge store
+    for (auto allocaOp : allocaOps) {
+      if (allocaOp->getBlock() == forOp->getBlock() &&
+          forOp->isBeforeInBlock(allocaOp)) {
+        allocaOp->moveBefore(forOp);
+      }
+    }
 
     for (auto gm2lmOp : gm2lmOps) {
       if (gm2lmOp->getBlock() != forOp->getBlock())
@@ -512,19 +838,24 @@ public:
       if (gm2lmOp->isBeforeInBlock(forOp))
         continue;
 
-      auto allocaOp = gm2lmOp.getBufPtr().getDefiningOp();
-
-      allocaOp->moveBefore(forOp);
+      for (auto operand : gm2lmOp->getOperands()) {
+        auto op = operand.getDefiningOp();
+        if (!op)
+          continue;
+        if (op2Line[op] > op2Line[forOp]) {
+          op->moveBefore(forOp);
+        }
+      }
       gm2lmOp->moveBefore(forOp);
     }
   }
 
   void unrollControl(MLIRContext *context,
-                     SmallVector<SetVector<Operation *>> &unrollOpTrees) {
+                     SmallVector<SetVector<Operation *>> &unrollOpTrees,
+                     bool postReduce = false) {
     // Get outerChains
     SmallVector<SetVector<Operation *>> outerChains;
-    getOuterChains(unrollOpTrees, outerChains);
-
+    getOuterChains(unrollOpTrees, outerChains, postReduce);
     for (int i = 0; i < unrollOpTrees.size(); ++i) {
       auto outerChain = outerChains[i];
       auto unrollOpTree = unrollOpTrees[i];
@@ -537,7 +868,7 @@ public:
         // 1.1 Get insertPt and tensor num
         if (auto storeOp = dyn_cast<triton::xpu::StoreOp>(op)) {
           auto type = storeOp.getValue().getType();
-          numUnroll = numUnroll == 1 ? getnumUnroll(type)
+          numUnroll = numUnroll == 1 ? getNumUnroll(type)
                                      : std::min(numUnroll, getNumCol(type));
           numCol =
               numCol == 1 ? getNumCol(type) : std::min(numCol, getNumCol(type));
@@ -564,18 +895,17 @@ public:
         OpBuilder builder(insertPt);
         scf::ForOp forOp;
         arith::IndexCastOp idxVar;
-        ValueRange iterArgs;
+        ValueRange iterArgs = {};
         createFor(builder, loc, 0, iterNum, forOp, idxVar, iterArgs);
-        // 2.2 Set Tensor Type
+        // 2.2 Move Alloca & GM2LM Op before ForOp
+        moveAllocaAndGM2LM(forOp, unrollOpTree);
+        // 2.3 Set Tensor Type
         IRMapping mapping;
         createLoopBody(context, builder, loc, iterNum, unrollOpTree, outerChain,
                        idxVar, mapping);
 
         // 3. Erase old DAG
         eraseDAG(unrollOpTree);
-
-        // 4. Move Alloca & GM2LM Op before ForOp
-        moveAllocaAndGM2LM(forOp);
       }
     }
   }
@@ -667,6 +997,42 @@ public:
     });
   }
 
+  void
+  getExcludeChainOpsforUnrollControl(ModuleOp &m,
+                                     SetVector<Operation *> &excludeChainOps) {
+    m.walk([&](Operation *op) {
+      TypeSwitch<const Operation *>(op)
+          .Case<XPU_MEMORY_OP>([&](auto memoryOp) {
+            getOpChainBwd(excludeChainOps, memoryOp.getPtr().getDefiningOp());
+            if (memoryOp.getLen()) {
+              getOpChainBwd(excludeChainOps, memoryOp.getLen().getDefiningOp());
+            }
+          })
+          .Case<triton::xpu::StoreOp>([&](auto storeOp) {
+            if (storeOp.getMask()) {
+              getOpChainBwd(excludeChainOps, storeOp.getMask().getDefiningOp());
+            }
+          })
+          .Case<triton::xpu::LoadOp>([&](auto loadOp) {
+            if (loadOp.getMask()) {
+              auto op = loadOp.getMask().getDefiningOp();
+              auto userNum =
+                  std::distance(op->getUsers().begin(), op->getUsers().end());
+              decltype(userNum) loadNum = 0;
+              for (auto user : op->getUsers()) {
+                if (isa<triton::xpu::LoadOp>(user)) {
+                  loadNum++;
+                }
+              }
+              if (userNum == loadNum) {
+                getOpChainBwd(excludeChainOps,
+                              loadOp.getMask().getDefiningOp());
+              }
+            }
+          });
+    });
+  }
+
   void findDiscretePtrChain(SetVector<Operation *> &unrollOpTree,
                             SetVector<Operation *> &newUnrollOpTree) {
     for (auto op : unrollOpTree) {
@@ -677,7 +1043,7 @@ public:
           auto loc = loadOp.getLoc();
           auto resType = loadOp.getResult().getType();
           int64_t numCol = getNumCol(resType);
-          int64_t numUnroll = getnumUnroll(resType);
+          int64_t numUnroll = getNumUnroll(resType);
           if (numCol > numUnroll && numCol % numUnroll == 0) {
             auto lmPtr = loadOp.getPtr();
             auto gm2lmOp = cast<triton::xpu::GM2LMOp>(
@@ -754,7 +1120,7 @@ public:
     m.walk([&](triton::xpu::StoreOp storeOp) {
       auto valType = storeOp.getValue().getType();
       int64_t numCol = getNumCol(valType);
-      int64_t numUnroll = getnumUnroll(valType);
+      int64_t numUnroll = getNumUnroll(valType);
       if (numCol > numUnroll && numCol % numUnroll == 0) {
         getDAG(storeOp, visitedOps, unrollOpTrees, excludeChainOps);
       }
@@ -787,20 +1153,21 @@ public:
     Type yieldElemType = getElementTypeOrSelf(yieldType);
     int64_t vecSize = getNumInVector(yieldElemType);
     Type ptrTy = createPointerType(yieldType, vecSize);
-    int64_t tensorSize = getNumCol(yieldType);
+    int64_t tensorSize = getTensorSize(yieldType);
     if (!forOp.getResults()[i].use_empty()) {
       // Create Alloca Store for Init Args
       auto initForArg = forOp.getInitArgs()[i];
       auto newAllocaOp = builder.create<triton::xpu::AllocaOp>(
           loc, ptrTy, tensorSize * vecSize);
       auto initStoreOp = builder.create<triton::xpu::StoreOp>(
-          loc, newAllocaOp, initForArg, Value(), Value(), -1, false);
+          loc, newAllocaOp, initForArg, Value(), Value(), -1, false,
+          MemorySyncMode::SYNC);
       newAllocaOp->moveBefore(forOp);
       initStoreOp->moveBefore(forOp);
       // Create Load for Input
       auto inputLoadOp = builder.create<triton::xpu::LoadOp>(
           loc, yieldType, newAllocaOp, Value(), Value(), Value(), 1, -1, false,
-          false, false);
+          false, false, MemorySyncMode::SYNC);
       auto notUsedForYield = [&](OpOperand &operand) {
         return !isa<scf::YieldOp>(operand.getOwner());
       };
@@ -809,13 +1176,21 @@ public:
       inputLoadOp->moveBefore(&block.front());
       // Create Store for Output
       auto outputStoreOp = builder.create<triton::xpu::StoreOp>(
-          loc, newAllocaOp, yield, Value(), Value(), -1, false);
+          loc, newAllocaOp, yield, Value(), Value(), -1, false,
+          MemorySyncMode::SYNC);
       outputStoreOp->moveBefore(yieldOp);
       storeOps.emplace_back(outputStoreOp);
       // Create Load for Reduce
       auto reduceLoadOp = builder.create<triton::xpu::LoadOp>(
           loc, yieldType, newAllocaOp, Value(), Value(), Value(), 1, -1, false,
-          false, false);
+          false, false, MemorySyncMode::SYNC);
+
+      // Replace For Result with Load
+      auto notReduceLoadOp = [&](OpOperand &operand) {
+        return reduceLoadOp != operand.getOwner();
+      };
+      forOp.getResults()[i].replaceUsesWithIf(reduceLoadOp, notReduceLoadOp);
+
       // Move Load closed to For user
       reduceLoadOp->moveAfter(forOp);
       Operation *insertPt = nullptr;
@@ -833,11 +1208,6 @@ public:
       if (insertPt) {
         reduceLoadOp->moveBefore(insertPt);
       }
-      // Replace For Result with Load
-      auto notReduceLoadOp = [&](OpOperand &operand) {
-        return reduceLoadOp != operand.getOwner();
-      };
-      forOp.getResults()[i].replaceUsesWithIf(reduceLoadOp, notReduceLoadOp);
 
       // Discard Yield by setting initForArg to operand
       yieldOp->setOperand(i, initForArg);
@@ -851,27 +1221,30 @@ public:
     for (int i = 0; i < types.size() - 1; ++i) {
       if (i == 0) {
         numCol = getNumCol(types[i]);
-        numUnroll = getnumUnroll(types[i]);
+        numUnroll = getNumUnroll(types[i]);
       } else {
         assert(numCol == getNumCol(types[i]));
-        assert(numUnroll == getnumUnroll(types[i]));
+        assert(numUnroll == getNumUnroll(types[i]));
       }
     }
   }
 
   void forUnrollControl(ModuleOp &m, MLIRContext *context) {
     SetVector<Operation *> excludeChainOps;
-    getExcludeChainOps(m, excludeChainOps);
+    getExcludeChainOpsforUnrollControl(m, excludeChainOps);
     SetVector<Operation *> vistedForOps;
     // 1. Create Store Load
     m.walk([&](triton::xpu::ReduceOp reduceOp) {
       int64_t numCol = 1, numUnroll = 1;
       getUnrollInfoReduce(reduceOp, numCol, numUnroll);
       if (numCol > numUnroll && numCol % numUnroll == 0) {
-        LLVM_DEBUG(llvm::dbgs() << "[Unroll Control] Hit Unroll Control For\n");
-        for (auto operand : reduceOp.getOperands()) {
-          if (auto forOp = dyn_cast<scf::ForOp>(operand.getDefiningOp())) {
+        llvm::SetVector<Operation *> reduceOpDefsBwd;
+        getOpChainBwd(reduceOpDefsBwd, reduceOp);
+        for (auto operand : reduceOpDefsBwd) {
+          if (auto forOp = dyn_cast<scf::ForOp>(operand)) {
             if (!vistedForOps.count(forOp)) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "[Unroll Control] Hit Unroll Control For\n");
               vistedForOps.insert(forOp);
               auto &forBlock = forOp.getRegion().front();
               bool hasIf = false;
@@ -888,8 +1261,11 @@ public:
                   }
                   // Unroll control
                   for (auto storeOp : storeOps) {
+                    if (visitedOps.count(storeOp))
+                      continue;
                     SmallVector<SetVector<Operation *>> unrollOpTrees;
-                    getDAG(storeOp, visitedOps, unrollOpTrees, excludeChainOps);
+                    getDAG(storeOp, visitedOps, unrollOpTrees, excludeChainOps,
+                           true, true);
                     // Find ptr chain of discrete for moving to loop body
                     SmallVector<SetVector<Operation *>> newUnrollOpTrees(
                         unrollOpTrees);
@@ -907,8 +1283,11 @@ public:
                 }
                 // Unroll control
                 for (auto storeOp : storeOps) {
+                  if (visitedOps.count(storeOp))
+                    continue;
                   SmallVector<SetVector<Operation *>> unrollOpTrees;
-                  getDAG(storeOp, visitedOps, unrollOpTrees, excludeChainOps);
+                  getDAG(storeOp, visitedOps, unrollOpTrees, excludeChainOps,
+                         true, true);
                   // Find ptr chain of discrete for moving to loop body
                   SmallVector<SetVector<Operation *>> newUnrollOpTrees(
                       unrollOpTrees);
@@ -974,9 +1353,9 @@ public:
         auto tensorTy = reduceOp.getInputTypes()[0];
         auto shape = tensorTy.getShape();
         for (auto &op : newReduce) {
-          if (auto cmpfOp = dyn_cast<arith::CmpFOp>(op)) {
-            auto tensorTy0 = cmpfOp.getODSOperands(0)[0].getType();
-            auto tensorTy1 = cmpfOp.getODSOperands(1)[0].getType();
+          if (isa<arith::CmpFOp>(op) || isa<arith::CmpIOp>(op)) {
+            auto tensorTy0 = op.getOperand(0).getType();
+            auto tensorTy1 = op.getOperand(1).getType();
             int operandIndexNeedModify;
             mlir::Type operandNeedReserved;
             if (tensorTy0 != tensorTy1) {
@@ -991,15 +1370,15 @@ public:
                 operandIndexNeedModify = 1;
                 operandNeedReserved = tensorTy0;
               }
-              assert(isa<arith::ConstantOp>(
-                         cmpfOp.getOperand(operandIndexNeedModify)
-                             .getDefiningOp()) &&
-                     "Unable to extract the non-constant operand.");
+              assert(
+                  isa<arith::ConstantOp>(
+                      op.getOperand(operandIndexNeedModify).getDefiningOp()) &&
+                  "Unable to extract the non-constant operand.");
               auto splatOp = builder.create<triton::SplatOp>(
                   loc, operandNeedReserved,
-                  cmpfOp.getOperand(operandIndexNeedModify));
+                  op.getOperand(operandIndexNeedModify));
               splatOp->moveBefore(&op);
-              cmpfOp.setOperand(operandIndexNeedModify, splatOp.getResult());
+              op.setOperand(operandIndexNeedModify, splatOp.getResult());
             }
           } else if (auto selOp = dyn_cast<arith::SelectOp>(op)) {
             auto tensorTy1 = selOp.getODSOperands(1)[0].getType();
@@ -1071,20 +1450,137 @@ public:
     });
   }
 
+  bool isPostReduceStore(triton::xpu::StoreOp storeOp) {
+    bool _isPostReduceStore = false;
+    if (auto valTy = dyn_cast<RankedTensorType>(storeOp.getValue().getType())) {
+      auto shape = valTy.getShape();
+      if (shape.size() > 1 && shape.back() > 1) {
+        _isPostReduceStore = true;
+      }
+    }
+    return _isPostReduceStore;
+  }
+
+  void mergeSets(SmallVector<SetVector<Operation *>> &unrollOpTrees) {
+    // Create Mapping of All Sets
+    DenseMap<Operation *, SmallVector<SetVector<Operation *> *>> opToSets;
+    for (auto &set : unrollOpTrees) {
+      for (Operation *op : set) {
+        opToSets[op].push_back(&set);
+      }
+    }
+    // Merge unrollOpTrees that has common nodes
+    DenseSet<SetVector<Operation *> *> processedSets;
+    for (auto &currentSet : unrollOpTrees) {
+      if (processedSets.count(&currentSet))
+        continue;
+      SetVector<Operation *> mergedSet = currentSet;
+      bool hasMerged = true;
+      while (hasMerged) {
+        hasMerged = false;
+        for (Operation *op : mergedSet) {
+          auto &relatedSets = opToSets[op];
+          for (auto *relatedSet : relatedSets) {
+            if (relatedSet == &mergedSet || processedSets.count(relatedSet))
+              continue;
+
+            mergedSet.insert(relatedSet->begin(), relatedSet->end());
+            relatedSet->clear();
+            processedSets.insert(relatedSet);
+            hasMerged = true;
+          }
+        }
+      }
+      if (mergedSet.size() > currentSet.size()) {
+        mergedSet = sortOpTree(mergedSet);
+        currentSet = mergedSet;
+      }
+      // Remove Empty Sets
+      unrollOpTrees.erase(
+          llvm::remove_if(
+              unrollOpTrees,
+              [](const SetVector<Operation *> &set) { return set.empty(); }),
+          unrollOpTrees.end());
+    }
+  }
+
+  void postReduceUnrollControl(ModuleOp &m, MLIRContext *context) {
+    // 1. Data-flow Analysis: get post reduce -> store DAG
+    //    (op in ptrChain/lenChain/maskChain will not walk from top to down)
+    // 1.1 Get excludeChainOps
+    SetVector<Operation *> excludeChainOps;
+    getExcludeChainOps(m, excludeChainOps);
+    // 1.2 Get load -> store DAG
+    SmallVector<SetVector<Operation *>> unrollOpTrees;
+    m.walk([&](triton::xpu::StoreOp storeOp) {
+      SetVector<Operation *> visitedOps;
+      auto valType = storeOp.getValue().getType();
+      int64_t numCol = getNumCol(valType);
+      int64_t numUnroll = getNumUnroll(valType);
+      bool _isPostReduceStore = isPostReduceStore(storeOp);
+      if (numCol > numUnroll && numCol % numUnroll == 0 && _isPostReduceStore) {
+        getPostReduceDAG(storeOp, visitedOps, unrollOpTrees, excludeChainOps);
+      }
+    });
+    if (unrollOpTrees.size() == 0)
+      return;
+
+    // 2. Merge unrollOpTrees that has common nodes
+    mergeSets(unrollOpTrees);
+
+    // 3. Deal with unroll opTrees
+    LLVM_DEBUG(llvm::dbgs()
+               << "[Unroll Control] Hit Unroll Control Post Reduction\n");
+    unrollControl(context, unrollOpTrees, true);
+  }
+
   void reductionUnrollControl(ModuleOp &m, MLIRContext *context) {
     // 1. Unroll Control for Reduce For
     forUnrollControl(m, context);
     // 2. Create For for ReduceWithinCore
     createReduceWithinCore(m, context);
-    // 3. Calculate discrete offset in the runtime
+    // 3. Deal with BroadCastOp/ReduceOp to StoreOp
+    postReduceUnrollControl(m, context);
+    // 4. Calculate discrete offset in the runtime
     createDiscreteOffset(m);
+    // 5. Check Def-Use Shape Match
+    checkDefUseShapeMatch(m, context);
   }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
+
+    bool isScan = false;
+    m.walk([&](triton::xpu::ScanOp scanOp) { isScan = true; });
+    if (isScan) {
+      return;
+    }
+
+    m.walk([&](triton::xpu::StoreOp storeOp) {
+      auto valTy = storeOp.getValue().getType();
+      auto ptrTy = storeOp.getPtr().getType();
+      auto valElemTy = getElementTypeOrSelf(getElementTypeOrSelf(valTy));
+      auto ptrElemTy = getElementTypeOrSelf(getElementTypeOrSelf(ptrTy));
+      if (valElemTy.isInteger(32) &&
+          cast<triton::PointerType>(ptrElemTy).getPointeeType().isInteger(8)) {
+        numUnrollPerCore = 4;
+      }
+    });
+
     bool isReduce = false;
-    m.walk([&](triton::xpu::ReduceOp redOp) { isReduce = true; });
+    m.walk([&](triton::xpu::ReduceOp redOp) {
+      isReduce = true;
+      // Set numUnrollPerCore=1 When coreDealMultiRows
+      RankedTensorType operandType = redOp.getInputTypes()[0];
+      auto shape = operandType.getShape();
+      auto layout =
+          cast<triton::xpu::ClusterLayoutAttr>(operandType.getEncoding());
+      unsigned rowsPerCore = layout.getSizePerCore()[0];
+      numUnrollPerCore =
+          (shape.size() == 2 && rowsPerCore > 1) ? 1 : numUnrollPerCore;
+    });
+
     if (isReduce) {
       reductionUnrollControl(m, context);
     } else {

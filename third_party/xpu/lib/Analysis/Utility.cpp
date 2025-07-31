@@ -14,6 +14,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonXPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
@@ -21,6 +22,7 @@ namespace {
 
 using namespace triton;
 using namespace triton::gpu;
+using namespace triton::xpu;
 
 int getParentAxis(Attribute layout, int axis) {
   if (auto sliceEncoding = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -939,7 +941,7 @@ MakeTensorPtrOp getMakeTensorPtrOp(Value v) {
 } // namespace mlir
 
 //===-------------------- For Triton XPU -----------------------===//
-
+// ReduceOpHelper
 namespace mlir {
 std::map<Operation *, unsigned> ReduceOpHelper::reduceIdMap;
 unsigned ReduceOpHelper::reduceNum = 0;
@@ -982,6 +984,48 @@ unsigned ReduceOpHelper::getXPUScratchSizeInBytes() {
         ceil<unsigned>(getElementTypeOrSelf(ty).getIntOrFloatBitWidth(), 8);
   }
   return bytesPerElem * elems;
+}
+
+} // namespace mlir
+
+// ScanLoweringHelper
+namespace mlir {
+
+std::map<Operation *, unsigned> ScanLoweringHelper::scanIdMap;
+unsigned ScanLoweringHelper::scanNum = 0;
+std::map<unsigned, std::unique_ptr<redSMOffsetInfo>>
+    ScanLoweringHelper::scanSMOffsetMap;
+
+bool ScanLoweringHelper::isCoreSynchronous() {
+  // [TODO]: add coreSynchronous
+  return false;
+  //   auto clusterAttr = getXPUEncoding();
+  //   return triton::xpu::getCoresPerClusterWithUniqueData(srcLayout,
+  //                                                        srcShape)[axis] ==
+  //                                                        1;
+}
+
+unsigned ScanLoweringHelper::getIntraGroupSizeWithUniqueData() {
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[getXPUAxis()]);
+  unsigned elementPerThreads = triton::xpu::getUniqueContigPerCore(
+      getSrcLayout(), getShape())[getXPUAxis()];
+  return std::min(srcReduceDimSize / elementPerThreads,
+                  triton::xpu::getCoresPerGroupWithUniqueData(
+                      getSrcLayout(), getShape())[getXPUAxis()]);
+}
+
+ClusterLayoutAttr ScanLoweringHelper::getXPUEncoding() {
+  return cast<ClusterLayoutAttr>(srcEncoding);
+}
+
+unsigned ScanLoweringHelper::getAxisNumElementsPerThreadXPU() {
+  return getXPUEncoding().getSizePerCore()[getAxis()];
+}
+
+unsigned ScanLoweringHelper::getScratchSizeInElemsXPU() {
+  return 64; // [TODO]: optimize small shape
+  // 0-63   final accVal per core
+  // 64-127 for accmulate
 }
 
 } // namespace mlir

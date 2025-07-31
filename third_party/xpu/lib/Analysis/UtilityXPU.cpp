@@ -34,6 +34,11 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const OffsetState &state) {
   return os;
 }
 
+size_t previousPowerOf2(size_t n) {
+  size_t exp = std::log2(n);
+  return std::pow(2, exp);
+}
+
 Type addrspaceCast(Type type, int addressSpace) {
   if (auto tensorType = mlir::dyn_cast<RankedTensorType>(type)) {
     auto elemTy = tensorType.getElementType();
@@ -264,6 +269,67 @@ bool inSameSCFIfBlock(llvm::SetVector<Operation *> &storeOps,
     }
   }
   return false;
+}
+
+void checkShapeMatch(Value value) {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return;
+
+  auto tensorType = mlir::dyn_cast<TensorType>(value.getType());
+  if (!tensorType)
+    return;
+
+  ArrayRef<int64_t> defShape = tensorType.getShape();
+
+  for (OpOperand &use : value.getUses()) {
+    Operation *useOp = use.getOwner();
+
+    auto useType = mlir::dyn_cast<TensorType>(use.get().getType());
+    if (!useType) {
+      useOp->emitError("Use is not a tensor type.");
+      continue;
+    }
+
+    ArrayRef<int64_t> useShape = useType.getShape();
+
+    if (defShape != useShape) {
+      useOp->emitError("Shape mismatch between def and use:")
+          << "\nDef shape: " << defShape << "\nUse shape: " << useShape;
+    }
+  }
+}
+
+void traverseAndCheckDefUse(Operation *op) {
+  for (Value result : op->getResults()) {
+    checkShapeMatch(result);
+  }
+
+  for (Region &region : op->getRegions()) {
+    for (Block &block : region) {
+      for (Operation &childOp : block) {
+        traverseAndCheckDefUse(&childOp);
+      }
+    }
+  }
+}
+
+void checkDefUseShapeMatch(ModuleOp &m, MLIRContext *context) {
+  for (Operation &op : m.getOps()) {
+    traverseAndCheckDefUse(&op);
+  }
+}
+
+void getOpLine(ModuleOp &m, DenseMap<mlir::Operation *, unsigned> &op2Line) {
+  unsigned line = 0;
+  m.walk([&](mlir::Operation *op) { op2Line[op] = line++; });
+}
+
+int64_t getTensorSize(Type type) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(type))
+    return product(tensorTy.getShape());
+  else
+    return 1;
 }
 
 } // namespace mlir

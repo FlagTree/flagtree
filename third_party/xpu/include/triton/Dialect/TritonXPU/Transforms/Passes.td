@@ -1,8 +1,3 @@
-//===----------------------------------------------------------------------===//
-//
-// Copyright (C) 2025 by Kunlunxin. All rights reserved.
-//
-//===----------------------------------------------------------------------===//
 #ifndef TRITONXPU_PASSES
 #define TRITONXPU_PASSES
 
@@ -28,7 +23,10 @@ def TritonXPUCreateGM2LM : Pass<"tritonxpu-create-gm2lm", "mlir::ModuleOp"> {
            "XPU architecture">,
     Option<"atomicSim", "atomic-sim",
            "bool", /*default*/"1",
-           "Atomic Simulation">
+           "Atomic Simulation">,
+    Option<"oneCoreActOnly", "core0-act-only",
+           "bool", /*default*/"0",
+           "Core0 Calculation Activation Only">,
   ];
 }
 
@@ -47,7 +45,10 @@ def TritonXPULegalize : Pass<"tritonxpu-legalize", "mlir::ModuleOp"> {
             "buffer size for local memory">,
     Option<"coreNum", "core-num",
             "uint32_t", /*default*/"64",
-            "core num">
+            "core num">,
+    Option<"groupsPerCluster", "groups-per-cluster",
+            "uint32_t", /*default*/"1",
+            "groups per cluster">,
   ];
 }
 
@@ -58,6 +59,12 @@ def TritonXPUMask : Pass<"tritonxpu-mask", "mlir::ModuleOp"> {
   }];
 
   let dependentDialects = ["mlir::triton::xpu::TritonXPUDialect"];
+
+  let options = [
+    Option<"oneCoreActOnly", "core0-act-only",
+           "bool", /*default*/"0",
+           "Core0 Calculation Activation Only">,
+  ];
 }
 
 def TritonXPUAlloca : Pass<"tritonxpu-alloca", "mlir::ModuleOp"> {
@@ -69,6 +76,15 @@ def TritonXPUAlloca : Pass<"tritonxpu-alloca", "mlir::ModuleOp"> {
   }];
 
   let dependentDialects = ["mlir::triton::xpu::TritonXPUDialect"];
+
+  let options = [
+    Option<"bufferSize", "lm-buflen",
+            "uint32_t", /*default*/"128",
+            "buffer size for local memory">,
+    Option<"coreNum", "core-num",
+            "uint32_t", /*default*/"64",
+            "core num">
+  ];
 }
 
 
@@ -97,6 +113,14 @@ def TritonXPULoopGrid : Pass<"tritonxpu-loop-grid", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::triton::xpu::TritonXPUDialect"];
 }
 
+def TritonXPUPrint : Pass<"tritonxpu-print", "mlir::ModuleOp"> {
+  let summary = "Lower TT_PrintOp to TTX_XPUPrintOp.";
+
+  let description = [{}];
+
+  let dependentDialects = ["mlir::triton::xpu::TritonXPUDialect"];
+}
+
 def TritonXPUUnrollControl : Pass<"tritonxpu-unroll-control", "mlir::ModuleOp"> {
   let summary = "Control the unroll size.";
 
@@ -104,6 +128,15 @@ def TritonXPUUnrollControl : Pass<"tritonxpu-unroll-control", "mlir::ModuleOp"> 
   }];
 
   let dependentDialects = ["mlir::triton::xpu::TritonXPUDialect"];
+
+  let options = [
+    Option<"bufferSize", "lm-buflen",
+            "uint32_t", /*default*/"128",
+            "buffer size for local memory">,
+    Option<"coreNum", "core-num",
+            "uint32_t", /*default*/"64",
+            "core num">
+  ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -127,7 +160,10 @@ def TritonXPUOffsetAnalysis : Pass<"tritonxpu-offset-analysis", "mlir::ModuleOp"
   let options = [
     Option<"dumpFlag", "dump-flag",
            "bool", /*default*/"0",
-           "detail dump flag">
+           "detail dump flag">,
+    Option<"bufferSize", "lm-buflen",
+            "uint32_t", /*default*/"128",
+            "buffer size for local memory">
   ];
 }
 
@@ -145,7 +181,13 @@ def TritonXPUCoreTiling : Pass<"tritonxpu-core-tiling", "mlir::ModuleOp"> {
            "detail dump flag">,
     Option<"bufferSize", "lm-buflen",
             "uint32_t", /*default*/"128",
-            "buffer size for local memory">
+            "buffer size for local memory">,
+    Option<"coreNum", "core-num",
+            "uint32_t", /*default*/"64",
+            "core num">,
+    Option<"groupsPerCluster", "groups-per-cluster",
+            "uint32_t", /*default*/"1",
+            "groups per cluster">
   ];
 }
 
@@ -161,7 +203,10 @@ def TritonXPUVectorize : Pass<"tritonxpu-vectorize", "mlir::ModuleOp"> {
   let options = [
     Option<"dumpFlag", "dump-flag",
            "bool", /*default*/"0",
-           "detail dump flag">
+           "detail dump flag">,
+    Option<"compareFusion", "compare-fusion",
+            "bool", /*default*/"false",
+            "compare fusion">
   ];
 }
 
@@ -202,6 +247,49 @@ def TritonXPUOtherSim : Pass<"tritonxpu-other-sim", "mlir::ModuleOp"> {
     Simulate Other in LoadOp/StoreOp.
   }];
   let dependentDialects = ["mlir::triton::xpu::TritonXPUDialect"];
+
+  let options = [
+    Option<"bufferSize", "lm-buflen",
+            "uint32_t", /*default*/"128",
+            "buffer size for local memory">,
+    Option<"coreNum", "core-num",
+            "uint32_t", /*default*/"64",
+            "core num">
+  ];
+}
+
+def TritonXPUMemoryCache : Pass<"tritonxpu-memory-cache", "mlir::ModuleOp"> {
+  let summary = "Memory Cache for XPU.";
+  let description = [{
+    Memory Cache.
+  }];
+  let dependentDialects = ["mlir::triton::xpu::TritonXPUDialect"];
+
+  let options = [
+    Option<"bufferSize", "lm-buflen",
+            "uint32_t", /*default*/"128",
+            "buffer size for local memory">,
+    Option<"coreNum", "core-num",
+            "uint32_t", /*default*/"64",
+            "core num">
+  ];
+}
+
+def TritonXPUMemoryInplace : Pass<"tritonxpu-memory-inplace", "mlir::ModuleOp"> {
+  let summary = "Memory Inplace for XPU.";
+  let description = [{
+    Memory Inplace.
+  }];
+  let dependentDialects = ["mlir::triton::xpu::TritonXPUDialect"];
+
+  let options = [
+    Option<"bufferSize", "lm-buflen",
+            "uint32_t", /*default*/"128",
+            "buffer size for local memory">,
+    Option<"coreNum", "core-num",
+            "uint32_t", /*default*/"64",
+            "core num">
+  ];
 }
 
 #endif // TRITONXPU_PASSES

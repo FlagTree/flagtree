@@ -172,7 +172,14 @@ def early_config_prune(configs, named_args, **kwargs):
                 for stage in range(len(v)):
                     random_config = v[stage][0]
                     random_config.num_stages = v[stage][1]
-                    pruned_configs.append(random_config)
+                    if (capability[0] < 8 and v[stage][1] < 3):
+                        pruned_configs.append(random_config)
+                    if capability[0] == 8:
+                        blocks = BLOCK_M + BLOCK_N + BLOCK_K
+                        if blocks <= 256:
+                            pruned_configs.append(random_config)
+                        elif v[stage][1] > 2 and blocks > 256:
+                            pruned_configs.append(random_config)
             else:
                 random_config = v[0][0]
                 random_config.num_stages = 2

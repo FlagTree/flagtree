@@ -143,6 +143,7 @@ def make_launcher(constants, signature, ids):
 #include <stdbool.h>
 #include <Python.h>
 #include <dlfcn.h>
+#include <stdlib.h>  // MACA: for getenv
 
 static inline void gpuAssert(mcError_t code, const char *file, int line)
 {{
@@ -201,14 +202,16 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
     ptr_info.dev_ptr = (mcDeviceptr_t)PyLong_AsUnsignedLongLong(ret);
     if(!ptr_info.dev_ptr)
       return ptr_info;
-    uint64_t dev_ptr;
-    int status = mcPointerGetAttribute(&dev_ptr, mcPointerAttributeDevicePointer, ptr_info.dev_ptr);
-    if (status == mcErrorInvalidValue) {{
-        PyErr_Format(PyExc_ValueError,
-                     "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
-        ptr_info.valid = false;
+    if (getenv("TRITON_DISABLE_DEVICE_POINTER_ATTR_CHECK") == NULL) {{
+        uint64_t dev_ptr;
+        int status = mcPointerGetAttribute(&dev_ptr, mcPointerAttributeDevicePointer, ptr_info.dev_ptr);
+        if (status == mcErrorInvalidValue) {{
+            PyErr_Format(PyExc_ValueError,
+                         "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
+            ptr_info.valid = false;
+        }}
+        ptr_info.dev_ptr = (mcDeviceptr_t)dev_ptr;
     }}
-    ptr_info.dev_ptr = (mcDeviceptr_t)dev_ptr;
     Py_DECREF(ret);  // Thanks ChatGPT!
     return ptr_info;
   }}

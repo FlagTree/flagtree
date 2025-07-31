@@ -38,6 +38,31 @@ def TT_EvictionPolicyAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+/************************************ TritonXPU *******************************************/
+def TT_OffsetStatePolicyAttr : I32EnumAttr<
+    "OffsetStatePolicy", "",
+    [
+        I32EnumAttrCase<"UNKNOWN", 1, "unknown">,
+        I32EnumAttrCase<"DISCRETE_SAME", 2, "discrete_same">,
+        I32EnumAttrCase<"CONTINUOUS", 3, "continuous">,
+        I32EnumAttrCase<"DISCRETE", 4, "discrete">,
+        I32EnumAttrCase<"LOCALLY_CONTINUOUS", 5, "locally_continuous">
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+/************************************ TritonXPU *******************************************/
+def TT_SyncAttr : I32EnumAttr<
+    "MemorySyncMode", "",
+    [
+        I32EnumAttrCase<"SYNC", 1, "sync">,
+        I32EnumAttrCase<"ASYNC", 2, "async">,
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
+/************************************ TritonXPU *******************************************/
+
 def TT_PaddingOptionAttr : I32EnumAttr<
     "PaddingOption", "",
     [
@@ -61,7 +86,9 @@ def TT_AtomicRMWAttr : I32EnumAttr<
         I32EnumAttrCase<"MIN", 7, "min">,
         I32EnumAttrCase<"UMAX", 8, "umax">,
         I32EnumAttrCase<"UMIN", 9, "umin">,
-        I32EnumAttrCase<"XCHG", 10, "exch">
+        I32EnumAttrCase<"XCHG", 10, "exch">,
+        I32EnumAttrCase<"MUL", 11, "mul">,
+        I32EnumAttrCase<"FMUL", 12, "fmul">,
     ]> {
     let cppNamespace = "::mlir::triton";
 }

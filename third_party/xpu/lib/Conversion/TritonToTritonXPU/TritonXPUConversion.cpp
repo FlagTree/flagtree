@@ -1,8 +1,3 @@
-//===----------------------------------------------------------------------===//
-//
-// Copyright (C) 2025 by Kunlunxin. All rights reserved.
-//
-//===----------------------------------------------------------------------===//
 #include "triton/Dialect/TritonXPU/Transforms/TritonXPUConversion.h"
 
 #include "mlir/IR/MLIRContext.h"

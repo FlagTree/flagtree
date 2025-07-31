@@ -10,13 +10,11 @@
 namespace mlir {
 namespace triton {
 
-#ifndef __ILUVATAR__
 /// This fill out the pipelining options including schedule and annotations
 /// for wait ops. This also does pre-processing by converting some of the
 /// loads into async loads so that the IR is ready to be pipelined.
 bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                   mlir::triton::PipeliningOption &options);
-#endif
 
 /// Fills out pipelining options for an outer loop pipelining case. This
 /// schedules async copies to overlap with the epilogue of a loop.

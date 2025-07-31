@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "xpu/lib/Conversion/TritonXPUToLLVM/PatternTritonXPUOpToLLVM.h"
 
 using namespace mlir;
@@ -56,6 +57,20 @@ struct LoadStoreConversionBase {
       // The maximum vector size is 512 bits on XPU2.
       vecSize = std::min<unsigned>(512 / elemNbits, numElems);
     }
+  }
+
+  Value bf16ToFp16(ConversionPatternRewriter &rewriter, mlir::Location &loc,
+                   Type type, Value elem) const {
+    Value convertElem = elem;
+    if (auto vecType = mlir::dyn_cast<mlir::VectorType>(type)) {
+      unsigned numElems = vecType.getNumElements();
+      Type elemTy = vecType.getElementType();
+      if (elemTy.isBF16()) {
+        Type convertTy = VectorType::get(numElems, f16_ty);
+        convertElem = bitcast(elem, convertTy);
+      }
+    }
+    return convertElem;
   }
 
   void setHaddr(ConversionPatternRewriter &rewriter, mlir::Location &loc,
@@ -753,8 +768,8 @@ struct XPULoadOpConversion : public ConvertOpToLLVMPattern<triton::xpu::LoadOp>,
     Value index = op.getIndex();
 
     int32_t stride = op.getStride();
-    int32_t tensor_col_size = op.getTensorColSize();
-    bool coreDealMultiRows = tensor_col_size != -1;
+    int32_t colSize = op.getTensorColSize();
+    bool coreDealMultiRows = colSize != -1;
     bool isDiscreteSame = (stride == 0);
     bool isUnknown = stride != 0 && stride != 1 && !op.getIsDiscrete();
     bool bf16Tofp32Unordered = op.getBf16Tofp32Unordered();
@@ -793,6 +808,9 @@ struct XPULoadOpConversion : public ConvertOpToLLVMPattern<triton::xpu::LoadOp>,
     }
 
     Type resElemScalarTy = getElementTypeOrSelf(resElemTy);
+
+    ptrElemScalarTy = typeConverter->convertType(ptrElemScalarTy);
+    resElemScalarTy = typeConverter->convertType(resElemScalarTy);
 
     // Get the LLVM values
     auto llPtrs = unpackLLElements(loc, llPtr, rewriter);
@@ -846,10 +864,16 @@ struct XPULoadOpConversion : public ConvertOpToLLVMPattern<triton::xpu::LoadOp>,
     Value lmBasePtr = bitcast(llPtrs[0], ptr_ty(ctx, 0));
     if (index) {
       ptrNumElems = resNumElems;
-      unsigned _stride = (bf16Tofp32 && isVectorized) ? ptrNumElems * stride / 2
-                                                      : ptrNumElems * stride;
+      unsigned _stride =
+          (bf16Tofp32 && isVectorized)
+              ? std::ceil(static_cast<double>(ptrNumElems * stride) / 2)
+              : ptrNumElems * stride;
+      _stride = coreDealMultiRows ? stride : _stride;
       Value idx = mul(llIndex, i32_val(_stride));
       lmBasePtr = gep(ptr_ty(ctx, 0), ptrDataVecTy, lmBasePtr, idx);
+      stride = coreDealMultiRows
+                   ? std::ceil(static_cast<double>(colSize) / vecSize)
+                   : stride;
     }
 
     if (op.getSVOpt()) {
@@ -906,7 +930,7 @@ struct XPULoadOpConversion : public ConvertOpToLLVMPattern<triton::xpu::LoadOp>,
           loadedVals.push_back(loaded);
         }
       }
-    } else if (stride > 1 && isVectorized) {
+    } else if (!(coreDealMultiRows && index) && stride > 1 && isVectorized) {
       // Vgather
       VectorType offsetTy =
           VectorType::get(ptrDataVecSize, int_ty(ptrDataNbits));
@@ -941,113 +965,52 @@ struct XPULoadOpConversion : public ConvertOpToLLVMPattern<triton::xpu::LoadOp>,
         VecBF16ToFP32(op, ctx, loc, rewriter, resElemTy, resNumElems, vecSize,
                       ptrDataVecSize, loadedVals);
       }
-    } else { // Continuous || Unknown(No VGather)
-      if (coreDealMultiRows && !isUnknown) {
-        // Unknown Manipulation in GM2LMOp Conversion
-        /*  Small Col Size Opt GM2LM (14 legal data)
-
-            Before Opt:
-                1 1 1 1 1 1 1 1
-                1 1 1 1 1 1 0 0
-
-            After Opt:
-                1 1 1 1 1 1 1 0
-                1 1 1 1 1 1 1 0
-        */
-        Value bufPtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
-        auto mem_col_size =
-            mlir::cast<RankedTensorType>(resTy).getShape()[1] * vecSize;
-        auto tensor_row_size =
-            mlir::cast<RankedTensorType>(resTy).getShape()[0] / 64;
-        unsigned rowRemainElem = mem_col_size - tensor_col_size;
-
-        for (size_t row_idx = 0; row_idx < tensor_row_size; ++row_idx) {
-          for (size_t col_idx = 0; col_idx < tensor_col_size; ++col_idx) {
-            auto buf_global_idx = row_idx * tensor_col_size + col_idx;
-            Value elemPtr = gep(ptr_ty(ctx, 0), ptrElemScalarTy, bufPtr,
-                                i32_val(buf_global_idx));
-            Value loaded = load(ptrElemScalarTy, elemPtr);
-            if (bf16Tofp32) {
-              loaded =
-                  rewriter.create<LLVM::FPExtOp>(loc, resElemScalarTy, loaded);
-            }
-            loadedVals.push_back(loaded);
-          }
-
-          for (size_t remainElem = rowRemainElem; remainElem > 0;
-               --remainElem) {
-            Value loaded = int_val(ptrDataNbits, 0);
-            loaded = bitcast(loaded, ptrElemScalarTy);
-            if (bf16Tofp32) {
-              loaded =
-                  rewriter.create<LLVM::FPExtOp>(loc, resElemScalarTy, loaded);
-            }
-            loadedVals.push_back(loaded);
-          }
-        }
-
-        if (isVectorized) {
-          SmallVector<Value> loadedVecVals;
-          for (size_t vecStart = 0; vecStart < resNumElems; ++vecStart) {
-            Value newVector = rewriter.create<LLVM::UndefOp>(loc, resElemTy);
-            for (size_t elemStart = 0; elemStart < vecSize; ++elemStart) {
-              // insert val to newVector
-              newVector =
-                  insert_element(resElemTy, newVector,
-                                 loadedVals[vecStart * vecSize + elemStart],
-                                 i32_val(elemStart));
-            }
-            loadedVecVals.push_back(newVector);
-          }
-          loadedVals = loadedVecVals;
-        }
-      } else {
-        if (isVectorized) {
-          if (bf16Tofp32) {
-            if (bf16Tofp32Unordered) {
-              VecBF16ToFP32Unordered(op, ctx, loc, rewriter, resElemTy,
-                                     resNumElems, vecSize, ptrDataVecSize,
-                                     lmBasePtr, loadedVals);
-            } else {
-              lmBasePtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
-              for (size_t elemIdx = 0; elemIdx < resNumElems / 2; elemIdx++) {
-                Value elemPtr = gep(ptr_ty(ctx, 0), ptrDataVecTy, lmBasePtr,
-                                    i32_val(elemIdx * stride));
-                Value loaded = load(ptrDataVecTy, elemPtr);
-                loadedVals.push_back(loaded);
-              }
-              int remainedIdx = 2 * (resNumElems / 2);
-              if (resNumElems - remainedIdx) {
-                VectorType halfVecBf16Ty = VectorType::get(vecSize, bf16_ty);
-                Value elemPtr = gep(ptr_ty(ctx, 0), halfVecBf16Ty, lmBasePtr,
-                                    i32_val(remainedIdx * stride));
-                Value loaded = load(halfVecBf16Ty, elemPtr);
-                loadedVals.push_back(loaded);
-              }
-              VecBF16ToFP32(op, ctx, loc, rewriter, resElemTy, resNumElems,
-                            vecSize, ptrDataVecSize, loadedVals);
-            }
+    } else {
+      if (isVectorized) {
+        if (bf16Tofp32) {
+          if (bf16Tofp32Unordered) {
+            VecBF16ToFP32Unordered(op, ctx, loc, rewriter, resElemTy,
+                                   resNumElems, vecSize, ptrDataVecSize,
+                                   lmBasePtr, loadedVals);
           } else {
-            for (size_t elemIdx = 0; elemIdx < resNumElems; elemIdx++) {
-              lmBasePtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
+            lmBasePtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
+            for (size_t elemIdx = 0; elemIdx < resNumElems / 2; elemIdx++) {
               Value elemPtr = gep(ptr_ty(ctx, 0), ptrDataVecTy, lmBasePtr,
                                   i32_val(elemIdx * stride));
               Value loaded = load(ptrDataVecTy, elemPtr);
               loadedVals.push_back(loaded);
             }
+            int remainedIdx = 2 * (resNumElems / 2);
+            if (resNumElems - remainedIdx) {
+              VectorType halfVecBf16Ty = VectorType::get(vecSize, bf16_ty);
+              Value elemPtr = gep(ptr_ty(ctx, 0), halfVecBf16Ty, lmBasePtr,
+                                  i32_val(remainedIdx * stride));
+              Value loaded = load(halfVecBf16Ty, elemPtr);
+              loadedVals.push_back(loaded);
+            }
+            VecBF16ToFP32(op, ctx, loc, rewriter, resElemTy, resNumElems,
+                          vecSize, ptrDataVecSize, loadedVals);
           }
         } else {
-          for (size_t elemIdx = 0; elemIdx < ptrNumElems; elemIdx++) {
+          for (size_t elemIdx = 0; elemIdx < resNumElems; elemIdx++) {
             lmBasePtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
-            Value elemPtr = gep(ptr_ty(ctx, 0), ptrElemScalarTy, lmBasePtr,
+            Value elemPtr = gep(ptr_ty(ctx, 0), ptrDataVecTy, lmBasePtr,
                                 i32_val(elemIdx * stride));
-            Value loaded = load(ptrElemScalarTy, elemPtr);
-            if (bf16Tofp32) {
-              loaded =
-                  rewriter.create<LLVM::FPExtOp>(loc, resElemScalarTy, loaded);
-            }
+            Value loaded = load(ptrDataVecTy, elemPtr);
             loadedVals.push_back(loaded);
           }
+        }
+      } else {
+        for (size_t elemIdx = 0; elemIdx < ptrNumElems; elemIdx++) {
+          lmBasePtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
+          Value elemPtr = gep(ptr_ty(ctx, 0), ptrElemScalarTy, lmBasePtr,
+                              i32_val(elemIdx * stride));
+          Value loaded = load(ptrElemScalarTy, elemPtr);
+          if (bf16Tofp32) {
+            loaded =
+                rewriter.create<LLVM::FPExtOp>(loc, resElemScalarTy, loaded);
+          }
+          loadedVals.push_back(loaded);
         }
       }
     }
@@ -1097,14 +1060,14 @@ struct XPUStoreOpConversion
         auto vevenAnd = rewriter.create<LLVM::InlineAsmOp>(
             loc, veci32Ty, vevenAndOperands, "vand.u.mz $0{mr1}, $1, $2",
             "=&v,r,v",
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
         SmallVector<Value, 4> evenOperands({i32_val(magic), vevenAnd.getRes()});
         auto vevenSvAdd = rewriter.create<LLVM::InlineAsmOp>(
             loc, veci32Ty, evenOperands, "vadd.u.mz $0{mr1}, $1, $2", "=&v,r,v",
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
@@ -1120,14 +1083,14 @@ struct XPUStoreOpConversion
         auto voddAnd = rewriter.create<LLVM::InlineAsmOp>(
             loc, veci32Ty, oddAndOperands, "vand.u.mz $0{mr1}, $1, $2",
             "=&v,r,v",
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
         SmallVector<Value, 4> oddOperands({i32_val(magic), voddAnd.getRes()});
         auto voddSvAdd = rewriter.create<LLVM::InlineAsmOp>(
             loc, veci32Ty, oddOperands, "vadd.u.mz $0{mr1}, $1, $2", "=&v,r,v",
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
@@ -1183,14 +1146,14 @@ struct XPUStoreOpConversion
         auto vlAnd = rewriter.create<LLVM::InlineAsmOp>(
             loc, veci32Ty, vlAndOperands, "vand.u.mz $0{mr1}, $1, $2",
             "=&v,r,v",
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
         SmallVector<Value, 4> vlOperands({i32_val(magic), vlAnd.getRes()});
         auto vlSvAdd = rewriter.create<LLVM::InlineAsmOp>(
             loc, veci32Ty, vlOperands, "vadd.u.mz $0{mr1}, $1, $2", "=&v,r,v",
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
@@ -1205,14 +1168,14 @@ struct XPUStoreOpConversion
         auto vhAnd = rewriter.create<LLVM::InlineAsmOp>(
             loc, veci32Ty, vhAndOperands, "vand.u.mz $0{mr1}, $1, $2",
             "=&v,r,v",
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
         SmallVector<Value, 4> vhOperands({i32_val(magic), vhAnd.getRes()});
         auto vhSvAdd = rewriter.create<LLVM::InlineAsmOp>(
             loc, veci32Ty, vhOperands, "vadd.u.mz $0{mr1}, $1, $2", "=&v,r,v",
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
@@ -1246,8 +1209,8 @@ struct XPUStoreOpConversion
     Value value = op.getValue();
     Value index = op.getIndex();
 
-    int32_t tensor_col_size = op.getTensorColSize();
-    bool coreDealMultiRows = tensor_col_size != -1;
+    int32_t colSize = op.getTensorColSize();
+    bool coreDealMultiRows = colSize != -1;
     bool bf16Tofp32Unordered = op.getBf16Tofp32Unordered();
 
     // adaptor values
@@ -1274,6 +1237,9 @@ struct XPUStoreOpConversion
       // Scalar
       ptrElemScalarTy = mlir::cast<triton::PointerType>(ptrTy).getPointeeType();
     }
+    ptrElemScalarTy = typeConverter->convertType(ptrElemScalarTy);
+    valueElemScalarTy = typeConverter->convertType(valueElemScalarTy);
+
     Type ptrDataVecTy = valueElemTy;
 
     unsigned valueNumElems = getTotalElemsPerThread(valueTy);
@@ -1316,57 +1282,29 @@ struct XPUStoreOpConversion
     }
 
     Value lmBasePtr = bitcast(llPtrs[0], ptr_ty(ctx, 0));
+    unsigned stride = 1;
     if (index) {
       ptrNumElems = valueNumElems;
-      unsigned _stride =
-          (fp32Tobf16 && isVectorized) ? ptrNumElems / 2 : ptrNumElems;
+      unsigned _stride = (fp32Tobf16 && isVectorized)
+                             ? std::ceil(static_cast<double>(ptrNumElems) / 2)
+                             : ptrNumElems;
+      _stride = coreDealMultiRows ? 1 : _stride;
       Value idx = mul(llIndex, i32_val(_stride));
       lmBasePtr = gep(ptr_ty(ctx, 0), ptrDataVecTy, lmBasePtr, idx);
+      stride = coreDealMultiRows
+                   ? std::ceil(static_cast<double>(colSize) / ptrDataVecSize)
+                   : stride;
     }
 
-    if (coreDealMultiRows) {
-      /*  Small Col Size Opt LM2GM (14 legal data)
-
-          Before Opt:
-            1 1 1 1 1 1 1 0
-            1 1 1 1 1 1 1 0
-
-          After Opt:
-            1 1 1 1 1 1 1 1
-            1 1 1 1 1 1 0 0
-      */
-      if (isVectorized) {
-        lmBasePtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
-        SmallVector<Value> valueElemsScalar;
-        for (size_t vecStart = 0; vecStart < valueNumElems; ++vecStart) {
-          for (size_t elemStart = 0; elemStart < valueVecSize; ++elemStart) {
-            // extract val to ptrElemScalarTy
-            Value ext_val = extract_element(ptrElemScalarTy, llVals[vecStart],
-                                            i32_val(elemStart));
-            valueElemsScalar.push_back(ext_val);
-          }
-        }
-        llVals = valueElemsScalar;
-      }
-
-      auto mem_col_size = mlir::cast<RankedTensorType>(valueTy).getShape()[1] *
-                          valueVecSize; // 16
-      auto tensor_row_size =
-          mlir::cast<RankedTensorType>(valueTy).getShape()[0] /
-          64; // 128 / 64 = 2
-
-      for (size_t row_idx = 0; row_idx < tensor_row_size; ++row_idx) {
-        for (size_t col_idx = 0; col_idx < tensor_col_size; ++col_idx) {
-          auto mem_global_idx = row_idx * mem_col_size + col_idx;
-          auto buf_global_idx = row_idx * tensor_col_size + col_idx;
-          Value elem = llVals[mem_global_idx];
-          if (fp32Tobf16) {
-            elem = rewriter.create<LLVM::FPTruncOp>(loc, ptrElemScalarTy, elem);
-          }
-          Value elemPtr = gep(ptr_ty(ctx, 0), ptrElemScalarTy, lmBasePtr,
-                              i32_val(buf_global_idx));
-          store(elem, elemPtr);
-        }
+    if (valueElemScalarTy.isInteger(32) && ptrElemScalarTy.isInteger(8)) {
+      lmBasePtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
+      for (int i = 0; i < ptrNumElems; i += 4) {
+        Value elemPtr = gep(ptr_ty(ctx, 0), ptrElemScalarTy, lmBasePtr,
+                            i32_val(i * 16 * stride));
+        ValueRange args(
+            {llVals[i], llVals[i + 1], llVals[i + 2], llVals[i + 3], elemPtr});
+        LLVM::XPU::createDeviceCall("_ZN3xpu8vstorei8EjjjjPa", rewriter, op,
+                                    args, loc);
       }
     } else {
       if (isVectorized) {
@@ -1383,8 +1321,9 @@ struct XPUStoreOpConversion
           lmBasePtr = bitcast(lmBasePtr, ptr_ty(ctx, 0));
           for (size_t elemIdx = 0; elemIdx < valueNumElems; elemIdx++) {
             Value elem = llVals[elemIdx];
-            Value elemPtr =
-                gep(ptr_ty(ctx, 0), ptrDataVecTy, lmBasePtr, i32_val(elemIdx));
+            Value elemPtr = gep(ptr_ty(ctx, 0), ptrDataVecTy, lmBasePtr,
+                                i32_val(elemIdx * stride));
+            elem = bf16ToFp16(rewriter, loc, valueElemTy, elem);
             store(elem, elemPtr);
           }
         }
@@ -1395,12 +1334,13 @@ struct XPUStoreOpConversion
           if (fp32Tobf16) {
             elem = rewriter.create<LLVM::FPTruncOp>(loc, ptrElemScalarTy, elem);
           }
-          Value elemPtr =
-              gep(ptr_ty(ctx, 0), ptrElemScalarTy, lmBasePtr, i32_val(elemIdx));
+          Value elemPtr = gep(ptr_ty(ctx, 0), ptrElemScalarTy, lmBasePtr,
+                              i32_val(elemIdx * stride));
           store(elem, elemPtr);
         }
       }
     }
+
     createMfenceOp(rewriter, loc);
 
     // fp32 to fp16
@@ -1446,6 +1386,7 @@ struct XPUAllocaOpConversion
       // Scalar
       valueElemTy = mlir::cast<triton::PointerType>(resTy).getPointeeType();
     }
+    valueElemTy = typeConverter->convertType(valueElemTy);
 
     unsigned numElems = getTotalElemsPerThread(resTy);
 
@@ -1504,9 +1445,10 @@ struct XPUGM2LMOpConversion
     // original values
     Value ptr = op.getPtr();
     Value len = op.getLen();
-    int32_t tensor_col_size = op.getTensorColSize();
-    bool coreDealMultiRows = tensor_col_size != -1;
-    bool async = op.getAsync();
+    Value res = op.getResult();
+    int32_t tensorColSize = op.getTensorColSize();
+    bool coreDealMultiRows = tensorColSize != -1;
+    bool async = op.getSyncMode() == mlir::triton::MemorySyncMode::ASYNC;
 
     // adaptor values
     Value llLen = adaptor.getLen();
@@ -1515,6 +1457,8 @@ struct XPUGM2LMOpConversion
     Value resultStruct = llLMPtr;
 
     Type ptrTy = ptr.getType();
+    Type resTy = res.getType();
+    Type llvmResultStructTy = typeConverter->convertType(resTy);
     Type elemTy;
     if (auto ptrTensorTy = mlir::dyn_cast<RankedTensorType>(ptrTy)) {
       // Tensor
@@ -1574,15 +1518,14 @@ struct XPUGM2LMOpConversion
       */
       SmallVector<bool> maskLists;
       if (coreDealMultiRows) {
-        auto mem_col_size =
-            mlir::cast<RankedTensorType>(ptrTy).getShape()[1]; // 16
-        auto tensor_row_size =
-            mlir::cast<RankedTensorType>(ptrTy).getShape()[0] /
-            64;                                                  // 128 / 64 = 2
-        unsigned rowRemainElem = mem_col_size - tensor_col_size; // 16 - 15 = 1
+        auto shape = cast<RankedTensorType>(ptrTy).getShape();
+        auto tensorRowSize =
+            std::ceil(static_cast<double>(shape[0]) / 64);   // 128 / 64 = 2
+        auto memColSize = shape[1];                          // 16
+        unsigned rowRemainElem = memColSize - tensorColSize; // 16 - 15 = 1
 
-        for (size_t row_idx = 0; row_idx < tensor_row_size; ++row_idx) {
-          for (size_t col_idx = 0; col_idx < tensor_col_size; ++col_idx) {
+        for (size_t row_idx = 0; row_idx < tensorRowSize; ++row_idx) {
+          for (size_t col_idx = 0; col_idx < tensorColSize; ++col_idx) {
             maskLists.push_back(true);
           }
 
@@ -1630,6 +1573,8 @@ struct XPUGM2LMOpConversion
             createMfenceOp(rewriter, loc);
         }
 
+        resultStruct = packLLElements(loc, typeConverter, llLMPtrs, rewriter,
+                                      llvmResultStructTy);
         rewriter.replaceOp(op, {resultStruct});
         return success();
       }
@@ -1645,7 +1590,7 @@ struct XPUGM2LMOpConversion
         newLmBufPtrs[idx] = elemPtr;
       }
       resultStruct = packLLElements(loc, typeConverter, newLmBufPtrs, rewriter,
-                                    llLMPtr.getType());
+                                    llvmResultStructTy);
     } else if (offsetState == OffsetState::DiscreteSame) {
       readBytes = elemBytes;
       SmallVector<Value> newLmBufPtrs(llLMPtrs.size(), llLMPtrs[0]);
@@ -1656,9 +1601,8 @@ struct XPUGM2LMOpConversion
       int64_t _rowStride = op.getRowStride();
       if (_rowLen % numElems == 0) {
         offsetState = OffsetState::Continuous;
-        LLVM_DEBUG(
-            llvm::dbgs()
-            << "[OffsetState]: GM2LM Update LocallyContinuous to Continuous\n");
+        LLVM_DEBUG(llvm::dbgs() << "[OffsetState]: GM2LM Update "
+                                   "LocallyContinuous to Continuous\n");
       } else {
         auto oldBlock = op->getBlock();
         auto newBlock = oldBlock->splitBlock(op->getNextNode());
@@ -1689,11 +1633,37 @@ struct XPUGM2LMOpConversion
           createMfenceOp(rewriter, loc);
 
         resultStruct = packLLElements(loc, typeConverter, llLMPtrs, rewriter,
-                                      llLMPtr.getType());
+                                      llvmResultStructTy);
         rewriter.replaceOp(op, {resultStruct});
         rewriter.create<LLVM::BrOp>(loc, ValueRange{}, newBlock);
         return success();
       }
+    }
+
+    if (coreDealMultiRows) {
+      auto shape = cast<RankedTensorType>(ptrTy).getShape();
+      int32_t tensorRowSize = std::ceil(static_cast<double>(shape[0]) / 64);
+      if (tensorColSize % shape[1] == 0) {
+        readBytes = mul(i32_val(tensorRowSize * tensorColSize), elemBytes);
+        Value dstPtr = bitcast(llLMPtrs[0], ptr_ty(ctx, 0));
+        Value srcPtr = bitcast(llGMPtrs[0], ptr_ty(ctx, 1));
+        createGM2LMOp(rewriter, ctx, loc, srcPtr, dstPtr, offsetBytes,
+                      readBytes);
+      } else {
+        readBytes = mul(i32_val(tensorColSize), elemBytes);
+        for (int i = 0; i < tensorRowSize; ++i) {
+          Value dstPtr = bitcast(llLMPtrs[i * shape[1]], ptr_ty(ctx, 0));
+          Value srcPtr = bitcast(llGMPtrs[i * tensorColSize], ptr_ty(ctx, 1));
+          createGM2LMOp(rewriter, ctx, loc, srcPtr, dstPtr, offsetBytes,
+                        readBytes);
+        }
+      }
+
+      if (!async)
+        createMfenceOp(rewriter, loc);
+
+      rewriter.replaceOp(op, {resultStruct});
+      return success();
     }
 
     Value dstPtr = bitcast(llLMPtrs[0], ptr_ty(ctx, 0));
@@ -1731,7 +1701,11 @@ struct XPULM2GMOpConversion
     Value len = op.getLen();
     int32_t offsetStateInt = op.getOffsetState();
     OffsetState offsetState = static_cast<OffsetState>(offsetStateInt);
-    auto tensor_col_size = op.getTensorColSize();
+    auto tensorColSize = op.getTensorColSize();
+    bool coreDealMultiRows = tensorColSize != -1;
+    offsetState = (tensorColSize == 1) ? OffsetState::Continuous : offsetState;
+
+    bool async = op.getSyncMode() == mlir::triton::MemorySyncMode::ASYNC;
 
     // adaptor values
     Value llPtr = adaptor.getPtr();
@@ -1790,10 +1764,31 @@ struct XPULM2GMOpConversion
     // Create LM2GM and mfence
     switch (offsetState) {
     case OffsetState::Continuous: {
-      Value srcPtr = bitcast(lmBuf, ptr_ty(ctx, 0));
-      Value basePtr = bitcast(base, ptr_ty(ctx, 1));
-      createLM2GMOp(rewriter, ctx, loc, srcPtr, basePtr, offsetBytes,
-                    readBytes);
+      if (coreDealMultiRows) {
+        auto shape = cast<RankedTensorType>(ptrTy).getShape();
+        int32_t tensorRowSize = std::ceil(static_cast<double>(shape[0]) / 64);
+        if (tensorColSize % shape[1] == 0) {
+          readBytes = mul(i32_val(tensorRowSize * tensorColSize), elemBytes);
+          Value srcPtr = bitcast(lmBufPtrs[0], ptr_ty(ctx, 0));
+          Value dstPtr = bitcast(llPtrs[0], ptr_ty(ctx, 1));
+          createLM2GMOp(rewriter, ctx, loc, srcPtr, dstPtr, offsetBytes,
+                        readBytes);
+        } else {
+          for (int i = 0; i < tensorRowSize; ++i) {
+            readBytes = mul(i32_val(tensorColSize), elemBytes);
+            Value srcPtr = bitcast(lmBufPtrs[i * shape[1]], ptr_ty(ctx, 0));
+            Value dstPtr = bitcast(llPtrs[i * tensorColSize], ptr_ty(ctx, 1));
+            createLM2GMOp(rewriter, ctx, loc, srcPtr, dstPtr, offsetBytes,
+                          readBytes);
+          }
+        }
+
+      } else {
+        Value srcPtr = bitcast(lmBuf, ptr_ty(ctx, 0));
+        Value basePtr = bitcast(base, ptr_ty(ctx, 1));
+        createLM2GMOp(rewriter, ctx, loc, srcPtr, basePtr, offsetBytes,
+                      readBytes);
+      }
       break;
     }
     case OffsetState::LocallyContinuous: {
@@ -1801,9 +1796,8 @@ struct XPULM2GMOpConversion
       int64_t _rowStride = op.getRowStride();
       if (_rowLen % numElems == 0) {
         offsetState = OffsetState::Continuous;
-        LLVM_DEBUG(
-            llvm::dbgs()
-            << "[OffsetState]: LM2GM Update LocallyContinuous to Continuous\n");
+        LLVM_DEBUG(llvm::dbgs() << "[OffsetState]: LM2GM Update "
+                                   "LocallyContinuous to Continuous\n");
       } else {
         auto oldBlock = op->getBlock();
         auto newBlock = oldBlock->splitBlock(op->getNextNode());
@@ -1830,7 +1824,8 @@ struct XPULM2GMOpConversion
                 newBlock);
           }
         }
-        createMfenceOp(rewriter, loc);
+        if (!async)
+          createMfenceOp(rewriter, loc);
         rewriter.eraseOp(op);
         rewriter.create<LLVM::BrOp>(loc, ValueRange{}, newBlock);
         return success();
@@ -1883,7 +1878,8 @@ struct XPULM2GMOpConversion
       llvm_unreachable("Unknown offset state");
       break;
     }
-    createMfenceOp(rewriter, loc);
+    if (!async)
+      createMfenceOp(rewriter, loc);
     rewriter.eraseOp(op);
 
     return success();

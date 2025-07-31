@@ -437,6 +437,32 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   return newTotalElemsPerThread < totalElemsPerThread;
 }
 
+#ifdef __ILUVATAR__
+bool isMma(Attribute layout) {
+  if (auto mmaLayout = layout.dyn_cast<IluvatarMmaEncodingAttr>())
+    return mmaLayout.isVolta();
+  return false;
+}
+
+bool isMmaOrSliceMma(Attribute layout) {
+  if (auto mmaLayout = layout.dyn_cast<IluvatarMmaEncodingAttr>())
+    return mmaLayout.isVolta();
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>())
+    return isMmaOrSliceMma(sliceLayout.getParent());
+  return false;
+}
+
+bool isSliceMmaWithDim(Attribute layout, int targetDim) {
+  if (auto sliceLayout = layout.dyn_cast<SliceEncodingAttr>()) {
+    auto parentLayout = sliceLayout.getParent();
+    if (auto mmaLayout = parentLayout.dyn_cast<IluvatarMmaEncodingAttr>()) {
+      return mmaLayout.isVolta() && (sliceLayout.getDim() == targetDim);
+    }
+  }
+  return false;
+}
+#endif
+
 bool isMmaConvertLayout(Operation *op) {
   // Match cvt(#mma(version_minor = 0) -> #mma(version_minor > 0))
   // The later is for storing dot result.
@@ -2387,80 +2413,6 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
         "supported yet");
     return {};
   }
-}
-
-//===----------------------------------------------------------------------===//
-// AsyncCopyGlobalToLocalOp
-//===----------------------------------------------------------------------===//
-
-ParseResult AsyncCopyGlobalToLocalOp::parse(OpAsmParser &parser,
-                                            OperationState &result) {
-  SmallVector<OpAsmParser::UnresolvedOperand, 8> allOperands;
-  Type srcType, dstType, strideType;
-  SMLoc allOperandLoc = parser.getCurrentLocation();
-  if (parser.parseOperandList(allOperands) ||
-      parser.parseOptionalAttrDict(result.attributes) || parser.parseColon() ||
-      parser.parseCustomTypeWithFallback(srcType))
-    return failure();
-
-  SmallVector<Type> operandTypes;
-  int hasStride = 0;
-  if (parser.parseOptionalComma().succeeded()) {
-    if (allOperands.size() >= 6) {
-      hasStride = 1;
-      if (parser.parseType(strideType))
-        return failure();
-    }
-  }
-  if (parser.parseArrow() || parser.parseCustomTypeWithFallback(dstType))
-    return failure();
-  result.addTypes(dstType);
-  operandTypes.push_back(srcType); // src
-  operandTypes.push_back(dstType); // result
-
-  int hasMask = 0, hasOther = 0;
-  if (allOperands.size() >= 3 && allOperands.size() != 5) {
-    operandTypes.push_back(
-        triton::getI1SameShapeFromTensorOrTensorPtr(srcType)); // mask
-    hasMask = 1;
-  }
-  if (allOperands.size() == 4) {
-    operandTypes.push_back(triton::getPointeeType(srcType)); // other
-    hasOther = 1;
-  }
-  if (allOperands.size() >= 5) {
-    operandTypes.push_back(strideType); // inputStride
-    operandTypes.push_back(strideType); // placeHolder0
-    operandTypes.push_back(strideType); // placeHolder1
-  }
-  if (parser.resolveOperands(allOperands, operandTypes, allOperandLoc,
-                             result.operands))
-    return failure();
-
-  // Deduce operand_segment_sizes from the number of the operands.
-  auto operandSegmentSizesAttrName =
-      AsyncCopyGlobalToLocalOp::getOperandSegmentSizesAttrName(result.name);
-  result.addAttribute(
-      operandSegmentSizesAttrName,
-      parser.getBuilder().getDenseI32ArrayAttr(
-          {1, 1, hasMask, hasOther, hasStride, hasStride, hasStride}));
-  return success();
-}
-
-void AsyncCopyGlobalToLocalOp::print(OpAsmPrinter &printer) {
-  printer << " ";
-  printer << getOperation()->getOperands();
-  // "operand_segment_sizes" can be deduced, so we don't print it.
-  printer.printOptionalAttrDict(getOperation()->getAttrs(),
-                                {getOperandSegmentSizesAttrName()});
-  printer << " : ";
-  if (getInputStride()) {
-    printer.printStrippedAttrOrType(
-        llvm::ArrayRef<Type>{getSrc().getType(), getInputStride().getType()});
-  } else
-    printer.printStrippedAttrOrType(getSrc().getType());
-  printer << " -> ";
-  printer.printStrippedAttrOrType(getResult().getType());
 }
 
 //===----------------------------------------------------------------------===//

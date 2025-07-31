@@ -234,15 +234,16 @@ def mod(input: tl.tensor, other: tl.tensor, builder: ir.builder) -> tl.tensor:
     # float % float
     if scalar_ty.is_floating():
         # ===-------------------- For Triton XPU -----------------------===
-        from .extra.xpu.libdevice import fmod
-        r = fmod(input, other, _builder=builder)
-        zero = full([], 0.0, scalar_ty, builder)
-        c1 = not_equal(r, zero, builder)
-        c2_l = less_than(input, zero, builder)
-        c2_r = less_than(other, zero, builder)
-        c2 = xor_(c2_l, c2_r, builder)
-        ret = where(and_(c1, c2, builder), add(r, other, builder), r, builder)
-        return ret
+        if builder.options.backend_name == "xpu":
+            from .extra.xpu.libdevice import fmod
+            r = fmod(input, other, _builder=builder)
+            zero = full([], 0.0, scalar_ty, builder)
+            c1 = not_equal(r, zero, builder)
+            c2_l = less_than(input, zero, builder)
+            c2_r = less_than(other, zero, builder)
+            c2 = xor_(c2_l, c2_r, builder)
+            ret = where(and_(c1, c2, builder), add(r, other, builder), r, builder)
+            return ret
         # ===-----------------------------------------------------------===
 
         # input - input.div(other, rounding_mode="floor") * other
@@ -901,6 +902,42 @@ def _str_to_eviction_policy(eviction_policy):
     return eviction
 
 
+'''************************************ TritonXPU *******************************************'''
+
+
+def _str_to_offset_state_policy(offset_state_policy):
+    offset_state = ir.OFFSET_STATE_POLICY.UNKNOWN  # default
+    if offset_state_policy:
+        if offset_state_policy == "discrete_same":
+            offset_state = ir.OFFSET_STATE_POLICY.DISCRETE_SAME
+        elif offset_state_policy == "continuous":
+            offset_state = ir.OFFSET_STATE_POLICY.CONTINUOUS
+        elif offset_state_policy == "discrete":
+            offset_state = ir.OFFSET_STATE_POLICY.DISCRETE
+        elif offset_state_policy == "locally_continuous":
+            offset_state = ir.OFFSET_STATE_POLICY.LOCALLY_CONTINUOUS
+        else:
+            raise ValueError(f"Offset state policy {offset_state_policy} not supported")
+    return offset_state
+
+
+'''************************************ TritonXPU *******************************************'''
+'''************************************ TritonXPU *******************************************'''
+
+
+def _str_to_mem_sync_mode(mem_sync_mode):
+    sync_mode = ir.MEMORY_SYNC_MODE.SYNC  # default
+    if mem_sync_mode:
+        if mem_sync_mode == "async":
+            sync_mode = ir.MEMORY_SYNC_MODE.ASYNC
+        else:
+            raise ValueError(f"memory sync mode {mem_sync_mode} not supported")
+    return sync_mode
+
+
+'''************************************ TritonXPU *******************************************'''
+
+
 def _str_to_padding_option(padding_option):
     padding = None  # default
     if padding_option:
@@ -956,7 +993,8 @@ def _canonicalize_boundary_check(boundary_check, block_shape):
     return ()
 
 
-def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
+def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, offset_state,
+                        mem_sync_mode, builder):
     # Load by a block pointer: `pointer_type<block_type<>>`
     # Block pointer can not have `mask` and `other` arguments
     if mask is not None or other is not None:
@@ -975,10 +1013,12 @@ def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, evicti
 
     # Build IR
     return tl.tensor(
-        builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile), dst_ty)
+        builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile,
+                                           offset_state, mem_sync_mode), dst_ty)
 
 
-def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
+def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, offset_state, mem_sync_mode,
+                 builder):
     # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
     if not ptr.type.scalar.is_ptr():
         raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
@@ -1029,7 +1069,8 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
 
     # Build IR
     if mask is None:
-        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
+        return tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile, offset_state, mem_sync_mode),
+                         dst_ty)
     else:
         # ===-------------------- For Triton XPU -----------------------===
         # TODO[dyq]: Set TRITONXPU_OTHER_SIM To Default Mode
@@ -1037,35 +1078,43 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
         import os
         if bool(os.environ.get('TRITONXPU_OTHER_SIM', False)):
             if other is None:
-                return tl.tensor(
-                    builder.create_masked_load(ptr.handle, mask.handle, None, cache, eviction, is_volatile), dst_ty)
+                load_value = tl.tensor(
+                    builder.create_masked_load(ptr.handle, mask.handle, None, cache, eviction, is_volatile,
+                                               offset_state, mem_sync_mode), dst_ty)
+                zero = full([], 0.0, elt_ty, builder)
+                ret = where(mask, load_value, zero, builder)
+                return bitcast(ret, dst_ty, builder)
             else:
                 load_value = tl.tensor(
-                    builder.create_masked_load(ptr.handle, mask.handle, other.handle, cache, eviction, is_volatile),
-                    dst_ty)
+                    builder.create_masked_load(ptr.handle, mask.handle, other.handle, cache, eviction, is_volatile,
+                                               offset_state, mem_sync_mode), dst_ty)
                 ret = where(mask, load_value, other, builder)
                 return bitcast(ret, dst_ty, builder)
         # ===-----------------------------------------------------------===
         else:
             return tl.tensor(
                 builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache, eviction,
-                                           is_volatile), dst_ty)
+                                           is_volatile, offset_state, mem_sync_mode), dst_ty)
 
 
 def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], boundary_check: Tuple,
-         padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool,
-         builder: ir.builder) -> tl.tensor:
+         padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool, offset_state_policy: str,
+         mem_sync_mode: str, builder: ir.builder) -> tl.tensor:
     # Cache, eviction and padding options
     cache = _str_to_load_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
     padding = _str_to_padding_option(padding_option)
+    offset_state = _str_to_offset_state_policy(offset_state_policy)
+    sync_mode = _str_to_mem_sync_mode(mem_sync_mode)
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
         # Load by a block pointer: `pointer_type<block_type<>>`
-        return _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
+        return _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile,
+                                   offset_state, sync_mode, builder)
     else:
         # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-        return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
+        return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, offset_state,
+                            sync_mode, builder)
 
 
 def descriptor_load(desc_ptr: tl.tensor, offsets, cache_modifier: str, eviction_policy: str, type,
@@ -1082,7 +1131,7 @@ def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir
     return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
 
 
-def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder):
+def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, offset_state, mem_sync_mode, builder):
     # Store by a block pointer: `pointer_type<block_type<>>`
     # Block pointers can not have the `mask` argument
     if mask is not None:
@@ -1107,11 +1156,12 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     val = cast(val, elt_ty, builder)
 
     # Build IR
-    return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
-                     tl.void)
+    return tl.tensor(
+        builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction, offset_state,
+                                            mem_sync_mode), tl.void)
 
 
-def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
+def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, offset_state, mem_sync_mode, builder):
     # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
     if not ptr.type.scalar.is_ptr():
         raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
@@ -1149,7 +1199,8 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
 
     # Build IR
     if not mask:
-        return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
+        return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction, offset_state, mem_sync_mode),
+                         tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
     # ===-------------------- For Triton XPU -----------------------===
@@ -1164,30 +1215,36 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
         else:
             # Load by de-referencing the pointer of scalar
             dst_ty = elt_ty
-        load_value = tl.tensor(builder.create_load(ptr.handle, cache, eviction, False), dst_ty)
+        load_value = tl.tensor(builder.create_load(ptr.handle, cache, eviction, False, offset_state, mem_sync_mode),
+                               dst_ty)
         masked_value = where(mask, val, load_value, builder)
-        return tl.tensor(builder.create_masked_store(ptr.handle, masked_value.handle, mask.handle, cache, eviction),
-                         tl.void)
+        return tl.tensor(
+            builder.create_masked_store(ptr.handle, masked_value.handle, mask.handle, cache, eviction, offset_state,
+                                        mem_sync_mode), tl.void)
     # ===-----------------------------------------------------------===
     else:
-        return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction), tl.void)
+        return tl.tensor(
+            builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction, offset_state,
+                                        mem_sync_mode), tl.void)
 
 
 def store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], boundary_check, cache_modifier: str,
-          eviction_policy: str, builder: ir.builder) -> tl.tensor:
+          eviction_policy: str, offset_state_policy: str, mem_sync_mode: str, builder: ir.builder) -> tl.tensor:
     # Cache and eviction options
     cache = _str_to_store_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
+    offset_state = _str_to_offset_state_policy(offset_state_policy)
+    sync_mode = _str_to_mem_sync_mode(mem_sync_mode)
 
     if ptr.type.is_const() or ptr.type.scalar.is_const():
         raise ValueError("Cannot store to a constant pointer")
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
         # Store by a block pointer: `pointer_type<block_type<>>`
-        return _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builder)
+        return _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, offset_state, sync_mode, builder)
     else:
         # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-        return _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder)
+        return _store_legacy(ptr, val, mask, boundary_check, cache, eviction, offset_state, sync_mode, builder)
 
 
 #########
@@ -1211,7 +1268,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     if ptr.type.is_const() or ptr.type.element_ty.is_const():
         raise ValueError("Cannot store to a constant pointer")
     element_ty = ptr.type.scalar.element_ty
-    if element_ty is tl.float16 and op != 'add':
+    if element_ty is tl.float16 and op != 'add' and op != 'mul':
         raise ValueError("atomic_" + op + " does not support fp16")
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
         raise ValueError("atomic_" + op + " does not support " + str(element_ty))
@@ -1349,6 +1406,15 @@ def atomic_xchg(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope
     scope = _str_to_scope(scope)
     return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.XCHG, ptr.handle, val.handle, mask.handle, sem, scope),
                      val.type)
+
+
+def atomic_mul(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'mul', builder)
+    sem = _str_to_sem(sem)
+    scope = _str_to_scope(scope)
+    sca_ty = val.type.scalar
+    op = ir.ATOMIC_OP.FMUL if sca_ty.is_floating() else ir.ATOMIC_OP.MUL
+    return tl.tensor(builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
 
 
 # ===----------------------------------------------------------------------===//

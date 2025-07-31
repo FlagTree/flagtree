@@ -22,30 +22,30 @@ import os
 class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
-    divisible_by_8: set = None
+    corexLoad: dict = None
 
     def __post_init__(self):
         if self.divisible_by_16 is None:
             self.divisible_by_16 = set()
         if self.equal_to_1 is None:
             self.equal_to_1 = set()
-        if self.divisible_by_8 is None:
-            self.divisible_by_8 = set()
+        if self.corexLoad is None:
+            self.corexLoad = dict()
 
     def to_dict(self):
         return {
-            'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1), 'divisible_by_8':
-            list(self.divisible_by_8)
+            'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1), 'corexLoad':
+            list(self.corexLoad.items())
         }
 
     @staticmethod
     def from_dict(data):
-        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16',
-                                                            [])), equal_to_1=set(data.get('equal_to_1', [])),
-                               divisible_by_8=set(data.get('divisible_by_8', [])))
+        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
+                               equal_to_1=set(data.get('equal_to_1', [])), corexLoad=dict(data.get('corexLoad', [])))
 
     def hash(self):
-        key = str([sorted(x) for x in self.__dict__.values()])
+        key = str(
+            [sorted(x) if isinstance(x, tuple) or isinstance(x, set) else x.values() for x in self.__dict__.values()])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -385,8 +385,11 @@ class CompiledKernel:
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
+        self.module, self.function, self.n_regs, self.n_spills, self.n_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
+        if self.metadata.num_warps * 64 > self.n_threads:
+            self.module = None
+            raise OutOfResources(self.metadata.num_warps * 64, self.n_threads, "threads")
 
     def __getattribute__(self, name):
         if name == 'run':

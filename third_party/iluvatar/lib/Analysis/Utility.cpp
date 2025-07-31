@@ -860,8 +860,8 @@ void getBackwardSliceImplCorex(Operation *op,
       // blocks of parentOp, which are not technically backward unless they flow
       // into us. For now, just bail.
       if (parentOp && backwardSlice->count(parentOp) == 0) {
-        assert(parentOp->getNumRegions() == 1 &&
-               parentOp->getRegion(0).getBlocks().size() == 1);
+        // assert(parentOp->getNumRegions() == 1 &&
+        //        parentOp->getRegion(0).getBlocks().size() == 1);
         getBackwardSliceImplCorex(parentOp, backwardSlice, filter,
                                   omitBlockArguments);
       }
@@ -885,7 +885,8 @@ void getBackwardSliceCorex(Operation *op, SetVector<Operation *> *backwardSlice,
 
 SetVector<Operation *> multiRootGetSlice(Operation *op,
                                          TransitiveFilter backwardFilter,
-                                         TransitiveFilter forwardFilter) {
+                                         TransitiveFilter forwardFilter,
+                                         bool omitBlockArguments) {
   SetVector<Operation *> slice;
   slice.insert(op);
 

@@ -183,6 +183,26 @@ void init_triton_ir(py::module &&m) {
       .value("EVICT_LAST", EvictionPolicy::EVICT_LAST)
       .export_values();
 
+  /************************************ TritonXPU
+   * *******************************************/
+  py::enum_<OffsetStatePolicy>(m, "OFFSET_STATE_POLICY", py::module_local())
+      .value("UNKNOWN", OffsetStatePolicy::UNKNOWN)
+      .value("DISCRETE_SAME", OffsetStatePolicy::DISCRETE_SAME)
+      .value("CONTINUOUS", OffsetStatePolicy::CONTINUOUS)
+      .value("DISCRETE", OffsetStatePolicy::DISCRETE)
+      .value("LOCALLY_CONTINUOUS", OffsetStatePolicy::LOCALLY_CONTINUOUS)
+      .export_values();
+
+  /************************************ TritonXPU
+   * *******************************************/
+  py::enum_<MemorySyncMode>(m, "MEMORY_SYNC_MODE", py::module_local())
+      .value("SYNC", MemorySyncMode::SYNC)
+      .value("ASYNC", MemorySyncMode::ASYNC)
+      .export_values();
+
+  /************************************ TritonXPU
+   * *******************************************/
+
   py::enum_<RMWOp>(m, "ATOMIC_OP", py::module_local())
       .value("ADD", RMWOp::ADD)
       .value("FADD", RMWOp::FADD)
@@ -193,7 +213,9 @@ void init_triton_ir(py::module &&m) {
       .value("MAX", RMWOp::MAX)
       .value("MIN", RMWOp::MIN)
       .value("UMIN", RMWOp::UMIN)
-      .value("UMAX", RMWOp::UMAX);
+      .value("UMAX", RMWOp::UMAX)
+      .value("MUL", RMWOp::MUL)
+      .value("FMUL", RMWOp::FMUL);
 
   py::enum_<RoundingMode>(m, "ROUNDING_MODE", py::module_local())
       .value("RTZ", RoundingMode::RTZ)
@@ -1209,47 +1231,58 @@ void init_triton_ir(py::module &&m) {
       // Input/Output
       .def("create_load",
            [](TritonOpBuilder &self, Value &ptrs, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
+              EvictionPolicy evictionPolicy, bool isVolatile,
+              OffsetStatePolicy offsetStatePolicy,
+              MemorySyncMode syncMode) -> Value {
              return self.create<LoadOp>(ptrs, cacheModifier, evictionPolicy,
-                                        isVolatile);
+                                        isVolatile, offsetStatePolicy,
+                                        syncMode);
            })
       .def("create_store",
            [](TritonOpBuilder &self, Value &ptrs, Value &value,
-              CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptrs, value, cacheModifier, evictionPolicy);
+              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
+              OffsetStatePolicy offsetStatePolicy,
+              MemorySyncMode syncMode) -> void {
+             self.create<StoreOp>(ptrs, value, cacheModifier, evictionPolicy,
+                                  offsetStatePolicy, syncMode);
            })
       .def("create_tensor_pointer_load",
            [](TritonOpBuilder &self, Value &ptr,
               std::vector<int32_t> &boundaryCheck,
               std::optional<PaddingOption> paddingOption,
               CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
-              bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptr, boundaryCheck, paddingOption,
-                                        cacheModifier, evictionPolicy,
-                                        isVolatile);
+              bool isVolatile, OffsetStatePolicy offsetStatePolicy,
+              MemorySyncMode syncMode) -> Value {
+             return self.create<LoadOp>(
+                 ptr, boundaryCheck, paddingOption, cacheModifier,
+                 evictionPolicy, isVolatile, offsetStatePolicy, syncMode);
            })
       .def("create_tensor_pointer_store",
            [](TritonOpBuilder &self, Value &ptr, Value &val,
               std::vector<int32_t> &boundaryCheck, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
+              EvictionPolicy evictionPolicy,
+              OffsetStatePolicy offsetStatePolicy,
+              MemorySyncMode syncMode) -> void {
              self.create<StoreOp>(ptr, val, boundaryCheck, cacheModifier,
-                                  evictionPolicy);
+                                  evictionPolicy, offsetStatePolicy, syncMode);
            })
       .def("create_masked_load",
            [](TritonOpBuilder &self, Value &ptrs, Value &mask,
               std::optional<Value> &other, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptrs, mask, other.value_or(Value()),
-                                        cacheModifier, evictionPolicy,
-                                        isVolatile);
+              EvictionPolicy evictionPolicy, bool isVolatile,
+              OffsetStatePolicy offsetStatePolicy,
+              MemorySyncMode syncMode) -> Value {
+             return self.create<LoadOp>(
+                 ptrs, mask, other.value_or(Value()), cacheModifier,
+                 evictionPolicy, isVolatile, offsetStatePolicy, syncMode);
            })
       .def("create_masked_store",
            [](TritonOpBuilder &self, Value &ptrs, Value &val, Value &mask,
-              CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
+              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
+              OffsetStatePolicy offsetStatePolicy,
+              MemorySyncMode syncMode) -> void {
              self.create<StoreOp>(ptrs, val, mask, cacheModifier,
-                                  evictionPolicy);
+                                  evictionPolicy, offsetStatePolicy, syncMode);
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value &desc_ptr,
@@ -1639,6 +1672,7 @@ void init_triton_ir(py::module &&m) {
                                                     "tritonxpu-store-control",
                                                     "tritonxpu-unroll-control",
                                                     "tritonxpu-vectorize",
+                                                    "tritonsdnn-combine",
                                                 });
           }
 

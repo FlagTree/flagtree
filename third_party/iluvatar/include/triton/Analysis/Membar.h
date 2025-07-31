@@ -43,6 +43,38 @@ struct BlockInfo {
     syncWriteIntervals.clear();
   }
 
+#ifdef __ILUVATAR__
+  // type: 0 all | 1 del W from other R |2 del R from other W
+  void erase(BlockInfo &other, int type = 0) {
+    if (type == 0) {
+      for (auto &sri : other.syncReadIntervals)
+        syncReadIntervals.erase(sri);
+      for (auto &swi : other.syncWriteIntervals)
+        syncWriteIntervals.erase(swi);
+    } else if (type == 1) {
+      for (auto &sri : other.syncReadIntervals)
+        syncWriteIntervals.erase(sri);
+    } else if (type == 2) {
+      for (auto &swi : other.syncWriteIntervals)
+        syncReadIntervals.erase(swi);
+    }
+  }
+
+  // for debug
+  void printIntervals() {
+    if (syncReadIntervals.size() > 0 || syncWriteIntervals.size() > 0) {
+      std::cout << " syncReadIntervals";
+      for (auto &lhs : syncReadIntervals)
+        std::cout << " [" << lhs.start() << ", " << lhs.end() << "] ";
+      std::cout << "" << std::endl;
+      std::cout << " syncWriteIntervals";
+      for (auto &lhs : syncWriteIntervals)
+        std::cout << " [" << lhs.start() << ", " << lhs.end() << "] ";
+      std::cout << "" << std::endl;
+    }
+  }
+#endif
+
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
     return syncReadIntervals == other.syncReadIntervals &&

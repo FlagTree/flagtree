@@ -13,13 +13,13 @@ from . import utils
 
 extend_backends = []
 default_backends = ["nvidia", "amd"]
-plugin_backends = ["cambricon", "ascend", "aipu", "tsingmicro"]
+plugin_backends = ["ascend", "aipu", "tsingmicro"]
 ext_sourcedir = "triton/_C/"
 flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
 flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 offline_build = os.getenv("FLAGTREE_PLUGIN", "OFF")
-device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend"}
-language_extra_backends = ['xpu', 'musa']
+device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend", "cambricon": "mlu"}
+language_extra_backends = ['xpu', 'musa', "cambricon"]
 flagtree_backends = utils.flagtree_backends
 backend_utils = utils.activate(flagtree_backend)
 
@@ -125,6 +125,16 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
         print(f'Found third_party {backend.name} at {lib_path}\n')
     if callable(hock):
         hock(third_party_base_dir=base_dir, backend=backend, default_backends=default_backends)
+
+
+def configure_cambricon_packages_and_data(packages, package_dir, package_data):
+    try:
+        current_file = os.path.abspath(__file__)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
+        deps_dir = os.path.join(project_root, "deps")
+        return backend_utils.configure_packages_and_data(packages, package_dir, package_data, deps_dir)
+    except Exception:
+        return packages, package_dir, package_data
 
 
 def post_install():
@@ -352,7 +362,8 @@ def handle_flagtree_backend():
     global ext_sourcedir
     if flagtree_backend:
         print(f"\033[1;32m[INFO] FlagtreeBackend is {flagtree_backend}\033[0m")
-        extend_backends.append(flagtree_backend)
+        display_name = "mlu" if flagtree_backend == "cambricon" else flagtree_backend
+        extend_backends.append(display_name)
         if "editable_wheel" in sys.argv and flagtree_backend != "ascend":
             ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
 
@@ -371,8 +382,6 @@ download_flagtree_third_party("triton_shared", hock=utils.default.precompile_hoc
 download_flagtree_third_party("triton_ascend", condition=(flagtree_backend == "ascend"),
                               hock=utils.ascend.precompile_hock, required=True)
 
-download_flagtree_third_party("cambricon", condition=(flagtree_backend == "cambricon"), required=True)
-
 download_flagtree_third_party("flir", condition=(flagtree_backend == "aipu"), hock=utils.aipu.precompile_hock,
                               required=True)
 
@@ -383,28 +392,28 @@ cache = FlagTreeCache()
 # iluvatar
 cache.store(
     file="iluvatarTritonPlugin.so", condition=("iluvatar" == flagtree_backend) and (flagtree_plugin == ''), url=
-    "https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz",
-    copy_dst_path="third_party/iluvatar", md5_digest="7d4e136c")
+    "https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz",
+    copy_dst_path="third_party/iluvatar", md5_digest="015b9af8")
 
 cache.store(
     file="iluvatar-llvm18-x86_64",
     condition=("iluvatar" == flagtree_backend),
-    url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/iluvatar-llvm18-x86_64.tar.gz",
+    url="https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/iluvatar-llvm18-x86_64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
-# xpu(kunlunxin)
+# klx xpu
 cache.store(
     file="XTDK-llvm19-ubuntu2004_x86_64",
     condition=("xpu" == flagtree_backend),
-    url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar.gz",
+    url="https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
 cache.store(file="xre-Linux-x86_64", condition=("xpu" == flagtree_backend),
-            url="https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/xre-Linux-x86_64.tar.gz",
+            url="https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/xre-Linux-x86_64.tar.gz",
             copy_dst_path='python/_deps/xre3')
 
 cache.store(
@@ -438,7 +447,7 @@ cache.store(
     post_hock=set_llvm_env,
 )
 
-# aipu
+# arm aipu
 cache.store(
     file="llvm-a66376b0-ubuntu-x64",
     condition=("aipu" == flagtree_backend),

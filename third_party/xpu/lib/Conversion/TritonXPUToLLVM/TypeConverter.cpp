@@ -20,6 +20,15 @@ TritonXPUToLLVMTypeConverter::TritonXPUToLLVMTypeConverter(
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type);
   });
+  addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
+  addConversion([&](mlir::Float8E5M2Type type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
+  addConversion([&](mlir::Float8E5M2FNUZType type) -> std::optional<Type> {
+    return IntegerType::get(type.getContext(), 8);
+  });
 }
 
 Type TritonXPUToLLVMTypeConverter::convertTritonPointerType(

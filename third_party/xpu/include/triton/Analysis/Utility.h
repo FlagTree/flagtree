@@ -266,11 +266,100 @@ public:
   Attribute getSrcLayout() { return srcEncoding; }
   Region &getCombineOp();
 
+  //===-------------------- For Triton XPU -----------------------===//
+  explicit ScanLoweringHelper(triton::xpu::ScanOp op) : xpu_op(op) {
+    auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
+    srcShape = firstTy.getShape();
+    srcEncoding = firstTy.getEncoding();
+    srcElementTypes = op.getElementTypes();
+
+    for (const auto &t : op.getInputTypes()) {
+      if (t.getShape() != srcShape) {
+        op.emitError() << "shape mismatch";
+      }
+      if (t.getEncoding() != srcEncoding) {
+        op.emitError() << "encoding mismatch";
+      }
+    }
+  }
+
+  bool isCoreSynchronous();
+
+  unsigned getIntraGroupSizeWithUniqueData();
+
+  // Return the number of elements of the scratch space needed for scan
+  // lowering.
+  unsigned getScratchSizeInElemsXPU();
+
+  void setScanId(unsigned _scanId) { scanIdMap[xpu_op] = _scanId; }
+
+  unsigned getScanId() { return scanIdMap[xpu_op]; }
+
+  void setScanNum(unsigned _scanNum) { scanNum = _scanNum; }
+
+  unsigned getScanNum() { return scanNum; }
+
+  Location getXPULoc() { return xpu_op.getLoc(); }
+
+  unsigned getXPUAxis() { return xpu_op.getAxis(); }
+
+  Region &getXPUCombineOp() { return xpu_op.getCombineOp(); };
+
+  unsigned getXPUNumOperands() { return xpu_op.getNumOperands(); }
+
+  void setSMOffsets(unsigned _scanId, SmallVector<int64_t> &_offsets) {
+    int64_t _startOffset;
+    if (_scanId == 0) {
+      _startOffset = 0; // [TODO]: find reduceOp and replace the last endOffset
+    } else {
+      _startOffset = getSMOffsets(getScanId() - 1)->endOffset;
+    }
+    scanSMOffsetMap[_scanId] =
+        std::make_unique<redSMOffsetInfo>(_startOffset, _offsets);
+  }
+
+  redSMOffsetInfo *getSMOffsets(unsigned _reduceId) {
+    auto it = scanSMOffsetMap.find(_reduceId);
+    if (it != scanSMOffsetMap.end()) {
+      return it->second.get();
+    }
+    return nullptr;
+  }
+
+  void dumpSMOffsets() {
+    LLVM_DEBUG({
+      for (auto i = 0; i < scanNum; ++i) {
+        auto info = getSMOffsets(i);
+        if (info == nullptr)
+          continue;
+        llvm::dbgs() << "\nreduceOp" << i << " [start, end] = ["
+                     << info->startOffset << ", " << info->endOffset << "]\n";
+        llvm::dbgs() << "detail offsets: [";
+        for (auto offset : info->offsets) {
+          llvm::dbgs() << offset << ",";
+        }
+        llvm::dbgs() << "]\n";
+      }
+    });
+  }
+  // Return the number of elements per thread along axis dim.
+  unsigned getAxisNumElementsPerThreadXPU();
+
+  triton::xpu::ClusterLayoutAttr getXPUEncoding();
+  //===-----------------------------------------------------------===//
+
 private:
   triton::ScanOp scanOp;
   Attribute srcEncoding;
   llvm::ArrayRef<int64_t> srcShape;
   SmallVector<Type> srcElementTypes;
+
+  //===-------------------- For Triton XPU -----------------------===//
+  triton::xpu::ScanOp xpu_op;
+  static std::map<Operation *, unsigned> scanIdMap;
+  static unsigned scanNum;
+  static std::map<unsigned, std::unique_ptr<redSMOffsetInfo>> scanSMOffsetMap;
+  //===-----------------------------------------------------------===//
 };
 
 // Decomposes a reshape into simpler pieces.

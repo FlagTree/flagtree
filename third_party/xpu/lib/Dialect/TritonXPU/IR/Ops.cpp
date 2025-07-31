@@ -239,6 +239,37 @@ LogicalResult ReduceOp::inferReturnTypes(
   return success();
 }
 
+//-- ScanOp --
+
+LogicalResult
+ScanOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
+                         ValueRange operands, DictionaryAttr attributes,
+                         OpaqueProperties properties, RegionRange regions,
+                         SmallVectorImpl<Type> &inferredReturnTypes) {
+  for (auto [i, arg] : llvm::enumerate(operands)) {
+    if (i == (operands.size() - 1))
+      continue; // skip loopIndex
+    inferredReturnTypes.push_back(arg.getType());
+  }
+  return success();
+}
+
+LogicalResult ScanOp::verify() { return verifyReduceScan(*this); }
+
+LogicalResult ScanOp::verifyRegions() {
+  return verifyRegionsImpl<ScanReturnOp>(*this);
+}
+
+llvm::SmallVector<RankedTensorType> ScanOp::getInputTypes() {
+  return getInputTypesImpl(this->getOperands());
+}
+
+llvm::SmallVector<Type> ScanOp::getElementTypes() {
+  return getElementTypesImpl(this->getOperands());
+}
+
+unsigned ScanOp::getNumOperands() { return this->getOperands().size(); }
+
 //-- BroadcastOp --
 template <typename OpType>
 LogicalResult canonicalizeViewOrBroadcast(OpType op,

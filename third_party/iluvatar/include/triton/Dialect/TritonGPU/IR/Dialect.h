@@ -114,10 +114,18 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(Type srcType, Type dstType);
 
+#ifdef __ILUVATAR__
+bool isMma(Attribute layout);
+
+bool isSliceMmaWithDim(Attribute layout, int targetDim);
+
+bool isMmaOrSliceMma(Attribute layout);
+
 bool isMmaConvertLayout(Operation *op);
 
 bool isSliceMmaConvertLayout(Operation *op, bool srcNoWarpReduce,
                              bool dstNoWarpReduce);
+#endif
 
 // Return a blocked encoding where the shape is distributed contiguously amongst
 // the threads, warps, CTAs with 1 element per threads.

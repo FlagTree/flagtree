@@ -59,24 +59,29 @@ void init_triton_xpu_passes_conversion(py::module &&m) {
 void init_triton_xpu_passes_transform(py::module &&m) {
   // Function Pass
   m.def("add_tritonxpu_gm2lm_pass",
-        [](mlir::PassManager &self, uint32_t xpu_arch, bool atomicSim) {
+        [](mlir::PassManager &self, uint32_t xpu_arch, bool atomicSim,
+           bool oneCoreActOnly) {
           self.addPass(mlir::triton::xpu::createTritonXPUCreateGM2LM(
-              {xpu_arch, atomicSim}));
+              {xpu_arch, atomicSim, oneCoreActOnly}));
         });
 
   m.def("add_tritonxpu_legalize_pass",
-        [](mlir::PassManager &self, uint32_t buffer_size, uint32_t core_num) {
+        [](mlir::PassManager &self, uint32_t buffer_size, uint32_t core_num,
+           uint32_t groups_per_cluster) {
           self.addPass(mlir::triton::xpu::createTritonXPULegalize(
-              {buffer_size, core_num}));
+              {buffer_size, core_num, groups_per_cluster}));
         });
 
-  m.def("add_tritonxpu_mask_pass", [](mlir::PassManager &self) {
-    self.addPass(mlir::triton::xpu::createTritonXPUMask());
+  m.def("add_tritonxpu_mask_pass", [](mlir::PassManager &self,
+                                      bool oneCoreActOnly) {
+    self.addPass(mlir::triton::xpu::createTritonXPUMask({oneCoreActOnly}));
   });
 
-  m.def("add_tritonxpu_alloca_pass", [](mlir::PassManager &self) {
-    self.addPass(mlir::triton::xpu::createTritonXPUAlloca());
-  });
+  m.def("add_tritonxpu_alloca_pass",
+        [](mlir::PassManager &self, uint32_t buffer_size, uint32_t core_num) {
+          self.addPass(mlir::triton::xpu::createTritonXPUAlloca(
+              {buffer_size, core_num}));
+        });
 
   m.def("add_tritonxpu_dtype_convert_pass", [](mlir::PassManager &self,
                                                uint32_t xpu_arch) {
@@ -87,30 +92,41 @@ void init_triton_xpu_passes_transform(py::module &&m) {
     self.addPass(mlir::triton::xpu::createTritonXPULoopGrid());
   });
 
-  m.def("add_tritonxpu_unroll_control_pass", [](mlir::PassManager &self) {
-    self.addPass(mlir::triton::xpu::createTritonXPUUnrollControl());
+  m.def("add_tritonxpu_print_pass", [](mlir::PassManager &self) {
+    self.addPass(mlir::triton::xpu::createTritonXPUPrint());
   });
 
-  m.def("add_tritonxpu_other_sim_pass", [](mlir::PassManager &self) {
-    self.addPass(mlir::triton::xpu::createTritonXPUOtherSim());
-  });
+  m.def("add_tritonxpu_unroll_control_pass",
+        [](mlir::PassManager &self, uint32_t buffer_size, uint32_t core_num) {
+          self.addPass(mlir::triton::xpu::createTritonXPUUnrollControl(
+              {buffer_size, core_num}));
+        });
+
+  m.def("add_tritonxpu_other_sim_pass",
+        [](mlir::PassManager &self, uint32_t buffer_size, uint32_t core_num) {
+          self.addPass(mlir::triton::xpu::createTritonXPUOtherSim(
+              {buffer_size, core_num}));
+        });
 
   // Optimization Pass
-  m.def("add_tritonxpu_offset_state_pass", [](mlir::PassManager &self,
-                                              bool dump_flag) {
-    self.addPass(mlir::triton::xpu::createTritonXPUOffsetAnalysis({dump_flag}));
-  });
-
-  m.def("add_tritonxpu_core_tiling_pass",
+  m.def("add_tritonxpu_offset_state_pass",
         [](mlir::PassManager &self, bool dump_flag, uint32_t buffer_size) {
-          self.addPass(mlir::triton::xpu::createTritonXPUCoreTiling(
+          self.addPass(mlir::triton::xpu::createTritonXPUOffsetAnalysis(
               {dump_flag, buffer_size}));
         });
 
-  m.def("add_tritonxpu_vectorize_pass", [](mlir::PassManager &self,
-                                           bool dump_flag) {
-    self.addPass(mlir::triton::xpu::createTritonXPUVectorize({dump_flag}));
-  });
+  m.def("add_tritonxpu_core_tiling_pass",
+        [](mlir::PassManager &self, bool dump_flag, uint32_t buffer_size,
+           uint32_t core_num, uint32_t groups_per_cluster) {
+          self.addPass(mlir::triton::xpu::createTritonXPUCoreTiling(
+              {dump_flag, buffer_size, core_num, groups_per_cluster}));
+        });
+
+  m.def("add_tritonxpu_vectorize_pass",
+        [](mlir::PassManager &self, bool dump_flag, bool compare_fusion) {
+          self.addPass(mlir::triton::xpu::createTritonXPUVectorize(
+              {dump_flag, compare_fusion}));
+        });
 
   m.def("add_tritonxpu_memory_async_pass", [](mlir::PassManager &self,
                                               bool dump_flag) {
@@ -124,9 +140,33 @@ void init_triton_xpu_passes_transform(py::module &&m) {
   m.def("add_tritonxpu_store_control_pass", [](mlir::PassManager &self) {
     self.addPass(mlir::triton::xpu::createTritonXPUStoreControl());
   });
+
+  m.def("add_tritonxpu_memory_cache_pass",
+        [](mlir::PassManager &self, uint32_t buffer_size, uint32_t core_num) {
+          self.addPass(mlir::triton::xpu::createTritonXPUMemoryCache(
+              {buffer_size, core_num}));
+        });
+
+  m.def("add_tritonxpu_memory_inplace_pass",
+        [](mlir::PassManager &self, uint32_t buffer_size, uint32_t core_num) {
+          self.addPass(mlir::triton::xpu::createTritonXPUMemoryInplace(
+              {buffer_size, core_num}));
+        });
 }
 
 namespace mlir::triton::xpu {
+
+template <typename T> static bool hasUserOfType(Operation *op) {
+  if (isa<T>(op))
+    return true;
+
+  for (auto user : op->getUsers()) {
+    if (hasUserOfType<T>(user))
+      return true;
+  }
+
+  return false;
+}
 
 // Describes XPU Metadata. It is used to record the XPU related meta
 // information from mlir module.

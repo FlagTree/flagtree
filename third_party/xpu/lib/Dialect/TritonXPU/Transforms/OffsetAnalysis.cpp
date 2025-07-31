@@ -33,6 +33,12 @@ public:
   using impl::TritonXPUOffsetAnalysisBase<
       TritonXPUOffsetAnalysisPass>::TritonXPUOffsetAnalysisBase;
 
+  TritonXPUOffsetAnalysisPass() = default;
+  TritonXPUOffsetAnalysisPass(bool dumpFlag, unsigned bufferSize) {
+    this->dumpFlag = dumpFlag;
+    this->bufferSize = bufferSize;
+  }
+
   struct MockData {
     Operation *mockOp;
     int mockVal;
@@ -864,8 +870,8 @@ public:
     getSeqLens();
 
     // for (int i = 0; i < seq_lens.size(); ++i) {
-    //   LLVM_DEBUG(llvm::dbgs() << "seq_lens[" << i << "]: " << seq_lens[i] <<
-    //   "\n");
+    //   LLVM_DEBUG(llvm::dbgs()
+    //              << "seq_lens[" << i << "]: " << seq_lens[i] << "\n");
     // }
 
     // Step 2. Get Sequence Lengths' GCD
@@ -885,14 +891,11 @@ public:
         break;
     }
 
+    lrie = gcd(bufferSize, lrie);
+
     if (dumpFlag && lrie > 1) {
       LLVM_DEBUG(llvm::dbgs() << "lrie: " << lrie << "\n");
     }
-
-    if (lrie > 256 && lrie % 256 == 0)
-      lrie = 256; // Control LM BufferSize to Avoid Memory Exceed
-    else
-      assert("lrie is not the multiple of 256");
 
     return;
   }
@@ -1090,7 +1093,9 @@ public:
           memoryStateTransfer(memoryState, allOffsetStateResult[token]);
     }
 
-    if (atomicSim && !analysisFlag) {
+    bool canBeLrie = findUserOp<triton::AddPtrOp>(memoryOp) &&
+                     !findUserOp<arith::SelectOp>(memoryOp);
+    if (atomicSim && !analysisFlag && canBeLrie) {
       // analysis only once
       lrieDiscreteSameAnalysis(allOffsetResults[sortedTokens[0]]);
       if (lrie > 1) {
@@ -1123,7 +1128,10 @@ public:
       if (dumpFlag)
         LLVM_DEBUG(llvm::dbgs()
                    << "\n=======================================\n");
-      OffsetState offsetState = getOffsetState(gm2lmOp);
+      OffsetState offsetState =
+          gm2lmOp.getHandwrittenOffsetState()
+              ? static_cast<OffsetState>(gm2lmOp.getOffsetState())
+              : getOffsetState(gm2lmOp);
       if (dumpFlag) {
         LLVM_DEBUG(llvm::dbgs()
                    << "\n"
@@ -1166,7 +1174,10 @@ public:
       if (dumpFlag)
         LLVM_DEBUG(llvm::dbgs()
                    << "\n=======================================\n");
-      OffsetState offsetState = getOffsetState(lm2gmOp);
+      OffsetState offsetState =
+          lm2gmOp.getHandwrittenOffsetState()
+              ? static_cast<OffsetState>(lm2gmOp.getOffsetState())
+              : getOffsetState(lm2gmOp);
       // Only able to handle continuous and unknown cases.
       if (offsetState != OffsetState::Continuous &&
           offsetState != OffsetState::LocallyContinuous) {
@@ -1179,6 +1190,7 @@ public:
                    << "\n=======================================\n");
       }
       OpBuilder builder(lm2gmOp);
+      // offsetState = OffsetState::Continuous;
       int32_t offsetStateInt = static_cast<int32_t>(offsetState);
       lm2gmOp->setAttr("offsetState",
                        builder.getSI32IntegerAttr(offsetStateInt));

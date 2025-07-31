@@ -215,16 +215,26 @@ struct SVBinOpsConversion : public ConvertOpToLLVMPattern<SrcOp>,
     MLIRContext *ctx = rewriter.getContext();
 
     Type valueTy;
+    Type scalarValTy;
 
     if (elemState == ElemState::SV) {
       valueTy = rhs.getType();
+      scalarValTy = lhs.getType();
     } else if (elemState == ElemState::VS) {
       valueTy = lhs.getType();
+      scalarValTy = rhs.getType();
     }
 
     Type valueElemTy =
         getTypeConverter()->convertType(getElementTypeOrSelf(valueTy));
     unsigned numElems = getTotalElemsPerThread(valueTy);
+    unsigned rowNum = 1;
+    if (auto scalarTensorTy = dyn_cast<RankedTensorType>(scalarValTy)) {
+      auto encoding =
+          cast<triton::xpu::ClusterLayoutAttr>(scalarTensorTy.getEncoding());
+      rowNum = product(encoding.getSizePerCore());
+    }
+    unsigned colNum = ceil(numElems, rowNum);
 
     // Get data from a struct
     auto lhsElems = unpackLLElements(loc, lllhs, rewriter);
@@ -243,25 +253,29 @@ struct SVBinOpsConversion : public ConvertOpToLLVMPattern<SrcOp>,
       llvm_unreachable("Only FP16 and FP32 are supported in SVBinary!");
     }
     StringRef constraints = "=v,r,v";
-    for (size_t vecStart = 0; vecStart < numElems; vecStart += 1) {
-      if (elemState == ElemState::SV) {
-        SmallVector<Value, 4> operands({lhsElems[0], rhsElems[vecStart]});
-        auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
-            loc, valueElemTy, operands, asm_string, constraints,
-            /*has_side_effects=*/true,
-            /*is_align_stack=*/false,
-            LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
-            ArrayAttr());
-        calculatedVals.push_back(asmOp.getRes());
-      } else if (elemState == ElemState::VS) {
-        SmallVector<Value, 4> operands({rhsElems[0], lhsElems[vecStart]});
-        auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
-            loc, valueElemTy, operands, asm_string, constraints,
-            /*has_side_effects=*/true,
-            /*is_align_stack=*/false,
-            LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
-            ArrayAttr());
-        calculatedVals.push_back(asmOp.getRes());
+    for (int i = 0; i < rowNum; ++i) {
+      for (int j = 0; j < colNum; ++j) {
+        if (elemState == ElemState::SV) {
+          SmallVector<Value, 4> operands(
+              {lhsElems[i], rhsElems[i * colNum + j]});
+          auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
+              loc, valueElemTy, operands, asm_string, constraints,
+              /*has_side_effects=*/false,
+              /*is_align_stack=*/false,
+              LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+              ArrayAttr());
+          calculatedVals.push_back(asmOp.getRes());
+        } else if (elemState == ElemState::VS) {
+          SmallVector<Value, 4> operands(
+              {rhsElems[i], lhsElems[i * colNum + j]});
+          auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
+              loc, valueElemTy, operands, asm_string, constraints,
+              /*has_side_effects=*/false,
+              /*is_align_stack=*/false,
+              LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+              ArrayAttr());
+          calculatedVals.push_back(asmOp.getRes());
+        }
       }
     }
 
@@ -568,7 +582,7 @@ struct VSelectOpConversion : public ConvertOpToLLVMPattern<SrcOp>,
         SmallVector<Value, 4> xor_operands({});
         auto zerosIAsmOp = rewriter.create<LLVM::InlineAsmOp>(
             loc, resElemTy, xor_operands, xor_asm_string, xor_constraints,
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
@@ -585,7 +599,7 @@ struct VSelectOpConversion : public ConvertOpToLLVMPattern<SrcOp>,
         SmallVector<Value, 4> xor_operands({});
         auto zerosIAsmOp = rewriter.create<LLVM::InlineAsmOp>(
             loc, resElemTy, xor_operands, xor_asm_string, xor_constraints,
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
@@ -602,7 +616,7 @@ struct VSelectOpConversion : public ConvertOpToLLVMPattern<SrcOp>,
         SmallVector<Value, 4> xor_operands({});
         auto zerosFAsmOp = rewriter.create<LLVM::InlineAsmOp>(
             loc, resElemTy, xor_operands, xor_asm_string, xor_constraints,
-            /*has_side_effects=*/true,
+            /*has_side_effects=*/false,
             /*is_align_stack=*/false,
             LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
             ArrayAttr());
@@ -683,7 +697,7 @@ struct VMacFOpConversion : public ConvertOpToLLVMPattern<SrcOp>,
           {valueElems[vecStart], mulElems[vecStart], addElems[vecStart]});
       auto asmOp = rewriter.create<LLVM::InlineAsmOp>(
           loc, resElemTy, operands, asm_string, constraints,
-          /*has_side_effects=*/true,
+          /*has_side_effects=*/false,
           /*is_align_stack=*/false,
           LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
           ArrayAttr());
@@ -898,6 +912,7 @@ struct VCmpFOpConversion : public ConvertOpToLLVMPattern<triton::xpu::VCmpFOp>,
                                 ConversionPatternRewriter &rewriter) const {
     Value lhs = op.getLhs();
     Value rhs = op.getRhs();
+    Value res = op.getResult();
 
     Value lllhs = adaptor.getLhs();
     Value llrhs = adaptor.getRhs();
@@ -905,26 +920,56 @@ struct VCmpFOpConversion : public ConvertOpToLLVMPattern<triton::xpu::VCmpFOp>,
     auto loc = op->getLoc();
     MLIRContext *ctx = rewriter.getContext();
 
-    auto valueTy = lhs.getType();
+    auto lhsTy = lhs.getType();
+    auto rhsTy = rhs.getType();
+    assert(lhsTy == rhsTy);
+    auto lhsVecTy = getElementTypeOrSelf(lhsTy);
+    auto rhsVecTy = getElementTypeOrSelf(rhsTy);
+    assert(lhsVecTy == rhsVecTy);
+    auto lhsElemTy = getElementTypeOrSelf(lhsVecTy);
+    auto rhsElemTy = getElementTypeOrSelf(rhsVecTy);
+    assert(lhsElemTy == rhsElemTy);
+    auto resTy = res.getType();
+    auto resVecTy = getElementTypeOrSelf(resTy);
+    auto resElemTy = getElementTypeOrSelf(resVecTy);
+    auto llResVecTy = getTypeConverter()->convertType(resVecTy);
 
-    Type valueElemTy =
-        getTypeConverter()->convertType(getElementTypeOrSelf(valueTy));
-    unsigned numElems = getTotalElemsPerThread(valueTy);
-
-    auto lhsElems = unpackLLElements(loc, lllhs, rewriter);
-    auto rhsElems = unpackLLElements(loc, llrhs, rewriter);
-    assert(lhsElems.size() == rhsElems.size());
-
-    auto resTy = op.getResult().getType();
-    Type resElemTy =
-        getTypeConverter()->convertType(getElementTypeOrSelf(resTy));
+    unsigned numVecs = getTotalElemsPerThread(lhsTy);
+    auto lhsVecs = unpackLLElements(loc, lllhs, rewriter);
+    auto rhsVecs = unpackLLElements(loc, llrhs, rewriter);
+    assert(lhsVecs.size() == rhsVecs.size());
 
     SmallVector<Value> calculatedVals;
-    for (size_t vecStart = 0; vecStart < numElems; vecStart += 1) {
-      Value vcmpfOp = rewriter.create<LLVM::FCmpOp>(
-          loc, resElemTy, ArithCmpFPredicateToLLVM(op.getPredicate()),
-          lhsElems[vecStart], rhsElems[vecStart]);
-      calculatedVals.push_back(vcmpfOp);
+    if (resElemTy.isInteger(32)) {
+      if (lhsElemTy.isF16()) {
+        for (size_t i = 0; i < numVecs; ++i) {
+          ValueRange args({lhsVecs[i], rhsVecs[i]});
+          Type resTy = rewriter.getI32Type();
+          StringRef asmString = ArithCmpFPredicateToASMFP16(op.getPredicate());
+          auto res = LLVM::XPU::createDeviceCall(asmString, rewriter, op, resTy,
+                                                 args, loc);
+          calculatedVals.push_back(res);
+        }
+      } else if (lhsElemTy.isF32()) {
+        for (size_t i = 0; i < numVecs; ++i) {
+          ValueRange args({lhsVecs[i], rhsVecs[i]});
+          Type resTy = rewriter.getI32Type();
+          StringRef asmString = ArithCmpFPredicateToASMFP32(op.getPredicate());
+          auto res = LLVM::XPU::createDeviceCall(asmString, rewriter, op, resTy,
+                                                 args, loc);
+          calculatedVals.push_back(res);
+        }
+      } else {
+        llvm_unreachable("[VectorizedOpToLLVM]: CmpF Only Support F16 or F32 "
+                         "as Input Type");
+      }
+    } else {
+      for (size_t vecStart = 0; vecStart < numVecs; vecStart += 1) {
+        Value vcmpfOp = rewriter.create<LLVM::FCmpOp>(
+            loc, llResVecTy, ArithCmpFPredicateToLLVM(op.getPredicate()),
+            lhsVecs[vecStart], rhsVecs[vecStart]);
+        calculatedVals.push_back(vcmpfOp);
+      }
     }
 
     Type llvmResultStructTy = getTypeConverter()->convertType(resTy);
@@ -960,6 +1005,40 @@ struct VCmpFOpConversion : public ConvertOpToLLVMPattern<triton::xpu::VCmpFOp>,
       __PRED_ENUM(AlwaysFalse, _false);
 
 #undef __PRED_ENUM
+    }
+    llvm_unreachable("Unknown arith::CmpFPredicate");
+  }
+
+  static StringRef ArithCmpFPredicateToASMFP32(arith::CmpFPredicate predicate) {
+    switch (predicate) {
+#define __VASM_FP32_PRED_ENUM(item__, item1__)                                 \
+  case arith::CmpFPredicate::item__:                                           \
+    return item1__
+
+      __VASM_FP32_PRED_ENUM(UNE, "_ZN3xpu8vvnefp32EDv16_fS0_");
+      __VASM_FP32_PRED_ENUM(OGT, "_ZN3xpu8vvgtfp32EDv16_fS0_");
+      __VASM_FP32_PRED_ENUM(OGE, "_ZN3xpu8vvgefp32EDv16_fS0_");
+      __VASM_FP32_PRED_ENUM(OLT, "_ZN3xpu8vvltfp32EDv16_fS0_");
+      __VASM_FP32_PRED_ENUM(OLE, "_ZN3xpu8vvlefp32EDv16_fS0_");
+
+#undef __VASM_FP32_PRED_ENUM
+    }
+    llvm_unreachable("Unknown arith::CmpFPredicate");
+  }
+
+  static StringRef ArithCmpFPredicateToASMFP16(arith::CmpFPredicate predicate) {
+    switch (predicate) {
+#define __VASM_FP16_PRED_ENUM(item__, item1__)                                 \
+  case arith::CmpFPredicate::item__:                                           \
+    return item1__
+
+      __VASM_FP16_PRED_ENUM(UNE, "_ZN3xpu8vvnefp16EDv32_DF16_S0_");
+      __VASM_FP16_PRED_ENUM(OGT, "_ZN3xpu8vvgtfp16EDv32_DF16_S0_");
+      __VASM_FP16_PRED_ENUM(OGE, "_ZN3xpu8vvgefp16EDv32_DF16_S0_");
+      __VASM_FP16_PRED_ENUM(OLT, "_ZN3xpu8vvltfp16EDv32_DF16_S0_");
+      __VASM_FP16_PRED_ENUM(OLE, "_ZN3xpu8vvlefp16EDv32_DF16_S0_");
+
+#undef __VASM_FP16_PRED_ENUM
     }
     llvm_unreachable("Unknown arith::CmpFPredicate");
   }
