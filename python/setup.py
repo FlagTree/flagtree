@@ -620,7 +620,7 @@ if helper.flagtree_backend == "cambricon":
     packages, package_dir, package_data = helper.configure_cambricon_packages_and_data(
         packages, package_dir, package_data)
 
-setup(
+setup_kwargs = dict(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="3.1.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
@@ -628,7 +628,6 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     packages=packages,
-    package_dir=package_dir,
     entry_points=get_entry_points(),
     install_requires=get_install_requires(),
     package_data=package_data,
@@ -636,7 +635,6 @@ setup(
     ext_modules=ext_modules,
     cmdclass=cmdclass,
     zip_safe=False,
-    # for PyPI
     keywords=["Compiler", "Deep Learning"],
     url="https://github.com/triton-lang/triton/",
     classifiers=[
@@ -652,24 +650,15 @@ setup(
     ],
     test_suite="tests",
     extras_require={
-        "build": [
-            "cmake>=3.20",
-            "GitPython",
-            "lit",
-        ],
-        "tests": [
-            "autopep8",
-            "flake8",
-            "isort",
-            "numpy",
-            "pytest",
-            "scipy>=1.7.1",
-            "llnl-hatchet",
-        ],
-        "tutorials": [
-            "matplotlib",
-            "pandas",
-            "tabulate",
-        ],
+        "build": ["cmake>=3.20", "GitPython", "lit"],
+        "tests": ["autopep8", "flake8", "isort", "numpy", "pytest", "scipy>=1.7.1", "llnl-hatchet"],
+        "tutorials": ["matplotlib", "pandas", "tabulate"],
     },
 )
+
+# decide whether to add package_dir based on the environment variables
+if os.environ.get("FLAGTREE_BACKEND", "").lower() != "iluvatar":
+    common_kwargs["package_dir"] = helper.CommonUtils.get_package_dir(packages)
+
+# setup
+setup(**setup_kwargs)

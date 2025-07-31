@@ -7,7 +7,7 @@ def load_backend(platform: str):
     except ImportError:
         raise RuntimeError(f"Backend for platform '{platform}' not found")
 
-    backend = get_backend(platform)
+    backend = get_backend()
     if backend is None:
         raise RuntimeError(f"Backend '{platform}' failed to register itself")
     return backend
