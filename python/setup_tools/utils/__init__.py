@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from pathlib import Path
 import importlib.util
 import os
@@ -6,12 +5,14 @@ from . import tools
 from .tools import download_module, flagtree_submoduel_dir
 
 flagtree_submoduels = {
-    "triton_shared" : tools.Module(name="triton_shared", url="https://github.com/microsoft/triton-shared.git",
-                    commit_id="380b87122c88af131530903a702d5318ec59bb33", dst_path = os.path.join(flagtree_submoduel_dir, "triton_shared")),
-
-    "ascend" : tools.Module(name="ascend", url="https://gitee.com/ascend/triton-ascend.git", dst_path = os.path.join(flagtree_submoduel_dir, "triton_ascend")),
+    "triton_shared":
+    tools.Module(name="triton_shared", url="https://github.com/microsoft/triton-shared.git",
+                 commit_id="380b87122c88af131530903a702d5318ec59bb33",
+                 dst_path=os.path.join(flagtree_submoduel_dir, "triton_shared")),
+    "ascend":
+    tools.Module(name="ascend", url="https://gitee.com/ascend/triton-ascend.git",
+                 dst_path=os.path.join(flagtree_submoduel_dir, "triton_ascend")),
 }
-
 
 
 def activate(backend, suffix=".py"):

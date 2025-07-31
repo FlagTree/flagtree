@@ -2,12 +2,12 @@ import os
 import shutil
 from pathlib import Path
 from dataclasses import dataclass
+
 flagtree_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 flagtree_submoduel_dir = os.path.join(flagtree_root_dir, "third_party")
 
 network_configs = {
-    "MAX_RETRY_COUNT": 4,
-    "GIT_CLONE_TIMEOUT": 60,  # seconds
+    "MAX_RETRY_COUNT": 4, "GIT_CLONE_TIMEOUT": 60,  # seconds
 }
 
 
@@ -25,11 +25,13 @@ def dir_rollback(deep, base_path):
         deep -= 1
     return Path(base_path)
 
+
 def remove_triton_in_modules(model):
     model_path = model.dst_path
     triton_path = os.path.join(model_path, "triton")
     if os.path.exists(triton_path):
         shutil.rmtree(triton_path)
+
 
 def py_clone(module):
     import git
@@ -41,10 +43,13 @@ def py_clone(module):
             if has_specialization_commit:
                 repo.git.checkout(module.commit_id)
             return True
-        except Exception as e:
+        except Exception:
             retry_count -= 1
-            print(f"\n[{network_configs['MAX_RETRY_COUNT'] - retry_count}] retry to clone {module.name} to  {module.dst_path}")
+            print(
+                f"\n[{network_configs['MAX_RETRY_COUNT'] - retry_count}] retry to clone {module.name} to  {module.dst_path}"
+            )
     return False
+
 
 def sys_clone(module):
     retry_count = network_configs["MAX_RETRY_COUNT"]
@@ -59,8 +64,11 @@ def sys_clone(module):
             return True
         except Exception:
             retry_count -= 1
-            print(f"\n[{network_configs['MAX_RETRY_COUNT'] - retry_count}] retry to clone {module.name} to  {module.dst_path}")
+            print(
+                f"\n[{network_configs['MAX_RETRY_COUNT'] - retry_count}] retry to clone {module.name} to  {module.dst_path}"
+            )
     return False
+
 
 def clone_module(module):
     succ = True if py_clone(module) else sys_clone(module)
@@ -70,7 +78,8 @@ def clone_module(module):
     print(f"[INFO]: Successfully cloned {module.name} to {module.dst_path}")
     return True
 
-def download_module(module, required = False):
+
+def download_module(module, required=False):
     if module is None:
         return
     if not os.path.exists(module.dst_path):
@@ -79,10 +88,6 @@ def download_module(module, required = False):
         print(f'Found third_party {module.name} at {module.dst_path}\n')
         return True
     if not succ and required:
-        raise RuntimeError(f"[ERROR]: Failed to download {module.name} from {module.url}, It's most likely the network!")
+        raise RuntimeError(
+            f"[ERROR]: Failed to download {module.name} from {module.url}, It's most likely the network!")
     remove_triton_in_modules(module)
-    
-    
-    
-
-

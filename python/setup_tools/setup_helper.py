@@ -341,8 +341,8 @@ def check_env(env_val):
 
 download_flagtree_third_party("triton_shared", condition=(not flagtree_backend))
 
-download_flagtree_third_party("ascend", condition=(flagtree_backend == "ascend"),
-                              hock=backend_utils.precompile_hock, required=True)
+download_flagtree_third_party("ascend", condition=(flagtree_backend == "ascend"), hock=backend_utils.precompile_hock,
+                              required=True)
 
 handle_flagtree_backend()
 
