@@ -70,3 +70,4 @@ docs/sg_execution_times.rst
 
 # Vim
 *.swp
+third_party/iluvatar/python/triton/_C/libtriton.so
