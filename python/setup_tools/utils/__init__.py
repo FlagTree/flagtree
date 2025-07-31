@@ -1,7 +1,7 @@
 from pathlib import Path
 import importlib.util
 import os
-from . import tools
+from . import tools, ascend, cambricon, xpu
 from .tools import download_module, flagtree_submoduel_dir
 
 flagtree_submoduels = {
@@ -25,4 +25,4 @@ def activate(backend, suffix=".py"):
         return module
 
 
-__all__ = ["download_module", "tools"]
+__all__ = ["download_module", "tools", "ascend", "cambricon", "xpu"]
