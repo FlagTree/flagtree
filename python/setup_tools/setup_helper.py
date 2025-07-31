@@ -13,12 +13,12 @@ from . import utils
 
 extend_backends = []
 default_backends = ["nvidia", "amd"]
-plugin_backends = ["cambricon", "ascend"]
+plugin_backends = ["ascend", "aipu", "tsingmicro"]
 ext_sourcedir = "triton/_C/"
 flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
 flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 offline_build = os.getenv("FLAGTREE_PLUGIN", "OFF")
-device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend"}
+device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend", "cambricon": "mlu"}
 backend_utils = utils.activate(flagtree_backend)
 
 set_llvm_env = lambda path: set_env({
@@ -98,6 +98,16 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
         utils.download_module(submoduel, required)
         if callable(hock):
             hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel)
+
+
+def configure_cambricon_packages_and_data(packages, package_dir, package_data):
+    try:
+        current_file = os.path.abspath(__file__)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
+        deps_dir = os.path.join(project_root, "deps")
+        return backend_utils.configure_packages_and_data(packages, package_dir, package_data, deps_dir)
+    except Exception:
+        return packages, package_dir, package_data
 
 
 def post_install():
@@ -325,7 +335,8 @@ def handle_flagtree_backend():
     global ext_sourcedir
     if flagtree_backend:
         print(f"\033[1;32m[INFO] FlagtreeBackend is {flagtree_backend}\033[0m")
-        extend_backends.append(flagtree_backend)
+        display_name = "mlu" if flagtree_backend == "cambricon" else flagtree_backend
+        extend_backends.append(display_name)
         if "editable_wheel" in sys.argv and flagtree_backend != "ascend":
             ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
 
@@ -343,6 +354,10 @@ download_flagtree_third_party("triton_shared", condition=(not flagtree_backend))
 
 download_flagtree_third_party("ascend", condition=(flagtree_backend == "ascend"), hock=backend_utils.precompile_hock,
                               required=True)
+
+if hasattr(utils, "aipu"):
+    download_flagtree_third_party("flir", condition=(flagtree_backend == "aipu"), hock=utils.aipu.precompile_hock,
+                                  required=True)
 
 handle_flagtree_backend()
 

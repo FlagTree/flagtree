@@ -47,21 +47,23 @@ class BackendInstaller:
 
     @staticmethod
     def prepare(backend_name: str, backend_src_dir: str = None, is_external: bool = False):
+        dir_mapping = {"mlu": "cambricon"}
+        actual_dir_name = dir_mapping.get(backend_name, backend_name)
         # Initialize submodule if there is one for in-tree backends.
         if not is_external:
             root_dir = os.path.join(os.pardir, "third_party")
-            assert backend_name in os.listdir(
-                root_dir), f"{backend_name} is requested for install but not present in {root_dir}"
+            assert actual_dir_name in os.listdir(
+                root_dir), f"{actual_dir_name} is requested for install but not present in {root_dir}"
 
             try:
-                subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
+                subprocess.run(["git", "submodule", "update", "--init", f"{actual_dir_name}"], check=True,
                                stdout=subprocess.DEVNULL, cwd=root_dir)
             except subprocess.CalledProcessError:
                 pass
             except FileNotFoundError:
                 pass
 
-            backend_src_dir = os.path.join(root_dir, backend_name)
+            backend_src_dir = os.path.join(root_dir, actual_dir_name)
 
         backend_path = os.path.abspath(os.path.join(backend_src_dir, "backend"))
         assert os.path.exists(backend_path), f"{backend_path} does not exist!"
@@ -683,9 +685,9 @@ def get_packages():
     if helper.flagtree_backend:
         packages.append(f"triton/language/extra/{helper.get_device_name()}")
     packages += helper.get_extra_packages()
-
-    packages += [f'triton/backends/{backend.name}' for backend in backends]
     packages += get_language_extra_packages()
+    packages += ['triton/language/extra/hip' for backend in backends if backend.name != 'mlu']
+    packages += [f'triton/backends/{backend.name}' for backend in backends]
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         packages += ["triton/profiler"]
 
@@ -710,6 +712,31 @@ def get_git_commit_hash(length=8):
         return ""
 
 
+packages = get_packages()
+package_dir = helper.CommonUtils.get_package_dir(get_packages())
+ext_modules = [CMakeExtension("triton", helper.ext_sourcedir)]
+cmdclass = {
+    "build_ext": CMakeBuild,
+    "build_py": CMakeBuildPy,
+    "clean": CMakeClean,
+    "install": plugin_install,
+    "develop": plugin_develop,
+    "bdist_wheel": plugin_bdist_wheel,
+    "egg_info": plugin_egginfo,
+}
+
+if helper.flagtree_backend == "cambricon":
+    ext_modules = []
+    cmdclass = {
+        "clean": CMakeClean,
+        "install": plugin_install,
+        "develop": plugin_develop,
+        "bdist_wheel": plugin_bdist_wheel,
+        "egg_info": plugin_egginfo,
+    }
+    packages, package_dir, package_data = helper.configure_cambricon_packages_and_data(
+        packages, package_dir, package_data)
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="3.2.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
@@ -717,21 +744,13 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
-    packages=get_packages(),
-    package_dir=helper.CommonUtils.get_package_dir(get_packages()),
+    packages=packages,
+    package_dir=package_dir,
     entry_points=get_entry_points(),
     package_data=package_data,
     include_package_data=True,
-    ext_modules=[CMakeExtension("triton", helper.ext_sourcedir)],
-    cmdclass={
-        "build_ext": CMakeBuild,
-        "build_py": CMakeBuildPy,
-        "clean": CMakeClean,
-        "install": plugin_install,
-        "develop": plugin_develop,
-        "bdist_wheel": plugin_bdist_wheel,
-        "egg_info": plugin_egginfo,
-    },
+    ext_modules=ext_modules,
+    cmdclass=cmdclass,
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],
