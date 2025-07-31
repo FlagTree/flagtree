@@ -14,6 +14,7 @@ flagtree_submoduels = {
                  dst_path=os.path.join(flagtree_submoduel_dir, "triton_ascend")),
 }
 
+
 def activate(backend, suffix=".py"):
     if backend:
         module_path = Path(os.path.dirname(__file__)) / backend
