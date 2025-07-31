@@ -1,9 +1,22 @@
 import os
 import shutil
 from pathlib import Path
+from dataclasses import dataclass
+import setup_tools.utils.tools as tools
+from setup_tools.utils.tools import flagtree_root_dir, Module, flagtree_submoduel_dir
 
-root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+root_dir = flagtree_root_dir
 
+submodules = (
+    Module(
+        name="ascendnpu-ir", url="https://gitee.com/ascend/ascendnpu-ir.git",
+        commit_id="f4bb879a22c56c591b163f397eeb3b82794863f9",
+        dst_path = os.path.join(flagtree_submoduel_dir, "ascend/third_party/ascendnpu-ir")),
+)
+
+
+def get_submodules():
+    return submodules
 
 def get_backend_cmake_args(*args, **kargs):
     build_ext = kargs['build_ext']
@@ -21,6 +34,10 @@ def install_extension(*args, **kargs):
     python_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     dst_ext_path = os.path.join(python_root_dir, "triton/backends/ascend/triton-adapter-opt")
     shutil.copy(src_ext_path, dst_ext_path)
+
+def get_submodules():
+    for submodule in submodules:
+        tools.download_module(submodule)
 
 
 def create_symlink_for_triton(link_map):
@@ -74,6 +91,7 @@ def get_package_dir():
     for path in patch_paths:
         package_dict[f"triton/{path}"] = f"{triton_patch_prefix_dir}/{path}"
     create_symlink_for_triton(package_dict)
+    raise RuntimeError("will Fixed")
     return package_dict
 
 
@@ -87,6 +105,7 @@ def get_extra_install_packages():
 
 
 def precompile_hock(*args, **kargs):
+    get_submodules()
     third_party_base_dir = Path(kargs['third_party_base_dir'])
     ascend_path = Path(third_party_base_dir) / "ascend"
     patch_path = Path(ascend_path) / "triton_patch"
