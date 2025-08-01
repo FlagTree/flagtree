@@ -686,7 +686,6 @@ def get_packages():
         packages.append(f"triton/language/extra/{helper.get_device_name()}")
     packages += helper.get_extra_packages()
     packages += get_language_extra_packages()
-    packages += ['triton/language/extra/hip' for backend in backends if backend.name != 'mlu']
     packages += [f'triton/backends/{backend.name}' for backend in backends]
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         packages += ["triton/profiler"]

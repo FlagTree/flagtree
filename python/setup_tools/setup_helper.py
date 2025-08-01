@@ -19,7 +19,7 @@ flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
 flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 offline_build = os.getenv("FLAGTREE_PLUGIN", "OFF")
 device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend", "cambricon": "mlu"}
-backend_utils = utils.activate(flagtree_backend)
+activated_module = utils.activate(flagtree_backend)
 
 set_llvm_env = lambda path: set_env({
     'LLVM_INCLUDE_DIRS': Path(path) / "include",
@@ -30,14 +30,14 @@ set_llvm_env = lambda path: set_env({
 
 def install_extension(*args, **kargs):
     try:
-        backend_utils.install_extension(*args, **kargs)
+        activated_module.install_extension(*args, **kargs)
     except Exception:
         pass
 
 
 def get_backend_cmake_args(*args, **kargs):
     try:
-        return backend_utils.get_backend_cmake_args(*args, **kargs)
+        return activated_module.get_backend_cmake_args(*args, **kargs)
     except Exception:
         return []
 
@@ -49,7 +49,7 @@ def get_device_name():
 def get_extra_packages():
     packages = []
     try:
-        packages = backend_utils.get_extra_install_packages()
+        packages = activated_module.get_extra_install_packages()
     except Exception:
         packages = []
     return packages
@@ -58,7 +58,7 @@ def get_extra_packages():
 def get_package_data_tools():
     package_data = ["compile.h", "compile.c"]
     try:
-        package_data += backend_utils.get_package_data_tools()
+        package_data += activated_module.get_package_data_tools()
     except Exception:
         package_data
     return package_data
@@ -105,14 +105,14 @@ def configure_cambricon_packages_and_data(packages, package_dir, package_data):
         current_file = os.path.abspath(__file__)
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
         deps_dir = os.path.join(project_root, "deps")
-        return backend_utils.configure_packages_and_data(packages, package_dir, package_data, deps_dir)
+        return activated_module.configure_packages_and_data(packages, package_dir, package_data, deps_dir)
     except Exception:
         return packages, package_dir, package_data
 
 
 def post_install():
     try:
-        backend_utils.post_install()
+        activated_module.post_install()
     except Exception:
         pass
 
@@ -308,7 +308,7 @@ class CommonUtils:
         if 'backends' in package or 'profiler' in package:
             return True
         try:
-            return backend_utils.skip_package_dir(package)
+            return activated_module.skip_package_dir(package)
         except Exception:
             return False
 
@@ -325,7 +325,7 @@ class CommonUtils:
                 connection.append(pair)
             package_dict.update(connection)
         try:
-            package_dict.update(backend_utils.get_package_dir())
+            package_dict.update(activated_module.get_package_dir())
         except Exception:
             pass
         return package_dict

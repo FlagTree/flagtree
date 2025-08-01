@@ -7,7 +7,8 @@ flagtree_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirn
 flagtree_submoduel_dir = os.path.join(flagtree_root_dir, "third_party")
 
 network_configs = {
-    "MAX_RETRY_COUNT": 4, "GIT_CLONE_TIMEOUT": 60,  # seconds
+    "MAX_RETRY_COUNT": 4,
+    "GIT_CLONE_TIMEOUT": 60,
 }
 
 
