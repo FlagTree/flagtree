@@ -1261,6 +1261,11 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 def kernel_suffix(signature, specialization):
+    from triton.runtime.flagtree_backend_manager import get_backend
+    _backend = get_backend()
+    if _backend and hasattr(_backend, "kernel_suffix"):
+        return _backend.kernel_suffix(signature, specialization)
+
     # suffix format:
     # <argid><'c' if equal to 1><'d' if divisible by 16><'e' if divisible by 8>
     suffix = ''
@@ -1274,6 +1279,11 @@ def kernel_suffix(signature, specialization):
 
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns):
+    from triton.runtime.flagtree_backend_manager import get_backend
+    _backend = get_backend()
+    if _backend and hasattr(_backend, "ast_to_ttir"):
+        return _backend.ast_to_ttir(fn, specialization, context, options, codegen_fns)
+
     attrs = specialization.attrs
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i

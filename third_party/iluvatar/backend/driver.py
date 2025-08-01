@@ -395,6 +395,9 @@ class CudaDriver(GPUDriver):
         self.launcher_cls = CudaLauncher
         super().__init__()
 
+    def get_vendor_name(self):
+        return "iluvatar"
+
     def get_current_target(self):
         device = self.get_current_device()
         capability = self.get_device_capability(device)
