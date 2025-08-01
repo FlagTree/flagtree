@@ -306,7 +306,7 @@ class CommonUtils:
             if os.path.exists(exist_backend_path):
                 shutil.rmtree(exist_backend_path)
 
-    # return False if the backend use its third_party python
+    # return False if the backend uses its third_party python
     @staticmethod
     def skip_package_dir(package):
         if 'backends' in package or 'profiler' in package:
