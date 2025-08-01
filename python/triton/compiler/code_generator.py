@@ -1270,7 +1270,7 @@ def kernel_suffix(signature, specialization):
             suffix += 'c'
         if i in specialization.divisible_by_16:
             suffix += 'd'
-
+        # flagtree backend specialized
         from ..runtime.driver import driver
         backend_specialized = driver.active.flagtree_backend_specialized
         if hasattr(backend_specialized, "kernel_suffix_by_divisibility"):
@@ -1288,12 +1288,12 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns):
     function_name = fn.repr(specialization)
     tys = list(specialization.signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs.equal_to_1}
-
+    # flagtree backend specialized
+    new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
     from ..runtime.driver import driver
     backend_specialized = driver.active.flagtree_backend_specialized
     if hasattr(backend_specialized, "generate_new_attrs_in_ast_to_ttir"):
         new_attrs = backend_specialized.generate_new_attrs_in_ast_to_ttir(attrs)
-    new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
 
     all_constants = constants.copy()
     all_constants.update(new_constants)
