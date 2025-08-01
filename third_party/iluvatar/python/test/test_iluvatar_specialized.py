@@ -3,7 +3,7 @@ from triton.compiler.code_generator import kernel_suffix
 
 
 def test_kernel_suffix():
-    # 构造 signature 和 specialization
+    # Construct signature and Specialization
     signature = ['a', 'b', 'c', 'd']
 
     class Specialization:
@@ -11,6 +11,7 @@ def test_kernel_suffix():
         divisible_by_16 = {2}
         divisible_by_8 = {3}
 
+    # Get result and check
     result = kernel_suffix(signature, Specialization())
     print(f"[kernel_suffix] Result: {result}")
     assert result == "01c2d3e", f"Unexpected result: {result}"

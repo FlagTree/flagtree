@@ -1,7 +1,4 @@
-from triton.runtime.flagtree_backend_manager import register_backend
-
-
-class IluvatarSpecializedImpl():
+class FlagTreeBackendSpecialized():
 
     @staticmethod
     def kernel_suffix(signature, specialization):
@@ -54,6 +51,3 @@ class IluvatarSpecializedImpl():
         # module takes ownership of the context
         ret.context = context
         return ret
-
-
-register_backend("iluvatar", IluvatarSpecializedImpl())
