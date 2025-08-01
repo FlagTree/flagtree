@@ -12,7 +12,7 @@ class DriverBase(metaclass=ABCMeta):
         pass
 
     def __init__(self) -> None:
-        pass
+        self.flagtree_backend_specialized = None
 
 
 class GPUDriver(DriverBase):
