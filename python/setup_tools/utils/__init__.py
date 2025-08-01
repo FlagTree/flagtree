@@ -16,13 +16,14 @@ flagtree_submoduels = {
 
 
 def activate(backend, suffix=".py"):
-    if backend:
-        module_path = Path(os.path.dirname(__file__)) / backend
-        module_path = str(module_path) + suffix
-        spec = importlib.util.spec_from_file_location("module", module_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+    if not backend:
+        backend = "default"
+    module_path = Path(os.path.dirname(__file__)) / backend
+    module_path = str(module_path) + suffix
+    spec = importlib.util.spec_from_file_location("module", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 __all__ = ["download_module", "tools", "ascend", "cambricon", "xpu"]
