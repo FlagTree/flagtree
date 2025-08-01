@@ -1261,11 +1261,6 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 def kernel_suffix(signature, specialization):
-    from ..runtime.driver import driver
-    backend_specialized = driver.active.flagtree_backend_specialized
-    if hasattr(backend_specialized, "kernel_suffix"):
-        return backend_specialized.kernel_suffix(signature, specialization)
-
     # suffix format:
     # <argid><'c' if equal to 1><'d' if divisible by 16><'e' if divisible by 8>
     suffix = ''
@@ -1275,15 +1270,15 @@ def kernel_suffix(signature, specialization):
             suffix += 'c'
         if i in specialization.divisible_by_16:
             suffix += 'd'
+
+        from ..runtime.driver import driver
+        backend_specialized = driver.active.flagtree_backend_specialized
+        if hasattr(backend_specialized, "kernel_suffix_by_divisibility"):
+            suffix = backend_specialized.kernel_suffix_by_divisibility(specialization, i, suffix)
     return suffix
 
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns):
-    from ..runtime.driver import driver
-    backend_specialized = driver.active.flagtree_backend_specialized
-    if hasattr(backend_specialized, "ast_to_ttir"):
-        return backend_specialized.ast_to_ttir(fn, specialization, context, options, codegen_fns)
-
     attrs = specialization.attrs
     # create kernel prototype
     cst_key = lambda i: fn.arg_names.index(i) if isinstance(i, str) else i
@@ -1293,6 +1288,11 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns):
     function_name = fn.repr(specialization)
     tys = list(specialization.signature.values())
     new_constants = {k: True if k in tys and tys[k] == "i1" else 1 for k in attrs.equal_to_1}
+
+    from ..runtime.driver import driver
+    backend_specialized = driver.active.flagtree_backend_specialized
+    if hasattr(backend_specialized, "generate_new_attrs_in_ast_to_ttir"):
+        new_attrs = backend_specialized.generate_new_attrs_in_ast_to_ttir(attrs)
     new_attrs = {k: [("tt.divisibility", 16)] for k in attrs.divisible_by_16}
 
     all_constants = constants.copy()
