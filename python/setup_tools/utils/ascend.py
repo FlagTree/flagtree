@@ -1,8 +1,11 @@
 import os
 import shutil
 from pathlib import Path
+from setup_tools.utils.tools import flagtree_root_dir, Module, flagtree_submoduel_dir, download_module
 
-root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+submodules = (Module(name="ascendnpu-ir", url="https://gitee.com/ascend/ascendnpu-ir.git",
+                     commit_id="f4bb879a22c56c591b163f397eeb3b82794863f9",
+                     dst_path=os.path.join(flagtree_submoduel_dir, "ascend/third_party/ascendnpu-ir")), )
 
 
 def get_backend_cmake_args(*args, **kargs):
@@ -25,8 +28,8 @@ def install_extension(*args, **kargs):
 
 def create_symlink_for_triton(link_map):
     for target, source in link_map.items():
-        target_path = Path(os.path.join(root_dir, "python", target))
-        source_path = Path(os.path.join(root_dir, source))
+        target_path = Path(os.path.join(flagtree_root_dir, "python", target))
+        source_path = Path(os.path.join(flagtree_root_dir, source))
         if target_path.exists():
             if target_path.is_file():
                 os.unlink(target_path)
@@ -51,7 +54,7 @@ def create_symlink_for_triton(link_map):
 
 def get_package_dir():
     package_dict = {}
-    triton_patch_prefix_dir = os.path.join(root_dir, "third_party/ascend/triton_patch/python/triton_patch")
+    triton_patch_prefix_dir = os.path.join(flagtree_root_dir, "third_party/ascend/triton_patch/python/triton_patch")
     package_dict["triton/triton_patch"] = f"{triton_patch_prefix_dir}"
     package_dict["triton/triton_patch/language"] = f"{triton_patch_prefix_dir}/language"
     package_dict["triton/triton_patch/compiler"] = f"{triton_patch_prefix_dir}/compiler"
@@ -74,6 +77,7 @@ def get_package_dir():
     for path in patch_paths:
         package_dict[f"triton/{path}"] = f"{triton_patch_prefix_dir}/{path}"
     create_symlink_for_triton(package_dict)
+    raise RuntimeError("will Fixed")
     return package_dict
 
 
@@ -87,6 +91,7 @@ def get_extra_install_packages():
 
 
 def precompile_hock(*args, **kargs):
+    [download_module(submodule, required=False) for submodule in submodules]
     third_party_base_dir = Path(kargs['third_party_base_dir'])
     ascend_path = Path(third_party_base_dir) / "ascend"
     patch_path = Path(ascend_path) / "triton_patch"
@@ -103,7 +108,7 @@ def precompile_hock(*args, **kargs):
     patched_code = """  set(triton_abs_dir "${TRITON_ROOT_DIR}/include/triton/Dialect/Triton/IR") """
     src_code = """set(triton_abs_dir"""
 
-    filepath = Path(patch_path) / "include" / "triton" / "Dialect" / "Triton" / "IR" / "CMakeLists.txt"
+    filepath = os.path.join(patch_path, "include/triton/Dialect/Triton/IR/CMakeLists.txt")
     try:
         import tempfile
         with tempfile.NamedTemporaryFile(mode='w+t', delete=False) as tmp_file:
