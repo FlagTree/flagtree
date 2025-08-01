@@ -393,10 +393,9 @@ class CudaDriver(GPUDriver):
     def __init__(self):
         self.utils = CudaUtils()  # TODO: make static
         self.launcher_cls = CudaLauncher
+        from .flagtree_backend_specialized import FlagTreeBackendSpecialized
+        self.flagtree_backend_specialized = FlagTreeBackendSpecialized
         super().__init__()
-
-    def get_vendor_name(self):
-        return "iluvatar"
 
     def get_current_target(self):
         device = self.get_current_device()
