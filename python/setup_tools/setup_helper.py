@@ -20,8 +20,7 @@ flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 offline_build = os.getenv("FLAGTREE_PLUGIN", "OFF")
 device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend", "cambricon": "mlu"}
 language_extra_backends = ['xpu', 'musa', "cambricon"]
-flagtree_backends = utils.flagtree_backends
-backend_utils = utils.activate(flagtree_backend)
+activated_module = utils.activate(flagtree_backend)
 
 set_llvm_env = lambda path: set_env({
     'LLVM_INCLUDE_DIRS': Path(path) / "include",
@@ -32,14 +31,14 @@ set_llvm_env = lambda path: set_env({
 
 def install_extension(*args, **kargs):
     try:
-        backend_utils.install_extension(*args, **kargs)
+        activated_module.install_extension(*args, **kargs)
     except Exception:
         pass
 
 
 def get_backend_cmake_args(*args, **kargs):
     try:
-        return backend_utils.get_backend_cmake_args(*args, **kargs)
+        return activated_module.get_backend_cmake_args(*args, **kargs)
     except Exception:
         return []
 
@@ -51,7 +50,7 @@ def get_device_name():
 def get_extra_packages():
     packages = []
     try:
-        packages = backend_utils.get_extra_install_packages()
+        packages = activated_module.get_extra_install_packages()
     except Exception:
         packages = []
     return packages
@@ -69,31 +68,10 @@ def get_language_extra():
 def get_package_data_tools():
     package_data = ["compile.h", "compile.c"]
     try:
-        package_data += backend_utils.get_package_data_tools()
+        package_data += activated_module.get_package_data_tools()
     except Exception:
         package_data
     return package_data
-
-
-def git_clone(lib, lib_path):
-    import git
-    MAX_RETRY = 4
-    print(f"Clone {lib.name} into {lib_path} ...")
-    retry_count = MAX_RETRY
-    while (retry_count):
-        try:
-            repo = git.Repo.clone_from(lib.url, lib_path)
-            if lib.tag is not None:
-                repo.git.checkout(lib.tag)
-            sub_triton_path = Path(lib_path) / "triton"
-            if os.path.exists(sub_triton_path):
-                shutil.rmtree(sub_triton_path)
-            print(f"successfully clone {lib.name} into {lib_path} ...")
-            return True
-        except Exception:
-            retry_count -= 1
-            print(f"\n[{MAX_RETRY - retry_count}] retry to clone {lib.name} to  {lib_path}")
-    return False
 
 
 def dir_rollback(deep, base_path):
@@ -104,27 +82,12 @@ def dir_rollback(deep, base_path):
 
 
 def download_flagtree_third_party(name, condition, required=False, hock=None):
-    if not condition:
-        return
-    backend = None
-    for _backend in flagtree_backends:
-        if _backend.name in name:
-            backend = _backend
-            break
-    if backend is None:
-        return backend
-    base_dir = dir_rollback(3, __file__) / "third_party"
-    prelib_path = Path(base_dir) / name
-    lib_path = Path(base_dir) / _backend.name
-
-    if not os.path.exists(prelib_path) and not os.path.exists(lib_path):
-        succ = git_clone(lib=backend, lib_path=prelib_path)
-        if not succ and required:
-            raise RuntimeError("Bad network ! ")
-    else:
-        print(f'Found third_party {backend.name} at {lib_path}\n')
-    if callable(hock):
-        hock(third_party_base_dir=base_dir, backend=backend, default_backends=default_backends)
+    if condition:
+        submoduel = utils.flagtree_submoduels[name]
+        utils.download_module(submoduel, required)
+        if callable(hock):
+            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
+                 default_backends=default_backends)
 
 
 def configure_cambricon_packages_and_data(packages, package_dir, package_data):
@@ -132,14 +95,14 @@ def configure_cambricon_packages_and_data(packages, package_dir, package_data):
         current_file = os.path.abspath(__file__)
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
         deps_dir = os.path.join(project_root, "deps")
-        return backend_utils.configure_packages_and_data(packages, package_dir, package_data, deps_dir)
+        return activated_module.configure_packages_and_data(packages, package_dir, package_data, deps_dir)
     except Exception:
         return packages, package_dir, package_data
 
 
 def post_install():
     try:
-        backend_utils.post_install()
+        activated_module.post_install()
     except Exception:
         pass
 
@@ -335,7 +298,7 @@ class CommonUtils:
         if 'backends' in package or 'profiler' in package:
             return True
         try:
-            return backend_utils.skip_package_dir(package)
+            return activated_module.skip_package_dir(package)
         except Exception:
             return False
 
@@ -352,7 +315,7 @@ class CommonUtils:
                 connection.append(pair)
             package_dict.update(connection)
         try:
-            package_dict.update(backend_utils.get_package_dir())
+            package_dict.update(activated_module.get_package_dir())
         except Exception:
             pass
         return package_dict
@@ -378,12 +341,6 @@ def check_env(env_val):
 
 
 download_flagtree_third_party("triton_shared", hock=utils.default.precompile_hock, condition=(not flagtree_backend))
-
-download_flagtree_third_party("triton_ascend", condition=(flagtree_backend == "ascend"),
-                              hock=utils.ascend.precompile_hock, required=True)
-
-download_flagtree_third_party("flir", condition=(flagtree_backend == "aipu"), hock=utils.aipu.precompile_hock,
-                              required=True)
 
 handle_flagtree_backend()
 
