@@ -74,27 +74,6 @@ def get_package_data_tools():
     return package_data
 
 
-def git_clone(lib, lib_path):
-    import git
-    MAX_RETRY = 4
-    print(f"Clone {lib.name} into {lib_path} ...")
-    retry_count = MAX_RETRY
-    while (retry_count):
-        try:
-            repo = git.Repo.clone_from(lib.url, lib_path)
-            if lib.tag is not None:
-                repo.git.checkout(lib.tag)
-            sub_triton_path = Path(lib_path) / "triton"
-            if os.path.exists(sub_triton_path):
-                shutil.rmtree(sub_triton_path)
-            print(f"successfully clone {lib.name} into {lib_path} ...")
-            return True
-        except Exception:
-            retry_count -= 1
-            print(f"\n[{MAX_RETRY - retry_count}] retry to clone {lib.name} to  {lib_path}")
-    return False
-
-
 def dir_rollback(deep, base_path):
     while (deep):
         base_path = os.path.dirname(base_path)
@@ -107,7 +86,8 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
         submoduel = utils.flagtree_submoduels[name]
         utils.download_module(submoduel, required)
         if callable(hock):
-            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel)
+            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
+                 default_backends=default_backends)
 
 
 def configure_cambricon_packages_and_data(packages, package_dir, package_data):
