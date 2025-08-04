@@ -1,32 +1,23 @@
-from dataclasses import dataclass
 from pathlib import Path
 import importlib.util
 import os
-from . import ascend
-from . import aipu
-from . import default
+from . import tools, default, aipu
+from .tools import flagtree_submoduel_dir, download_module
 
-
-@dataclass
-class FlagTreeBackend:
-    name: str
-    url: str
-    tag: str = None
-
-
-flagtree_backends = (
-    FlagTreeBackend(name="triton_shared", url="https://github.com/microsoft/triton-shared.git",
-                    tag="5842469a16b261e45a2c67fbfc308057622b03ee"),
-    FlagTreeBackend(name="cambricon", url="https://github.com/Cambricon/triton-linalg.git",
-                    tag="00f51c2e48a943922f86f03d58e29f514def646d"),
-    FlagTreeBackend(name="flir", url="https://github.com/FlagTree/flir.git"),
-    FlagTreeBackend(name="ascend", url="https://gitee.com/ascend/triton-ascend.git"),
-)
+flagtree_submoduels = {
+    "triton_shared":
+    tools.Module(name="triton_shared", url="https://github.com/microsoft/triton-shared.git",
+                 commit_id="380b87122c88af131530903a702d5318ec59bb33",
+                 dst_path=os.path.join(flagtree_submoduel_dir, "triton_shared")),
+    "flir":
+    tools.Module(name="flir", url="https://github.com/FlagTree/flir.git",
+                 dst_path=os.path.join(flagtree_submoduel_dir, "flir")),
+}
 
 
 def activate(backend, suffix=".py"):
     if not backend:
-        return
+        backend = "default"
     module_path = Path(os.path.dirname(__file__)) / backend
     module_path = str(module_path) + suffix
     spec = importlib.util.spec_from_file_location("module", module_path)
@@ -38,4 +29,4 @@ def activate(backend, suffix=".py"):
     return module
 
 
-__all__ = ["ascend", "aipu", "default", "activate"]
+__all__ = ["aipu", "default", "activate", "flagtree_submoduels", "download_module", "tools"]
