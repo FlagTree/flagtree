@@ -75,8 +75,9 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
         submoduel = utils.flagtree_submoduels[name]
         utils.download_module(submoduel, required)
-    if callable(hock):
-        hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel, default_backends=default_backends)
+        if callable(hock):
+            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
+                 default_backends=default_backends)
 
 
 def post_install():
