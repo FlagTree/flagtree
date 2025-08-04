@@ -1,8 +1,8 @@
 from pathlib import Path
 import importlib.util
 import os
-from . import tools, ascend, aipu, cambricon, default, tsingmicro, xpu
-from .tools import flagtree_submoduel_dir
+from . import tools, default, xpu
+from .tools import flagtree_submoduel_dir, download_module
 
 flagtree_submoduels = {
     "triton_shared":
@@ -26,4 +26,4 @@ def activate(backend, suffix=".py"):
     return module
 
 
-__all__ = ["ascend", "aipu", "cambricon", "default", "tsingmicro", "xpu", "tools", "flagtree_submoduels", "activate"]
+__all__ = ["default", "tsingmicro", "xpu", "tools", "flagtree_submoduels", "activate", "download_module"]
