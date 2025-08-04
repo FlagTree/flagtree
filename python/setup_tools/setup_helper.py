@@ -320,11 +320,6 @@ def check_env(env_val):
 
 download_flagtree_third_party("triton_shared", hock=utils.default.precompile_hock, condition=(not flagtree_backend))
 
-download_flagtree_third_party("triton_ascend", condition=(flagtree_backend == "ascend"),
-                              hock=utils.ascend.precompile_hock, required=True)
-
-download_flagtree_third_party("cambricon", condition=(flagtree_backend == "cambricon"), required=True)
-
 download_flagtree_third_party("flir", condition=(flagtree_backend == "aipu"), hock=utils.aipu.precompile_hock,
                               required=True)
 
