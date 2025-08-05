@@ -92,3 +92,46 @@ def download_module(module, required=False):
         raise RuntimeError(
             f"[ERROR]: Failed to download {module.name} from {module.url}, It's most likely the network!")
     remove_triton_in_modules(module)
+
+
+class OfflineBuildManager:
+
+    def __init__(self):
+        self.is_offline = self.is_offline_build()
+        self.offline_build_dir = os.environ.get("FLAGTREE_OFFLINE_BUILD_DIR") if self.is_offline else None
+
+    def is_offline_build(self) -> bool:
+        return os.getenv("TRITON_OFFLINE_BUILD", "OFF") == "ON" or os.getenv("FLAGTREE_OFFLINE_BUILD_DIR")
+
+    def copy_to_flagtree_project(self, kargs):
+        dst_path = os.path.join(flagtree_root_dir,
+                                kargs['dst_path']) if 'dst_path' in kargs and kargs['dst_path'] else None
+        src_path = self.src
+        if not dst_path:
+            return False
+        src_path = self.src
+        print(f"[INFO] Copying from {src_path} to {dst_path}")
+        if os.path.isdir(src_path):
+            shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+        else:
+            shutil.copy(src_path, dst_path)
+
+    def handle_flagtree_hock(self, kargs):
+        if 'post_hock' in kargs and kargs['post_hock']:
+            kargs['post_hock'](self.src)
+
+    def validate_offline_build_dir(self, path, required=False):
+        if (not path or not os.path.exists(path)) and required:
+            raise RuntimeError(f"Offline build directory {path} does not exist.")
+
+    def single_build(self, *args, **kargs):
+        if not self.is_offline:
+            return False
+        required = kargs['required'] if 'required' in kargs else False
+        self.src = os.path.join(self.offline_build_dir, kargs['src']) if 'src' in kargs else None
+        self.validate_offline_build_dir(self.offline_build_dir, required)
+        self.validate_offline_build_dir(self.src, required)
+        print(f"[INFO] Building in offline mode using directory: {self.offline_build_dir}/{self.src}")
+        self.copy_to_flagtree_project(kargs)
+        self.handle_flagtree_hock(kargs)
+        return True
