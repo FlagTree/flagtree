@@ -99,6 +99,7 @@ class OfflineBuildManager:
     def __init__(self):
         self.is_offline = self.is_offline_build()
         self.offline_build_dir = os.environ.get("FLAGTREE_OFFLINE_BUILD_DIR") if self.is_offline else None
+        self.flagtree_backend = os.environ.get("FLAGTREE_BACKEND", "triton")
 
     def is_offline_build(self) -> bool:
         return os.getenv("TRITON_OFFLINE_BUILD", "OFF") == "ON" or os.getenv("FLAGTREE_OFFLINE_BUILD_DIR")
@@ -122,16 +123,34 @@ class OfflineBuildManager:
 
     def validate_offline_build_dir(self, path, required=False):
         if (not path or not os.path.exists(path)) and required:
-            raise RuntimeError(f"Offline build directory {path} does not exist.")
+            raise RuntimeError(
+                "\n\n\033[31m[ERROR]:\033[0m If you want to use the offline build method\n"
+                "please set FLAGTREE_OFFLINE_BUILD_DIR as the path of the offline dependency package\n"
+                "or please \033[31mdo not use\033[0m the environment variable \033[93mTRITON_OFFLINE_BUILD !\033[0m \n\n"
+            )
+
+    def validate_offline_build_deps(self, path, kargs, required=False):
+        url = kargs.get('url', None)
+        if (not path or not os.path.exists(path)) and required:
+            raise RuntimeError(
+                f"\n\n \033[31m[ERROR]:\033[0m The {self.flagtree_backend} offline build dependency \033[93m{path}\033[0m does not exist.\n"
+                f" And you can download the dependency package from the  \n \033[93m{url}\033[0m \n"
+                f" then extract it to the \033[93m{self.offline_build_dir}\033[0m directory you specified !\033[0m\n\n")
+
+    def validate_offline_build(self, path, required=False, is_base_dir=False, kargs=None):
+        if is_base_dir:
+            self.validate_offline_build_dir(path, required)
+        else:
+            self.validate_offline_build_deps(path, kargs, required)
 
     def single_build(self, *args, **kargs):
         if not self.is_offline:
             return False
         required = kargs['required'] if 'required' in kargs else False
+        self.validate_offline_build(self.offline_build_dir, required, is_base_dir=True)
         self.src = os.path.join(self.offline_build_dir, kargs['src']) if 'src' in kargs else None
-        self.validate_offline_build_dir(self.offline_build_dir, required)
-        self.validate_offline_build_dir(self.src, required)
-        print(f"[INFO] Building in offline mode using directory: {self.offline_build_dir}/{self.src}")
+        self.validate_offline_build(self.src, required, kargs=kargs)
+        print(f"[INFO] Building in offline mode using directory: {self.src}")
         self.copy_to_flagtree_project(kargs)
         self.handle_flagtree_hock(kargs)
         return True
