@@ -17,7 +17,6 @@ plugin_backends = ["ascend", "aipu", "tsingmicro"]
 ext_sourcedir = "triton/_C/"
 flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
 flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
-offline_build = os.getenv("FLAGTREE_PLUGIN", "OFF")
 device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend", "cambricon": "mlu"}
 language_extra_backends = ['xpu', 'musa', "cambricon"]
 activated_module = utils.activate(flagtree_backend)
@@ -116,6 +115,7 @@ class FlagTreeCache:
         self.cache_files = {}
         self.dir_path = self._get_cache_dir_path()
         self._create_cache_dir()
+        self.offline_handler = utils.OfflineBuildManager()
         if flagtree_backend:
             self._create_subdir(subdir_name=flagtree_backend)
 
@@ -224,9 +224,12 @@ class FlagTreeCache:
 
     def store(self, file=None, condition=None, url=None, copy_src_path=None, copy_dst_path=None, files=None,
               md5_digest=None, pre_hock=None, post_hock=None):
-
         if not condition or (pre_hock and pre_hock()):
             return
+        if self.offline_handler.single_build(src=file, dst_path=copy_dst_path, post_hock=post_hock, required=True,
+                                             url=url, md5_digest=md5_digest):
+            return
+
         is_url = False if url is None else True
         path = self.sub_dirs[flagtree_backend] if flagtree_backend else self.dir_path
 
