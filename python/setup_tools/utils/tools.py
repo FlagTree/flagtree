@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 flagtree_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 flagtree_submoduel_dir = os.path.join(flagtree_root_dir, "third_party")
-flagtree_backend = os.environ.get("FLAGTREE_BACKEND", "triton")
+flagtree_backend = os.environ.get("FLAGTREE_BACKEND")
 use_cuda_toolkit = ["aipu"]
 
 network_configs = {
