@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 flagtree_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 flagtree_submoduel_dir = os.path.join(flagtree_root_dir, "third_party")
+flagtree_backend = os.environ.get("FLAGTREE_BACKEND", "triton")
+use_cuda_toolkit = ["aipu"]
 
 network_configs = {
     "MAX_RETRY_COUNT": 4,
@@ -18,6 +20,10 @@ class Module:
     url: str
     commit_id: str = None
     dst_path: str = None
+
+
+def is_skip_cuda_toolkits():
+    return flagtree_backend not in use_cuda_toolkit
 
 
 def dir_rollback(deep, base_path):
@@ -94,12 +100,19 @@ def download_module(module, required=False):
     remove_triton_in_modules(module)
 
 
+def get_triton_cache_path():
+    user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
+    if not user_home:
+        raise RuntimeError("Could not find user home directory")
+    return os.path.join(user_home, ".triton")
+
+
 class OfflineBuildManager:
 
     def __init__(self):
         self.is_offline = self.is_offline_build()
         self.offline_build_dir = os.environ.get("FLAGTREE_OFFLINE_BUILD_DIR") if self.is_offline else None
-        self.flagtree_backend = os.environ.get("FLAGTREE_BACKEND", "triton")
+        self.triton_cache_path = get_triton_cache_path()
 
     def is_offline_build(self) -> bool:
         return os.getenv("TRITON_OFFLINE_BUILD", "OFF") == "ON" or os.getenv("FLAGTREE_OFFLINE_BUILD_DIR")
@@ -121,6 +134,21 @@ class OfflineBuildManager:
         if 'post_hock' in kargs and kargs['post_hock']:
             kargs['post_hock'](self.src)
 
+    def handle_triton_origin_toolkits(self):
+        triton_origin_toolkits = ["ptxas", "nvdisasm", "cuobjdump", "cudacrt", " cudart", "pybind11", "json"]
+        for toolkit in triton_origin_toolkits:
+            toolkit_cache_path = os.path.join(self.triton_cache_path, toolkit)
+            if os.path.exists(toolkit_cache_path):
+                continue
+            src_path = os.path.join(self.offline_build_dir, toolkit)
+            if os.path.exists(src_path):
+                print(f"[INFO] Copying {toolkit} from {src_path} to {toolkit_cache_path}")
+                shutil.copytree(src_path, toolkit_cache_path, dirs_exist_ok=True)
+            else:
+                raise RuntimeError(
+                    f"\n\n \033[31m[ERROR]:\033[0m The {flagtree_backend} offline build dependency \033[93m{src_path}\033[0m does not exist.\n"
+                )
+
     def validate_offline_build_dir(self, path, required=False):
         if (not path or not os.path.exists(path)) and required:
             raise RuntimeError(
@@ -133,7 +161,7 @@ class OfflineBuildManager:
         url = kargs.get('url', None)
         if (not path or not os.path.exists(path)) and required:
             raise RuntimeError(
-                f"\n\n \033[31m[ERROR]:\033[0m The {self.flagtree_backend} offline build dependency \033[93m{path}\033[0m does not exist.\n"
+                f"\n\n \033[31m[ERROR]:\033[0m The {flagtree_backend} offline build dependency \033[93m{path}\033[0m does not exist.\n"
                 f" And you can download the dependency package from the  \n \033[93m{url}\033[0m \n"
                 f" then extract it to the \033[93m{self.offline_build_dir}\033[0m directory you specified !\033[0m\n\n")
 
@@ -153,4 +181,8 @@ class OfflineBuildManager:
         print(f"[INFO] Building in offline mode using directory: {self.src}")
         self.copy_to_flagtree_project(kargs)
         self.handle_flagtree_hock(kargs)
+        if is_skip_cuda_toolkits():
+            print(f"[INFO] Skipping CUDA toolkits for {flagtree_backend} backend in offline build.")
+        else:
+            self.handle_triton_origin_toolkits()
         return True

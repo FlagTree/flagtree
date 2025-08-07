@@ -246,7 +246,7 @@ def get_thirdparty_packages(packages: list):
 
 def download_and_copy(name, src_path, variable, version, url_func):
     triton_cache_path = get_triton_cache_path()
-    if variable in os.environ:
+    if variable in os.environ or helper.utils.is_skip_cuda_toolkits():
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
