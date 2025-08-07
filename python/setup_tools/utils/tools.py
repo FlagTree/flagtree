@@ -23,7 +23,7 @@ class Module:
 
 
 def is_skip_cuda_toolkits():
-    return flagtree_backend not in use_cuda_toolkit
+    return flagtree_backend and (flagtree_backend not in use_cuda_toolkit)
 
 
 def dir_rollback(deep, base_path):
