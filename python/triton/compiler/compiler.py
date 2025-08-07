@@ -21,23 +21,39 @@ import os
 class AttrsDescriptor:
     divisible_by_16: set = None
     equal_to_1: set = None
+    # flagtree backend specialization
+    corexLoad: dict = None
 
     def __post_init__(self):
         if self.divisible_by_16 is None:
             self.divisible_by_16 = set()
         if self.equal_to_1 is None:
             self.equal_to_1 = set()
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        self.corexLoad = flagtree_backend_specialization("init_corexLoad", self.corexLoad) or None
 
     def to_dict(self):
-        return {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
+        dict = {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        dict = flagtree_backend_specialization("to_dict_corexLoad", self.divisible_by_16, self.equal_to_1, self.corexLoad) or dict
+        return dict
 
     @staticmethod
     def from_dict(data):
-        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
+        attrsDescriptor = AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
                                equal_to_1=set(data.get('equal_to_1', [])))
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        attrsDescriptor = flagtree_backend_specialization("from_dict_corexLoad", data) or attrsDescriptor
+        return attrsDescriptor
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        key = flagtree_backend_specialization("hash_AttrsDescriptor", self) or key
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -239,6 +255,11 @@ def compile(src, target=None, options=None):
     env_vars = get_cache_invalidating_env_vars()
     key = f"{triton_key()}-{src.hash()}-{backend.hash()}-{options.hash()}-{str(sorted(env_vars.items()))}"
     hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+    # flagtree backend specialization
+    from triton.runtime.driver import flagtree_backend_specialization
+    flagtree_backend_specialization("src_fn_hash_cache_file", ir_source, src, hash)
+    
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
     # core changes to make it easier to track kernels by hash.
@@ -294,6 +315,11 @@ def compile(src, target=None, options=None):
             next_module.create_location_snapshot(ttgir_full_name)
             print(f"Create new locations for {ttgir_full_name}")
         module = next_module
+
+    # flagtree backend specialization
+    from triton.runtime.driver import flagtree_backend_specialization
+    flagtree_backend_specialization("src_fn_so_path", ir_source, src)
+
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
@@ -375,6 +401,10 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
+        
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        flagtree_backend_specialization("init_handles_n_threads", self)
 
     def __getattribute__(self, name):
         if name == 'run':
