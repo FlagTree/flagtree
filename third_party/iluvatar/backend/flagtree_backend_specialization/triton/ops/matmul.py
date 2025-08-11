@@ -1,4 +1,5 @@
-def is_corex():
+def hasattr_corex():
+    import torch
     if hasattr(torch, "corex"):
         return True
     else:
@@ -6,6 +7,7 @@ def is_corex():
 
 
 def get_configs_compute_bound():
+    import torch
     from triton import Config
     configs = []
     if hasattr(torch, "corex"):
@@ -21,6 +23,7 @@ def get_configs_compute_bound():
 
 
 def get_nv_configs():
+    import torch
     from triton import Config
     configs = []
     if hasattr(torch, "corex"):

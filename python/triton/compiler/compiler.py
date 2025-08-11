@@ -404,7 +404,7 @@ class CompiledKernel:
         
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        flagtree_backend_specialization("init_handles_n_threads", self)
+        flagtree_backend_specialization("init_handles_n_threads", self, device)
 
     def __getattribute__(self, name):
         if name == 'run':

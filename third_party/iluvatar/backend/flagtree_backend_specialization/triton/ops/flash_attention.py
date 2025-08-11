@@ -1,9 +1,9 @@
 from triton.ops.flash_attention import _attention
 
-def sequence_parallel_mma_v3_dq():
+def sequence_parallel_mma_v3_dq(ds, k):
     import triton.language as tl
     dq = tl.dot(ds, k)
-    return dp
+    return dq
 
 
 def hardware_config(capability):

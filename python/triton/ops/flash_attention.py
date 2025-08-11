@@ -224,7 +224,7 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
                 dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds)))
             # flagtree backend specialization
             from triton.runtime.driver import flagtree_backend_specialization
-            dq = flagtree_backend_specialization("sequence_parallel_mma_v3_dq") or dq
+            dq = flagtree_backend_specialization("sequence_parallel_mma_v3_dq", ds, k) or dq
             tl.store(DQ_block_ptr, dq.to(Q.dtype.element_ty))
 
         # increment pointers

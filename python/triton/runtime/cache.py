@@ -118,6 +118,9 @@ class FileCacheManager(CacheManager):
         pid = os.getpid()
         # use tempfile to be robust against program interruptions
         temp_path = f"{filepath}.tmp.pid_{pid}_{rnd_id}"
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        temp_path = flagtree_backend_specialization("get_temp_path", self, pid, rnd_id, filename) or temp_path
         mode = "wb" if binary else "w"
         with open(temp_path, mode) as f:
             f.write(data)

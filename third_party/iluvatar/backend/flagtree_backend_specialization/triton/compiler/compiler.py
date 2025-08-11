@@ -35,8 +35,10 @@ def src_fn_so_path(ir_source, src):
         src.fn.so_path = driver.active.get_cache_path()
 
 
-def init_handles_n_threads(compiledKernel: CompiledKernel):
-    compiledKernel.module, compiledKernel.function, compiledKernel.n_regs, compiledKernel.n_spills, compiledKernel.n_threads = 
+def init_handles_n_threads(compiledKernel: CompiledKernel, device):
+    from triton.runtime.autotuner import OutOfResources
+    from triton.runtime.driver import driver
+    compiledKernel.module, compiledKernel.function, compiledKernel.n_regs, compiledKernel.n_spills, compiledKernel.n_threads = \
         driver.active.utils.load_binary(compiledKernel.name, compiledKernel.kernel, compiledKernel.metadata.shared, device)
     if compiledKernel.metadata.num_warps * 64 > compiledKernel.n_threads:
         compiledKernel.module = None
