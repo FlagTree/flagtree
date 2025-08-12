@@ -366,6 +366,7 @@ class CompiledKernel:
         if self.module is not None:
             return
         device = driver.active.get_current_device()
+        device = int(device.split(':')[-1]) if ':' in device else device
         # create launcher
         self.run = driver.active.launcher_cls(self.src, self.metadata)
         # not enough shared memory to run the kernel

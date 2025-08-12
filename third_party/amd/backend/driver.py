@@ -486,6 +486,10 @@ class HIPDriver(GPUDriver):
 
     @staticmethod
     def is_active():
+      try:
+        import paddle
+        return paddle.device.is_compiled_with_rocm()
+      except:
         import torch
         return torch.version.hip is not None
 

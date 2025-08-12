@@ -15,6 +15,75 @@ def nvsmi(attrs):
     ret = [int(x) for x in ret]
     return ret
 
+def do_bench_paddle(fn, rep=20, grad_to_none=None, return_mode="mean"):
+    """
+    使用Paddle进行性能基准测试。
+
+    :param fn: 要测试的函数
+    :param rep: 重复次数（总时间以此估计）
+    :param grad_to_none: 如果有，则将对应tensor的梯度清空
+    :param return_mode: 返回方式，支持 "min", "max", "mean", "median"
+    """
+    assert return_mode in ["min", "max", "mean", "median"]
+    import paddle
+    # 预热
+    fn()
+    # 如果需要，清理梯度
+    if grad_to_none is not None:
+        for x in grad_to_none:
+            x.clear_gradient()
+
+    # 创建事件用于计时
+    start_event = paddle.device.Event(enable_timing=True)
+    end_event = paddle.device.Event(enable_timing=True)
+
+    # 记录开始事件
+    start_event.record()
+
+    # 执行函数
+    fn()
+
+    # 记录结束事件
+    end_event.record()
+
+    # 等待事件完成
+    paddle.device.synchronize()
+
+    # 计算时间
+    elapsed_time = start_event.elapsed_time(end_event)
+
+    # 计算重复次数
+    n_repeat = max(1, int(rep / elapsed_time))
+
+    # 重复测量，减少偶然波动影响
+    ret = []
+    n_retries = 10
+    for _ in range(n_retries):
+        # 记录开始事件
+        start_event.record()
+
+        # 执行函数
+        fn()
+
+        # 记录结束事件
+        end_event.record()
+
+        # 等待事件完成
+        paddle.device.synchronize()
+
+        # 计算时间
+        elapsed_time = start_event.elapsed_time(end_event) / n_repeat
+        ret.append(elapsed_time)
+
+    # 计算统计结果
+    if return_mode == "min":
+        return min(ret)
+    elif return_mode == "max":
+        return max(ret)
+    elif return_mode == "mean":
+        return sum(ret) / len(ret)
+    elif return_mode == "median":
+        return sorted(ret)[len(ret) // 2]
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, return_mode="mean"):
     """
@@ -99,6 +168,105 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :type fast_flush: bool
     """
     assert return_mode in ["min", "max", "mean", "median"]
+    try:
+        import paddle
+        # 有 GPU 且想测 GPU（device_type == 'cuda'）
+        has_gpu = False
+        try:
+            has_gpu = (paddle.device.cuda.device_count() > 0)
+        except Exception:
+            has_gpu = False
+
+        if has_gpu and device_type.lower() in ("cuda", "gpu"):
+            # 选择 device id（默认 0）
+            device_id = int(paddle.device.get_device().split(':')[-1])
+            # 设置 place（可选，根据你的调用环境是否已经设置了 paddle.device.set_device）
+            place = paddle.CUDAPlace(device_id)
+
+            # 同步，排除初始影响
+            paddle.device.synchronize()
+
+            # prepare a cache on device to flush L2 (256MB)
+            try:
+                if fast_flush:
+                    cache = paddle.zeros([int(256e6 // 4)], dtype='int32', place=place)
+                else:
+                    cache = paddle.zeros([int(256e6)], dtype='int8', place=place)
+            except Exception:
+                # 若 place 参数不兼容，尝试在当前 device 上分配
+                if fast_flush:
+                    cache = paddle.zeros([int(256e6 // 4)], dtype='int32')
+                else:
+                    cache = paddle.zeros([int(256e6)], dtype='int8')
+
+            # warmup single call (and sync)
+            fn()
+            paddle.device.synchronize()
+
+            # 估算时间：用 host timer + sync 多次取平均
+            # 注意：这里我们用同步 + host timer，因为 Paddle 没有公开直接的 elapsed_time API
+            import time
+            t0 = time.perf_counter()
+            for _ in range(5):
+                cache.zero_()
+                fn()
+            paddle.device.synchronize()
+            t1 = time.perf_counter()
+            estimate_ms = max(1e-6, ((t1 - t0) / 5.0) * 1000.0)  # ms，防止除 0
+
+            n_warmup = max(1, int(warmup / estimate_ms))
+            n_repeat = max(1, int(rep / estimate_ms))
+
+            # warm up
+            for _ in range(n_warmup):
+                fn()
+            paddle.device.synchronize()
+
+            # benchmark loop -- 每次用 host timer 前后同步
+            samples: List[float] = []
+            for _ in range(n_repeat):
+                # 尝试清理 grads（Paddle 与 torch 不同）
+                if grad_to_none is not None:
+                    for x in grad_to_none:
+                        # Paddle 的张量如果有 clear_gradient 方法就用，否则忽略
+                        try:
+                            x.clear_gradient()
+                        except Exception:
+                            try:
+                                # 兼容 torch-like .grad = None
+                                setattr(x, "grad", None)
+                            except Exception:
+                                pass
+
+                cache.zero_()
+                # 保证 GPU 上所有之前提交的工作完成（避免测出上个调用残留）
+                paddle.device.synchronize()
+                s = time.perf_counter()
+                fn()
+                paddle.device.synchronize()
+                e = time.perf_counter()
+                samples.append((e - s) * 1000.0)  # ms
+            import numpy as np
+            arr = np.array(samples, dtype=float)
+            if quantiles is not None:
+                q = np.quantile(arr, q=list(quantiles)).tolist()
+                if len(q) == 1:
+                    return q[0]
+                return q
+            # getattr 动态调用
+            func_map = {
+                "min": paddle.min,
+                "max": paddle.max,
+                "mean": paddle.mean,
+                "median": paddle.median,
+            }
+
+            return float(func_map[return_mode](arr).numpy())
+    except Exception:
+        import traceback
+        print(traceback.format_exc())
+        pass
+    
     import torch
 
     di = torch._dynamo.device_interface.get_interface_for_device(device_type)
