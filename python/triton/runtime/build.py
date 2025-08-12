@@ -8,11 +8,6 @@ import subprocess
 import setuptools
 
 
-def is_corex():
-    import torch
-    return hasattr(torch, "corex") and torch.corex == True
-
-
 @contextlib.contextmanager
 def quiet():
     old_stdout, old_stderr = sys.stdout, sys.stderr
@@ -32,10 +27,10 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         # TODO: support more things here.
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
-        if is_corex():
-            cc = clang if clang is not None else gcc
-        else:
-            cc = gcc if gcc is not None else clang
+        cc = gcc if gcc is not None else clang
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        cc = flagtree_backend_specialization("get_cc", clang, gcc) or cc
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10
