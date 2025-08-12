@@ -1,6 +1,4 @@
-from triton.runtime.autotuner import Autotuner
-
-def add_Autotuner_cache_fn_map(autotuner: Autotuner):
+def add_Autotuner_cache_fn_map(autotuner):
     # cache_fn_map fmt: {"fn_cache_key: [hash_cache_file_0, hash_cache_file_1, ...], [so_path_0, so_path_1, ...]]"}
     autotuner.cache_fn_map = dict()
 
@@ -51,7 +49,7 @@ def save_best_config(cfg, args_names, key):
             }))
 
 
-def get_jit_func(autotuner: Autotuner):
+def get_jit_func(autotuner):
     if hasattr(autotuner.fn, "cache_key"):
         # for autotune + jit
         return autotuner.fn
@@ -63,7 +61,7 @@ def get_jit_func(autotuner: Autotuner):
         raise RuntimeError(msg)
 
 
-def get_bench_result(autotuner: Autotuner):
+def get_bench_result(autotuner):
     cache_key = str(autotuner.get_jit_func().cache_key)
     check_key = autotuner.cache_fn_map.get(str(cache_key), None)
     if not check_key:
@@ -76,7 +74,7 @@ def get_bench_result(autotuner: Autotuner):
     autotuner.cache_fn_map[cache_key][1].append(so_path)
 
 
-def get_Autotuner_key(autotuner: Autotuner, _args, *args):
+def get_Autotuner_key(autotuner, _args, *args):
     key = [_args[i] for i in autotuner.key_idx]
     divisibility = 16
     for arg in args:
@@ -89,7 +87,7 @@ def get_Autotuner_key(autotuner: Autotuner, _args, *args):
     return key
 
 
-def is_only_save_best_config_cache(autotuner: Autotuner, key, *args, **kwargs):
+def is_only_save_best_config_cache(autotuner, key, *args, **kwargs):
     import os
     import time
     import builtins

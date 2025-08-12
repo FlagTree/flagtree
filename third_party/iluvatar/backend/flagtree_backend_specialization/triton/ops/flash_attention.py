@@ -1,5 +1,3 @@
-from triton.ops.flash_attention import _attention
-
 def sequence_parallel_mma_v3_dq(ds, k):
     import triton.language as tl
     dq = tl.dot(ds, k)
@@ -25,7 +23,7 @@ def get_num_stages(num_stages):
     return num_stages
 
 
-def get_block_and_warps(context: _attention):
+def get_block_and_warps(context):
     from .triton.runtime.build import is_corex
     # otherwise shared memory out of resource
     BLOCK = 128 if not is_corex() else 64  # FIXME: currently BLOCK=128 has issues, BLOCK=64 works for common cases.

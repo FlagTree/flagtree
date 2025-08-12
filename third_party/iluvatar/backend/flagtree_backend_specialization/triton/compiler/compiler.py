@@ -1,5 +1,3 @@
-from triton.compiler.compiler import AttrsDescriptor, CompiledKernel
-
 def init_corexLoad(corexLoad):
     if corexLoad is None:
         return dict()
@@ -13,11 +11,12 @@ def to_dict_corexLoad(divisible_by_16, equal_to_1, corexLoad):
 
 
 def from_dict_corexLoad(data):
+    from triton.compiler.compiler import AttrsDescriptor
     return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
                             equal_to_1=set(data.get('equal_to_1', [])), corexLoad=dict(data.get('corexLoad', [])))
 
 
-def hash_AttrsDescriptor(attrsDescriptor: AttrsDescriptor):
+def hash_AttrsDescriptor(attrsDescriptor):
     key = str(
         [sorted(x) if isinstance(x, tuple) or isinstance(x, set) else x.values() for x in attrsDescriptor.__dict__.values()])
     return key
@@ -35,7 +34,7 @@ def src_fn_so_path(ir_source, src):
         src.fn.so_path = driver.active.get_cache_path()
 
 
-def init_handles_n_threads(compiledKernel: CompiledKernel, device):
+def init_handles_n_threads(compiledKernel, device):
     from triton.runtime.autotuner import OutOfResources
     from triton.runtime.driver import driver
     compiledKernel.module, compiledKernel.function, compiledKernel.n_regs, compiledKernel.n_spills, compiledKernel.n_threads = \
