@@ -1,7 +1,13 @@
 import triton
 import triton.language as tl
-
-import torch
+HAS_PADDLE = False
+HAS_TORCH = False
+try:
+    import paddle
+    HAS_PADDLE = True
+except:
+    import torch
+    HAS_TORCH = True
 
 
 @triton.jit
@@ -51,22 +57,36 @@ def test_module_walk():
             op.get_flat_symbol_ref_attr("callee")
 
     kernel = add_kernel
-    args = [
-        torch.empty((32, 32), device="cuda"),  # in_ptr0
-        torch.empty((32, 32), device="cuda"),  # in_ptr1
-        1024,  # n_elements
-        torch.empty((32, 32), device="cuda"),  # out_ptr
-        16,  # BLOCK_SIZE
-    ]
+    if HAS_PADDLE:
+        args = [
+            paddle.empty((32, 32)).cuda(), 
+            paddle.empty((32, 32)).cuda(), 
+            1024, 
+            paddle.empty((32, 32)).cuda(), 
+            16
+        ]
+        tensor_type = paddle.Tensor
+    elif HAS_TORCH:
+        args = [
+            torch.empty((32, 32), device="cuda"),
+            torch.empty((32, 32), device="cuda"),
+            1024,
+            torch.empty((32, 32), device="cuda"),
+            16,
+        ]
+        tensor_type = torch.Tensor
+    else:
+        raise RuntimeError("Neither paddle nor torch is available")
+
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
         signature={i: kernel._type_of(kernel._key_of(arg))
-                   for i, arg in enumerate(args)
-                   if i not in kernel.constexprs},
+                for i, arg in enumerate(args)
+                if i not in kernel.constexprs},
         constants={i: arg
-                   for i, arg in enumerate(args)
-                   if not isinstance(arg, torch.Tensor)},
-        attrs=kernel._get_config(*args, ),
+                for i, arg in enumerate(args)
+                if not isinstance(arg, tensor_type)},
+        attrs=kernel._get_config(*args),
     )
 
     context = triton._C.libtriton.ir.context()
