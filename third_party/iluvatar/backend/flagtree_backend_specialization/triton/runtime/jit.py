@@ -84,7 +84,7 @@ def get_corex_param(arg):
     return res_stride
 
 
-def add_corex_param(jitFunction: JITFunction, divisible_by_16, equal_to_1, *args):
+def add_corex_param(jitFunction, divisible_by_16, equal_to_1, *args):
     from triton.compiler import AttrsDescriptor
     enable_sme = get_corex_sme(jitFunction.use_corex_load_inc or jitFunction.visitor.use_sme)
     corex_param = {
@@ -97,7 +97,7 @@ def add_corex_param(jitFunction: JITFunction, divisible_by_16, equal_to_1, *args
     return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1), corex_param)
 
 
-def get_JITFunction_key(jitFunction: JITFunction, bound_args, sig_and_spec, constexpr_vals, excess_kwargs, *args, **kwargs):
+def get_JITFunction_key(jitFunction, bound_args, sig_and_spec, constexpr_vals, excess_kwargs, *args, **kwargs):
     import os
     import torch
     from triton.runtime.driver import driver
@@ -124,7 +124,7 @@ def get_JITFunction_key(jitFunction: JITFunction, bound_args, sig_and_spec, cons
     return key
 
 
-def is_support_cpu(jitFunction: JITFunction, *args):
+def is_support_cpu(*args):
     pinned_memory_flags = [pinned_memory_of(arg) for arg in args]
     device_types = [device_of(arg) for arg in args]
     device_types = [_device_type for _device_type in device_types if _device_type != ""]
@@ -134,7 +134,7 @@ def is_support_cpu(jitFunction: JITFunction, *args):
         raise ValueError("Cannot find backend for cpu")
 
 
-def get_JITFunction_options(jitFunction: JITFunction, bound_args, **kwargs):
+def get_JITFunction_options(jitFunction, bound_args, **kwargs):
     from triton.runtime.driver import driver
     target = driver.active.get_current_target()
     backend = jitFunction.make_backend(target)
@@ -149,7 +149,7 @@ def get_JITFunction_options(jitFunction: JITFunction, bound_args, **kwargs):
     return options
 
 
-def record_fn_cache_files(jitFunction: JITFunction):
+def record_fn_cache_files(jitFunction):
     # use to record fn cache files
     jitFunction.hash_cache_file = None
     jitFunction.so_path = None

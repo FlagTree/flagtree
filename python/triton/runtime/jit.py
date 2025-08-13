@@ -516,7 +516,7 @@ class JITFunction(KernelInterface[T]):
         object = AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1))
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        object = flagtree_backend_specialization("add_corex_param", divisible_by_16, equal_to_1, *args) or object
+        object = flagtree_backend_specialization("add_corex_param", self, divisible_by_16, equal_to_1, *args) or object
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
         return object
@@ -638,7 +638,7 @@ class JITFunction(KernelInterface[T]):
 
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        flagtree_backend_specialization("is_support_cpu", self, *args)
+        flagtree_backend_specialization("is_support_cpu", *args)
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
