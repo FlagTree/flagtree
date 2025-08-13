@@ -127,6 +127,9 @@ class FileCacheManager(CacheManager):
         # Replace is guaranteed to be atomic on POSIX systems if it succeeds
         # so filepath cannot see a partial write
         os.replace(temp_path, filepath)
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        flagtree_backend_specialization("remove_temp_dir", self, pid, rnd_id)
         return filepath
 
 
