@@ -12,9 +12,7 @@ def get_backend_cmake_args(*args, **kargs):
     build_ext = kargs['build_ext']
     src_ext_path = build_ext.get_ext_fullpath("triton-adapter-opt")
     src_ext_path = os.path.abspath(os.path.dirname(src_ext_path))
-    return [
-        "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=" + src_ext_path,
-    ]
+    return ["-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=" + src_ext_path, "-D"]
 
 
 def install_extension(*args, **kargs):
@@ -90,6 +88,10 @@ def get_extra_install_packages():
     ]
 
 
+def is_compile_ascend_npu_ir():
+    return os.getenv("ASCEND_NPU_IR_COMPILE", "1") == "1"
+
+
 def precompile_hock(*args, **kargs):
     [download_module(submodule, required=False) for submodule in submodules]
     third_party_base_dir = Path(kargs['third_party_base_dir'])
@@ -102,6 +104,7 @@ def precompile_hock(*args, **kargs):
         raise RuntimeError(f"{project_path} can't be found. It might be due to a network issue")
     ascend_src_path = Path(project_path) / "ascend"
     patch_src_path = Path(project_path) / "triton_patch"
+    shutil.copy()
     shutil.copytree(ascend_src_path, ascend_path, dirs_exist_ok=True)
     shutil.copytree(patch_src_path, patch_path, dirs_exist_ok=True)
     shutil.rmtree(project_path)
