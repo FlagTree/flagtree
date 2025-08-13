@@ -83,10 +83,6 @@ def clone_module(module):
 def download_module(module, required=False):
     if module is None:
         return False
-    real_path = os.path.join(flagtree_submoduel_dir, module.name)
-    if not os.path.exists(real_path):
-        print(f'Found third_party {module.name} at {real_path}\n')
-        return False
     if not os.path.exists(module.dst_path):
         succ = clone_module(module)
     else:
