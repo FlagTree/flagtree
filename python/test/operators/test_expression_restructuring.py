@@ -1,29 +1,57 @@
 import triton
 import triton.language as tl
-import torch
+try: import paddle; HAS_PADDLE = True
+except: HAS_PADDLE = False; import torch; HAS_TORCH = True
 
 import pytest
 
 VEC_SHAPES = [[64, 640], [32, 128], [128, 256]]
 
 
-def custom_rand_strided(shape, strides, device, dtype, seed=0):
-    torch.manual_seed(seed)
-    total_size = sum((s - 1) * st for s, st in zip(shape, strides)) + 1
-    storage = torch.randn(total_size, device=device, dtype=dtype)
-    return torch.as_strided(storage, size=shape, stride=strides)
+import numpy as np
+
+def custom_rand_strided(shape, strides, dtype='float32', device='cuda', seed=0):
+    """
+    生成带指定 shape 和 strides 的随机张量，兼容 Paddle 和 PyTorch。
+    dtype: 'float32', 'float64', 'int32', 'int64' 等字符串
+    device: 'cuda' 或 'cpu'
+    """
+    if HAS_PADDLE:
+        paddle.seed(seed)
+        paddle.set_device('gpu:0' if device == 'cuda' else 'cpu')
+        # 计算底层存储大小
+        total_size = sum((s - 1) * st for s, st in zip(shape, strides)) + 1
+        storage = paddle.randn([total_size], dtype=dtype)  
+        return paddle.as_strided(storage, shape=shape, stride=strides)
+    else:
+        torch.manual_seed(seed)
+        total_size = sum((s - 1) * st for s, st in zip(shape, strides)) + 1
+        storage = torch.randn(total_size, device=device, dtype=getattr(torch, dtype))
+        return torch.as_strided(storage, size=shape, stride=strides)
 
 
-def torch_equivalent(arg_0, arg_1, arg_2, arg_3):
-    reshaped_arg_0 = arg_0.view(arg_2.shape[0], arg_2.shape[0], arg_2.shape[2])
-    reshaped_arg_3 = arg_3.squeeze(-1)
-    tmp0 = -reshaped_arg_0
-    tmp4 = arg_1 * arg_2
-    tmp7 = reshaped_arg_3 + 1e-06
-    tmp8 = tmp4 / tmp7.unsqueeze(-1)
-    tmp9 = tmp8 / tmp7.unsqueeze(-1)
-    result = tmp0 * tmp9
-    return result
+def tensor_equivalent(arg_0, arg_1, arg_2, arg_3):
+    if HAS_PADDLE:
+        # reshape / view
+        reshaped_arg_0 = paddle.reshape(arg_0, [arg_2.shape[0], arg_2.shape[0], arg_2.shape[2]])
+        reshaped_arg_3 = paddle.squeeze(arg_3, axis=-1)
+        tmp0 = -reshaped_arg_0
+        tmp4 = arg_1 * arg_2
+        tmp7 = reshaped_arg_3 + 1e-6
+        tmp8 = tmp4 / paddle.unsqueeze(tmp7, axis=-1)
+        tmp9 = tmp8 / paddle.unsqueeze(tmp7, axis=-1)
+        result = tmp0 * tmp9
+        return result
+    else:
+        reshaped_arg_0 = arg_0.view(arg_2.shape[0], arg_2.shape[0], arg_2.shape[2])
+        reshaped_arg_3 = arg_3.squeeze(-1)
+        tmp0 = -reshaped_arg_0
+        tmp4 = arg_1 * arg_2
+        tmp7 = reshaped_arg_3 + 1e-6
+        tmp8 = tmp4 / tmp7.unsqueeze(-1)
+        tmp9 = tmp8 / tmp7.unsqueeze(-1)
+        result = tmp0 * tmp9
+        return result
 
 
 @triton.jit
@@ -54,12 +82,15 @@ def expression_restructuring_function_test(in_ptr0, in_ptr1, in_ptr2, in_ptr3, o
 def test_accruacy_kernel(vec_shape):
     x = vec_shape[0]
     y = vec_shape[1]
-    arg_0 = custom_rand_strided((x * x, y), (y, 1), dtype=torch.float32, device='cuda')
-    arg_1 = custom_rand_strided((y, ), (1, ), dtype=torch.float32, device='cuda')
-    arg_2 = custom_rand_strided((x, x, y), (x * y, y, 1), dtype=torch.float32, device='cuda')
-    arg_3 = custom_rand_strided((x, x, 1), (x, 1, 1), dtype=torch.float32, device='cuda')
-    triton_result = custom_rand_strided((x, x, y), (x * y, y, 1), dtype=torch.float32, device='cuda')
+    arg_0 = custom_rand_strided((x * x, y), (y, 1), dtype='float32', device='cuda')
+    arg_1 = custom_rand_strided((y,), (1,), dtype='float32', device='cuda')
+    arg_2 = custom_rand_strided((x, x, y), (x * y, y, 1), dtype='float32', device='cuda')
+    arg_3 = custom_rand_strided((x, x, 1), (x, 1, 1), dtype='float32', device='cuda')
+    triton_result = custom_rand_strided((x, x, y), (x * y, y, 1), dtype='float32', device='cuda')
     grid = lambda meta: (x * x, )
     expression_restructuring_function_test[grid](arg_0, arg_1, arg_2, arg_3, triton_result, y)
-    torch_result = torch_equivalent(arg_0, arg_1, arg_2, arg_3)
-    torch.testing.assert_close(triton_result, torch_result)
+    result = tensor_equivalent(arg_0, arg_1, arg_2, arg_3)
+    if HAS_PADDLE:
+        paddle.allclose(triton_result, result)
+    else:
+        torch.testing.assert_close(triton_result, result)

@@ -222,7 +222,6 @@ def test_kernel_default_arg():
     else:
         assert x == torch.ones_like(x)
 
-    # device = int(paddle.device.get_device().split(':')[1]) if HAS_PADDLE else torch.cuda.current_device()
     device = triton.runtime.driver.active.get_current_device()
     assert len(kernel.cache[device]) == 1
 
@@ -439,7 +438,6 @@ def test_jit_warmup_cache() -> None:
     #     torch.randn(32, dtype=torch.float32, device="cuda"),
     #     32,
     # ]
-    # # device = int(paddle.device.get_device().split(':')[1]) if HAS_PADDLE else torch.cuda.current_device()
     # device = triton.runtime.driver.active.get_current_device()
     # assert len(kernel_add.cache[device]) == 0
     # kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
@@ -484,7 +482,7 @@ def test_jit_noinline() -> None:
     def kernel_add_device(a, b, o, N: tl.constexpr):
         add_fn(a, b, o, N)
 
-    device = int(paddle.device.get_device().split(':')[1]) if HAS_PADDLE else torch.cuda.current_device()
+    device = triton.runtime.driver.active.get_current_device()
     assert len(kernel_add_device.cache[device]) == 0
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1
@@ -528,7 +526,6 @@ def test_preload() -> None:
         tl.device_assert(idx < 32, "idx < 32")
         tl.store(o + idx, tl.load(a + idx) - tl.load(b + idx))
 
-    # device = int(paddle.device.get_device().split(':')[1]) if HAS_PADDLE else torch.cuda.current_device()
     device = triton.runtime.driver.active.get_current_device()
 
     # get the serialized specialization data

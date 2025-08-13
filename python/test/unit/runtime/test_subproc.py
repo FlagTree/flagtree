@@ -2,7 +2,8 @@ import multiprocessing
 import os
 import shutil
 
-import torch
+try: import paddle; HAS_PADDLE = True
+except: HAS_PADDLE = False; import torch; HAS_TORCH = True
 
 import triton
 import triton.language as tl
@@ -36,7 +37,9 @@ def compile_fn(attrs, capability):
 
 
 def test_compile_in_subproc() -> None:
-    major, minor = torch.cuda.get_device_capability(0)
+    # major, minor = torch.cuda.get_device_capability(0)
+    major, minor = triton.runtime.driver.active.get_device_capability(0)
+    
     cc = major * 10 + minor
     config = triton.compiler.AttrsDescriptor(tuple(range(4)), ())
 
@@ -62,7 +65,7 @@ def compile_fn_dot(attrs, capability):
 
 def test_compile_in_forked_subproc() -> None:
     reset_tmp_dir()
-    major, minor = torch.cuda.get_device_capability(0)
+    major, minor = triton.runtime.driver.active.get_device_capability(0)
     capability = major * 10 + minor
     config = triton.compiler.AttrsDescriptor(tuple(range(1)), ())
 

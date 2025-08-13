@@ -7,7 +7,8 @@ import gc
 # import time
 import tracemalloc
 
-import torch
+try: import paddle; HAS_PADDLE = True
+except: HAS_PADDLE = False; import torch; HAS_TORCH = True
 
 import triton
 import triton.language as tl
@@ -57,8 +58,8 @@ def test_memory_leak() -> None:
 
     tracemalloc.start()
     try:
-        inp = torch.randn(10, device='cuda')
-        out = torch.randn(10, device='cuda')
+        inp = paddle.randn([10, ]).cuda() if HAS_PADDLE else torch.randn(10, device='cuda')
+        out = paddle.randn([10, ]).cuda() if HAS_PADDLE else torch.randn(10, device='cuda')
         kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
         begin, _ = tracemalloc.get_traced_memory()

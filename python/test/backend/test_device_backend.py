@@ -9,7 +9,9 @@ import tempfile
 from pathlib import Path
 
 import setuptools
-import torch
+
+try: import paddle; HAS_PADDLE = True
+except: HAS_PADDLE = False; import torch; HAS_TORCH = True
 
 import triton
 import triton.language as tl
@@ -151,6 +153,8 @@ class ExtensionBackend(BaseBackend):
         return self.driver.utils.get_device_properties()
 
     def get_current_device(self):
+        if HAS_PADDLE:
+            return paddle.device("cpu")
         return torch.device("cpu")
 
     def set_current_device(self, device):
@@ -255,8 +259,8 @@ def test_dummy_backend():
         tmp0 = tl.load(in_ptr0 + (x0), xmask)
         tl.store(out_ptr0 + (x0 + tl.zeros([XBLOCK], tl.int32)), tmp0, xmask)
 
-    inp = torch.randn(10)
-    out = torch.randn(10)
+    inp = paddle.randn(10) if HAS_PADDLE else torch.randn(10)
+    out = paddle.randn(10) if HAS_PADDLE else torch.randn(10)
     kernel[(10, )](inp, out, 10, XBLOCK=16)
     spec = importlib.util.spec_from_file_location("__triton_launcher", ExtensionBackend.stub_so_path)
     mod = importlib.util.module_from_spec(spec)

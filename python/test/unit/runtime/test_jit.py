@@ -1,13 +1,13 @@
 import itertools
 import pytest
-import torch
+try: import paddle; HAS_PADDLE = True
+except: HAS_PADDLE = False; import torch; HAS_TORCH = True
 
 import triton
 import triton.language as tl
 
 
 def test_pre_call_hooks(device):
-
     @triton.jit
     def add_kernel(
         in_ptr0,
@@ -25,18 +25,35 @@ def test_pre_call_hooks(device):
         output = x + y
         tl.store(out_ptr + offsets, output, mask=mask)
 
-    class MyTensor(torch.Tensor):
-        pass
+    # 定义禁止类型
+    if HAS_TORCH:
+        class MyTensor(torch.Tensor):
+            pass
+
+    if HAS_PADDLE:
+        class MyTensor(paddle.Tensor):
+            pass
 
     def my_hook(*args, **kwargs):
         for arg in itertools.chain(args, kwargs.values()):
             if isinstance(arg, MyTensor):
                 raise Exception("MyTensor is not allowed")
 
+
     add_kernel.add_pre_run_hook(my_hook)
 
-    x = torch.randn(4, device=device)
-    y = MyTensor(x)
-    out = torch.zeros_like(x)
-    with pytest.raises(Exception):
-        add_kernel[(4, )](x, y, out, 4, 4)
+    # 测试 PyTorch
+    if HAS_TORCH:
+        x = torch.randn(4, device=device)
+        y = MyTensor(x)
+        out = torch.zeros_like(x)
+        with pytest.raises(Exception):
+            add_kernel[(4,)](x, y, out, 4, 4)
+
+    # 测试 Paddle
+    if HAS_PADDLE:
+        x = paddle.randn([4]).cuda()
+        y = MyTensor(x)
+        out = paddle.zeros([4]).cuda()
+        with pytest.raises(Exception):
+            add_kernel[(4,)](x, y, out, 4, 4)
