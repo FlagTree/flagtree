@@ -22,8 +22,8 @@ language_extra_backends = ['xpu', 'musa', "cambricon"]
 activated_module = utils.activate(flagtree_backend)
 
 set_llvm_env = lambda path: set_env({
-    'LLVM_INCLUDE_DIRS': Path(path) / "include",
-    'LLVM_LIBRARY_DIR': Path(path) / "lib",
+    'LLVM_INCLUDE_DIRS': os.path.join(path, "include"),
+    'LLVM_LIBRARY_DIR': os.path.join(path, "lib"),
     'LLVM_SYSPATH': path,
 })
 
