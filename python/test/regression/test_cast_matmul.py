@@ -6,7 +6,9 @@ fused type convert and matmul, base on triton matmul, the different with matmul:
 
 """
 import pytest
-import torch
+
+try: import paddle; HAS_PADDLE = True
+except: HAS_PADDLE = False; import torch; HAS_TORCH = True
 
 import triton.language as tl
 from triton import cdiv, jit
@@ -24,15 +26,23 @@ out_dtypes = ["float16", "float32"]
 def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
     if x_dtype == w_dtype:
         pytest.skip("skip same dtype")
-    device = torch.cuda.current_device()
-    x_dtype = getattr(torch, x_dtype)
-    w_dtype = getattr(torch, w_dtype)
-    a = torch.randn((M, K), device=device, dtype=x_dtype)
-    b = torch.randn((K, N), device=device, dtype=w_dtype)
-    torch_dtype = getattr(torch, out_dtype)
-    triton_dtype = getattr(tl, out_dtype)  # <- here force dot_out_dtype
-    out_torch = torch.matmul(a.to(torch_dtype), b.to(torch_dtype))
-    out_triton = torch.empty((M, N), device=device, dtype=torch_dtype)
+        
+    if HAS_PADDLE:
+        a = paddle.randn([M, K], dtype=x_dtype)
+        b = paddle.randn([K, N], dtype=w_dtype)
+        out_paddle = paddle.matmul(a.astype(out_dtype), b.astype(out_dtype))
+        out_triton = paddle.empty([M, N], dtype=out_dtype)
+        triton_dtype = getattr(tl, out_dtype) 
+    else:
+        device = torch.cuda.current_device()
+        x_dtype = getattr(torch, x_dtype)
+        w_dtype = getattr(torch, w_dtype)
+        a = torch.randn((M, K), device=device, dtype=x_dtype)
+        b = torch.randn((K, N), device=device, dtype=w_dtype)
+        torch_dtype = getattr(torch, out_dtype)
+        triton_dtype = getattr(tl, out_dtype)  # <- here force dot_out_dtype
+        out_torch = torch.matmul(a.to(torch_dtype), b.to(torch_dtype))
+        out_triton = torch.empty((M, N), device=device, dtype=torch_dtype)
 
     # launch kernel
     BLOCK_M, BLOCK_N, BLOCK_K = 16, 16, 32
@@ -84,14 +94,29 @@ def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
         mask = (rm < M)[:, None] & (rn < N)[None, :]
         tl.store(C, acc, mask=mask)
 
-    matmul_kernel[grid](
-        a, b, out_triton, M, N, K,  #
-        a.stride(0), a.stride(1),  #
-        b.stride(0), b.stride(1),  #
-        out_triton.stride(0), out_triton.stride(1), dot_out_dtype=triton_dtype,  #
-        GROUP_M=8,  #
-        BLOCK_M=BLOCK_M,  #
-        BLOCK_N=BLOCK_N,  #
-        BLOCK_K=BLOCK_K)
+    def get_stride(shape):
+    # row-major
+        stride = [1] * len(shape)
+        for i in reversed(range(len(shape) - 1)):
+            stride[i] = stride[i + 1] * shape[i + 1]
+        return stride
 
-    torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
+    a_stride = get_stride(a.shape)
+    b_stride = get_stride(b.shape)
+    out_stride = get_stride(out_triton.shape)
+
+    matmul_kernel[grid](
+        a, b, out_triton, M, N, K,
+        a_stride[0], a_stride[1],
+        b_stride[0], b_stride[1],
+        out_stride[0], out_stride[1],
+        dot_out_dtype=triton_dtype,  # Paddle dtype
+        GROUP_M=8,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K
+    )
+    if HAS_PADDLE:
+        paddle.allclose(out_paddle, out_triton, atol=0.3, rtol=0.01)
+    else:
+        torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
