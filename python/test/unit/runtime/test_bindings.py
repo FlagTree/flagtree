@@ -1,13 +1,7 @@
 import triton
 import triton.language as tl
-HAS_PADDLE = False
-HAS_TORCH = False
-try:
-    import paddle
-    HAS_PADDLE = True
-except:
-    import torch
-    HAS_TORCH = True
+try: import paddle; HAS_PADDLE = True
+except: HAS_PADDLE = False; import torch; HAS_TORCH = True
 
 
 @triton.jit
