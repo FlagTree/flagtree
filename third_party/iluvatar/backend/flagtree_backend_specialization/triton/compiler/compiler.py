@@ -1,7 +1,7 @@
 def init_corexLoad(corexLoad):
     if corexLoad is None:
         return dict()
-    return None
+    return corexLoad
 
 
 def to_dict_corexLoad(divisible_by_16, equal_to_1, corexLoad):

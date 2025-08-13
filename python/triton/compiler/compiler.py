@@ -31,7 +31,7 @@ class AttrsDescriptor:
             self.equal_to_1 = set()
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        self.corexLoad = flagtree_backend_specialization("init_corexLoad", self.corexLoad) or None
+        self.corexLoad = flagtree_backend_specialization("init_corexLoad", self.corexLoad)
 
     def to_dict(self):
         dict = {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
