@@ -62,14 +62,14 @@ def get_jit_func(autotuner):
 
 
 def get_bench_result(autotuner):
-    cache_key = str(autotuner.get_jit_func().cache_key)
+    cache_key = str(get_jit_func(autotuner).cache_key)
     check_key = autotuner.cache_fn_map.get(str(cache_key), None)
     if not check_key:
         autotuner.cache_fn_map.setdefault(cache_key, [[], []])
-    hash_cache_file = str(autotuner.get_jit_func().hash_cache_file)
+    hash_cache_file = str(get_jit_func(autotuner).hash_cache_file)
     so_path = ''
-    if autotuner.get_jit_func().so_path:
-        so_path = autotuner.get_jit_func().so_path.split('/')[-2]
+    if get_jit_func(autotuner).so_path:
+        so_path = get_jit_func(autotuner).so_path.split('/')[-2]
     autotuner.cache_fn_map[cache_key][0].append(hash_cache_file)
     autotuner.cache_fn_map[cache_key][1].append(so_path)
 
@@ -113,7 +113,7 @@ def is_only_save_best_config_cache(autotuner, key, *args, **kwargs):
             save_best_config(autotuner.cache[key], autotuner.arg_names, key)
             autotuner.pre_hook(args, reset_only=True)
             autotuner.configs_timings = timings
-            cache_key = str(autotuner.get_jit_func().cache_key)
+            cache_key = str(get_jit_func(autotuner).cache_key)
             check_key = autotuner.cache_fn_map.get(cache_key, None)
             if check_key:
                 best_cache_file = autotuner.cache_fn_map[cache_key][0][best_key_index]
