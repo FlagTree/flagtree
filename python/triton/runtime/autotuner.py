@@ -71,7 +71,11 @@ class Autotuner(KernelInterface):
 
             def _post_hook(args, exception):
                 for i, j in enumerate(self.restore_idx):
-                    args[j].copy_(self.restore_copies[i])
+                    try:#copy data from restore_copies to args[j]
+                        import paddle
+                        paddle.assign(self.restore_copies[i], args[j])
+                    except:
+                        args[j].copy_(self.restore_copies[i])
                 self.restore_copies = []
 
             self.post_hook = _post_hook

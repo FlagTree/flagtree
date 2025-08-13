@@ -1,4 +1,3 @@
-import torch
 
 import triton
 import triton.language as tl
@@ -8,8 +7,15 @@ import pytest
 @pytest.mark.parametrize('use_cuda_graph', [False, True])
 def test_kwargs(use_cuda_graph: bool):
     N = 1024
-    src = torch.empty(N, device='cuda')
-    dst = torch.empty(N, device='cuda')
+    try:
+        import paddle
+        paddle.device.set_device('gpu')
+        src = paddle.empty([N])
+        dst = paddle.empty([N])
+    except:
+        import torch
+        src = torch.empty(N, device='cuda')
+        dst = torch.empty(N, device='cuda')
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
@@ -27,7 +33,13 @@ def test_kwargs(use_cuda_graph: bool):
 
 def test_restore():
     N = 1024
-    src = torch.zeros(N, device='cuda')
+    try:
+        import paddle
+        paddle.device.set_device('gpu')
+        src = paddle.zeros(N)
+    except:
+        import torch
+        src = torch.zeros(N, device='cuda')
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
 
@@ -40,13 +52,21 @@ def test_restore():
 
     grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
     _kernel[grid](src, N)
-    triton.testing.assert_close(src, torch.ones_like(src))
+    import numpy as np
+    triton.testing.assert_close(src, np.ones(src.shape, dtype=src.cpu().numpy().dtype))
+
 
 
 def test_hooks():
     # Autotuner's pre- and post- hooks should be called the same number of times
     N = 4096
-    src = torch.zeros(N, device='cuda')
+    try:
+        import paddle
+        paddle.device.set_device('gpu')
+        src = paddle.zeros(N)
+    except:
+        import torch
+        src = torch.zeros(N, device='cuda')
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 4096}), triton.Config(kwargs={'BLOCK_SIZE': 32})]
 
@@ -89,8 +109,16 @@ def test_hooks():
 @pytest.mark.parametrize('with_perf_model', [False, True])
 def test_prune_configs(with_perf_model: bool):
     N = 1024
-    src = torch.empty(N, device='cuda')
-    dst = torch.empty(N, device='cuda')
+    try:
+        import paddle
+        paddle.device.set_device('gpu')
+        src = paddle.empty([N])
+        dst = paddle.empty([N])
+    except:
+        import torch
+        src = torch.empty(N, device='cuda')
+        dst = torch.empty(N, device='cuda')
+
     records = {}
 
     def early_config_prune(configs, named_args, **kwargs):
@@ -121,7 +149,8 @@ def test_prune_configs(with_perf_model: bool):
 
     grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
     _kernel[grid](dst, src, N=N)
-    torch.testing.assert_close(src, dst)
+   
+    triton.testing.assert_close(src, dst)
     if with_perf_model:
         assert len(records) == 1
         assert records['run_perf_model']

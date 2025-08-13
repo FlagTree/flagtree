@@ -17,73 +17,66 @@ def nvsmi(attrs):
 
 def do_bench_paddle(fn, rep=20, grad_to_none=None, return_mode="mean"):
     """
-    使用Paddle进行性能基准测试。
-
-    :param fn: 要测试的函数
-    :param rep: 重复次数（总时间以此估计）
-    :param grad_to_none: 如果有，则将对应tensor的梯度清空
-    :param return_mode: 返回方式，支持 "min", "max", "mean", "median"
+    使用 Paddle 基于事件计时对 fn 做基准测试。
+    不依赖 CUDA Graph，通过在一个计时窗口内重复执行 n_repeat 次来摊薄 launch 开销。
     """
-    assert return_mode in ["min", "max", "mean", "median"]
     import paddle
-    # 预热
-    fn()
-    # 如果需要，清理梯度
+    import numpy as np
+
+    assert return_mode in ["min", "max", "mean", "median"]
+
+    # 预热（多次，确保 GPU 热起来）
+    for _ in range(5):
+        fn()
+    paddle.device.synchronize()
+
+    # 若需要，清理梯度
     if grad_to_none is not None:
         for x in grad_to_none:
             x.clear_gradient()
 
-    # 创建事件用于计时
-    start_event = paddle.device.Event(enable_timing=True)
-    end_event = paddle.device.Event(enable_timing=True)
-
-    # 记录开始事件
-    start_event.record()
-
-    # 执行函数
-    fn()
-
-    # 记录结束事件
-    end_event.record()
-
-    # 等待事件完成
+    # --- 估计一次执行的耗时 ---
+    start = paddle.device.Event(enable_timing=True)
+    end = paddle.device.Event(enable_timing=True)
     paddle.device.synchronize()
+    start.record()
+    fn()
+    end.record()
+    paddle.device.synchronize()
+    estimate_ms = start.elapsed_time(end)  # 单位：毫秒
 
-    # 计算时间
-    elapsed_time = start_event.elapsed_time(end_event)
+    # 计算 n_repeat：希望一次计时窗口的总时长 ~ rep 毫秒
+    n_repeat = max(1, int(rep / max(estimate_ms, 1e-6)))
 
-    # 计算重复次数
-    n_repeat = max(1, int(rep / elapsed_time))
+    # --- 正式测量：在一次窗口里运行 n_repeat 次 ---
+    trials = 10
+    samples = []
+    for _ in range(trials):
+        # 可选：梯度清理，避免反向图影响（如果 fn 包含 backward）
+        if grad_to_none is not None:
+            for x in grad_to_none:
+                x.clear_gradient()
 
-    # 重复测量，减少偶然波动影响
-    ret = []
-    n_retries = 10
-    for _ in range(n_retries):
-        # 记录开始事件
-        start_event.record()
-
-        # 执行函数
-        fn()
-
-        # 记录结束事件
-        end_event.record()
-
-        # 等待事件完成
         paddle.device.synchronize()
+        start = paddle.device.Event(enable_timing=True)
+        end = paddle.device.Event(enable_timing=True)
+        start.record()
+        for _ in range(n_repeat):
+            fn()
+        end.record()
+        paddle.device.synchronize()
+        total_ms = start.elapsed_time(end)
+        samples.append(total_ms / n_repeat)
 
-        # 计算时间
-        elapsed_time = start_event.elapsed_time(end_event) / n_repeat
-        ret.append(elapsed_time)
-
-    # 计算统计结果
+    arr = np.array(samples, dtype=float)
     if return_mode == "min":
-        return min(ret)
-    elif return_mode == "max":
-        return max(ret)
-    elif return_mode == "mean":
-        return sum(ret) / len(ret)
-    elif return_mode == "median":
-        return sorted(ret)[len(ret) // 2]
+        return float(np.min(arr))
+    if return_mode == "max":
+        return float(np.max(arr))
+    if return_mode == "mean":
+        return float(np.mean(arr))
+    if return_mode == "median":
+        return float(np.median(arr))
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, return_mode="mean"):
     """
@@ -168,199 +161,216 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :type fast_flush: bool
     """
     assert return_mode in ["min", "max", "mean", "median"]
+    
+    # 检查是否有 Paddle 可用
+    has_paddle = False
+    has_gpu = False
     try:
         import paddle
-        # 有 GPU 且想测 GPU（device_type == 'cuda'）
-        has_gpu = False
+        has_paddle = True
         try:
             has_gpu = (paddle.device.cuda.device_count() > 0)
-        except Exception:
+        except:
             has_gpu = False
-
-        if has_gpu and device_type.lower() in ("cuda", "gpu"):
-            # 选择 device id（默认 0）
-            device_id = int(paddle.device.get_device().split(':')[-1])
-            # 设置 place（可选，根据你的调用环境是否已经设置了 paddle.device.set_device）
-            place = paddle.CUDAPlace(device_id)
-
-            # 同步，排除初始影响
-            paddle.device.synchronize()
-
-            # prepare a cache on device to flush L2 (256MB)
-            try:
-                if fast_flush:
-                    cache = paddle.zeros([int(256e6 // 4)], dtype='int32', place=place)
-                else:
-                    cache = paddle.zeros([int(256e6)], dtype='int8', place=place)
-            except Exception:
-                # 若 place 参数不兼容，尝试在当前 device 上分配
-                if fast_flush:
-                    cache = paddle.zeros([int(256e6 // 4)], dtype='int32')
-                else:
-                    cache = paddle.zeros([int(256e6)], dtype='int8')
-
-            # warmup single call (and sync)
-            fn()
-            paddle.device.synchronize()
-
-            # 估算时间：用 host timer + sync 多次取平均
-            # 注意：这里我们用同步 + host timer，因为 Paddle 没有公开直接的 elapsed_time API
-            import time
-            t0 = time.perf_counter()
-            for _ in range(5):
-                cache.zero_()
-                fn()
-            paddle.device.synchronize()
-            t1 = time.perf_counter()
-            estimate_ms = max(1e-6, ((t1 - t0) / 5.0) * 1000.0)  # ms，防止除 0
-
-            n_warmup = max(1, int(warmup / estimate_ms))
-            n_repeat = max(1, int(rep / estimate_ms))
-
-            # warm up
-            for _ in range(n_warmup):
-                fn()
-            paddle.device.synchronize()
-
-            # benchmark loop -- 每次用 host timer 前后同步
-            samples: List[float] = []
-            for _ in range(n_repeat):
-                # 尝试清理 grads（Paddle 与 torch 不同）
-                if grad_to_none is not None:
-                    for x in grad_to_none:
-                        # Paddle 的张量如果有 clear_gradient 方法就用，否则忽略
-                        try:
-                            x.clear_gradient()
-                        except Exception:
-                            try:
-                                # 兼容 torch-like .grad = None
-                                setattr(x, "grad", None)
-                            except Exception:
-                                pass
-
-                cache.zero_()
-                # 保证 GPU 上所有之前提交的工作完成（避免测出上个调用残留）
-                paddle.device.synchronize()
-                s = time.perf_counter()
-                fn()
-                paddle.device.synchronize()
-                e = time.perf_counter()
-                samples.append((e - s) * 1000.0)  # ms
-            import numpy as np
-            arr = np.array(samples, dtype=float)
-            if quantiles is not None:
-                q = np.quantile(arr, q=list(quantiles)).tolist()
-                if len(q) == 1:
-                    return q[0]
-                return q
-            # getattr 动态调用
-            func_map = {
-                "min": paddle.min,
-                "max": paddle.max,
-                "mean": paddle.mean,
-                "median": paddle.median,
-            }
-
-            return float(func_map[return_mode](arr).numpy())
-    except Exception:
-        import traceback
-        print(traceback.format_exc())
-        pass
+    except ImportError:
+        has_paddle = False
     
-    import torch
+    # 使用 if-else 而不是 try-catch 来避免捕获 AutoTune 的异常
+    if has_paddle and has_gpu and device_type.lower() in ("cuda", "gpu"):
+        # Paddle 分支
+        device_id = int(paddle.device.get_device().split(':')[-1])
+        place = paddle.CUDAPlace(device_id)
 
-    di = torch._dynamo.device_interface.get_interface_for_device(device_type)
+        # 同步，排除初始影响
+        paddle.device.synchronize()
 
-    fn()
-    di.synchronize()
+        # prepare a cache on device to flush L2 (256MB)
+        cache = None
+        try:
+            if fast_flush:
+                cache = paddle.zeros([int(256e6 // 4)], dtype='int32', place=place)
+            else:
+                cache = paddle.zeros([int(256e6)], dtype='int8', place=place)
+        except Exception:
+            # 若 place 参数不兼容，尝试在当前 device 上分配
+            if fast_flush:
+                cache = paddle.zeros([int(256e6 // 4)], dtype='int32')
+            else:
+                cache = paddle.zeros([int(256e6)], dtype='int8')
 
-    # We maintain a buffer of 256 MB that we clear
-    # before each kernel call to make sure that the L2
-    # doesn't contain any input data before the run
-    if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device=device_type)
+        # warmup single call (and sync)
+        #  关键修改：fn() 调用不在 try-catch 内部
+        fn()
+        paddle.device.synchronize()
+
+        # 估算时间：用 host timer + sync 多次取平均
+        import time
+        t0 = time.perf_counter()
+        for _ in range(5):
+            cache.zero_()
+            fn()  #  关键：这里也不在 try-catch 内部
+        paddle.device.synchronize()
+        t1 = time.perf_counter()
+        estimate_ms = max(1e-6, ((t1 - t0) / 5.0) * 1000.0)  # ms，防止除 0
+
+        n_warmup = max(1, int(warmup / estimate_ms))
+        n_repeat = max(1, int(rep / estimate_ms))
+
+        # warm up
+        for _ in range(n_warmup):
+            fn()  #  关键：warmup 也不在 try-catch 内部
+        paddle.device.synchronize()
+
+        # benchmark loop -- 每次用 host timer 前后同步
+        samples: List[float] = []
+        for _ in range(n_repeat):
+            # 尝试清理 grads（Paddle 与 torch 不同）
+            if grad_to_none is not None:
+                for x in grad_to_none:
+                    # Paddle 的张量如果有 clear_gradient 方法就用，否则忽略
+                    try:
+                        x.clear_gradient()
+                    except Exception:
+                        try:
+                            # 兼容 torch-like .grad = None
+                            setattr(x, "grad", None)
+                        except Exception:
+                            pass
+
+            cache.zero_()
+            # 保证 GPU 上所有之前提交的工作完成（避免测出上个调用残留）
+            paddle.device.synchronize()
+            s = time.perf_counter()
+            fn()  #  关键：benchmark 主循环中的 fn() 也不在 try-catch 内部
+            paddle.device.synchronize()
+            e = time.perf_counter()
+            samples.append((e - s) * 1000.0)  # ms
+        
+        import numpy as np
+        arr = np.array(samples, dtype=float)
+        if quantiles is not None:
+            q = np.quantile(arr, q=list(quantiles)).tolist()
+            if len(q) == 1:
+                return q[0]
+            return q
+        
+        # getattr 动态调用
+        func_map = {
+            "min": paddle.min,
+            "max": paddle.max,  
+            "mean": paddle.mean,
+            "median": paddle.median,
+        }
+
+        return float(func_map[return_mode](arr).numpy())
+    
     else:
-        cache = torch.empty(int(256e6), dtype=torch.int8, device=device_type)
+        # PyTorch 分支（原来的逻辑）
+        import torch
 
-    # Estimate the runtime of the function
-    start_event = di.Event(enable_timing=True)
-    end_event = di.Event(enable_timing=True)
-    start_event.record()
-    for _ in range(5):
-        cache.zero_()
-        fn()
-    end_event.record()
-    di.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+        di = torch._dynamo.device_interface.get_interface_for_device(device_type)
 
-    # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
-    start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
-    end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
-    # Warm-up
-    for _ in range(n_warmup):
         fn()
-    # Benchmark
-    for i in range(n_repeat):
-        # we don't want `fn` to accumulate gradient values
-        # if it contains a backward pass. So we clear the
-        # provided gradients
-        if grad_to_none is not None:
-            for x in grad_to_none:
-                x.grad = None
-        # we clear the L2 cache before each run
-        cache.zero_()
-        # record time of `fn`
-        start_event[i].record()
-        fn()
-        end_event[i].record()
-    # Record clocks
-    di.synchronize()
-    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
-    if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
-        if len(ret) == 1:
-            ret = ret[0]
-        return ret
-    return getattr(torch, return_mode)(times).item()
+        di.synchronize()
+
+        # We maintain a buffer of 256 MB that we clear
+        # before each kernel call to make sure that the L2
+        # doesn't contain any input data before the run
+        if fast_flush:
+            cache = torch.empty(int(256e6 // 4), dtype=torch.int, device=device_type)
+        else:
+            cache = torch.empty(int(256e6), dtype=torch.int8, device=device_type)
+
+        # Estimate the runtime of the function
+        start_event = di.Event(enable_timing=True)
+        end_event = di.Event(enable_timing=True)
+        start_event.record()
+        for _ in range(5):
+            cache.zero_()
+            fn()
+        end_event.record()
+        di.synchronize()
+        estimate_ms = start_event.elapsed_time(end_event) / 5
+
+        # compute number of warmup and repeat
+        n_warmup = max(1, int(warmup / estimate_ms))
+        n_repeat = max(1, int(rep / estimate_ms))
+        start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
+        end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
+        # Warm-up
+        for _ in range(n_warmup):
+            fn()
+        # Benchmark
+        for i in range(n_repeat):
+            # we don't want `fn` to accumulate gradient values
+            # if it contains a backward pass. So we clear the
+            # provided gradients
+            if grad_to_none is not None:
+                for x in grad_to_none:
+                    x.grad = None
+            # we clear the L2 cache before each run
+            cache.zero_()
+            # record time of `fn`
+            start_event[i].record()
+            fn()
+            end_event[i].record()
+        # Record clocks
+        di.synchronize()
+        times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
+        if quantiles is not None:
+            ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+            if len(ret) == 1:
+                ret = ret[0]
+            return ret
+        return getattr(torch, return_mode)(times).item()
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     import numpy as np
-    import torch
-
-    # canonicalize arguments to be tensors
-    if not isinstance(x, torch.Tensor):
-        x = torch.tensor(x)
-    if not isinstance(y, torch.Tensor):
-        y = torch.tensor(y)
-    # absolute tolerance
     if atol is None:
         atol = 1e-2
-    atol = atol(x.dtype) if callable(atol) else atol
-    # relative tolerance hook
     if rtol is None:
         rtol = 0.
-    rtol = rtol(x.dtype) if callable(rtol) else rtol
-    # we use numpy instead of pytorch
-    # as it seems more memory efficient
-    # pytorch tends to oom on large tensors
-    if isinstance(x, torch.Tensor):
-        if x.dtype == torch.bfloat16:
-            x = x.float()
-        x = x.cpu().detach().numpy()
-    if isinstance(y, torch.Tensor):
-        if y.dtype == torch.bfloat16:
-            y = y.float()
-        y = y.cpu().detach().numpy()
-    # we handle size==1 case separately as we can
-    # provide better error message there
-    if x.size > 1 or y.size > 1:
-        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
+    def convert_to_numpy(tensor):
+        if hasattr(tensor, 'detach') and hasattr(tensor, 'cpu'):
+            if hasattr(tensor, 'dtype') and str(tensor.dtype) == 'torch.bfloat16':
+                tensor = tensor.float()
+            return tensor.cpu().detach().numpy()
+        elif hasattr(tensor, 'numpy'):
+            if hasattr(tensor, 'dtype') and 'bfloat16' in str(tensor.dtype):
+                tensor = tensor.astype('float32')
+            if hasattr(tensor, 'cpu'):
+                tensor = tensor.cpu()
+            return tensor.numpy()
+        else:
+            return np.array(tensor)
+    
+    x_np = convert_to_numpy(x)
+    y_np = convert_to_numpy(y)
+    if callable(atol):
+        try:
+            if hasattr(x, 'dtype'):
+                atol = atol(x.dtype)
+            else:
+                atol = atol(x_np.dtype)
+        except:
+            atol = 1e-2
+    
+    if callable(rtol):
+        try:
+            if hasattr(x, 'dtype'):
+                rtol = rtol(x.dtype)
+            else:
+                rtol = rtol(x_np.dtype)
+        except:
+            rtol = 0.
+    
+    if x_np.size > 1 or y_np.size > 1:
+        np.testing.assert_allclose(x_np, y_np, atol=atol, rtol=rtol, equal_nan=True)
         return
-    if not np.allclose(x, y, atol=atol, rtol=rtol):
-        raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
+    
+    if not np.allclose(x_np, y_np, atol=atol, rtol=rtol):
+        raise AssertionError(f'{err_msg} {x_np} is not close to {y_np} (atol={atol}, rtol={rtol})')
 
 
 class Benchmark:
