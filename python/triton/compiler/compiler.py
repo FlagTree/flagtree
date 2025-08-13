@@ -399,12 +399,12 @@ class CompiledKernel:
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
+        self.module, self.function, self.n_regs, self.n_spills, *n_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
         
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        flagtree_backend_specialization("init_handles_n_threads", self, device)
+        flagtree_backend_specialization("init_handles_n_threads", self, *n_threads)
 
     def __getattribute__(self, name):
         if name == 'run':
