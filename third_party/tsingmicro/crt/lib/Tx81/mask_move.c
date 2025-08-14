@@ -1,7 +1,5 @@
 //===------------------------ mask_move.c ---------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,7 +11,7 @@
 
 void __MaskMove(uint64_t *src, uint64_t *target, uint32_t elem_count,
                 uint64_t *mask, int32_t fmt) {
-  TsmMaskDataMove *move = TsmNewMaskDataMove();
+  TsmMaskDataMove *move = g_intrinsic()->maskdatamove_pointer;
   TsmMaskDataMoveInstr inst = {I_CGRA,
                                {
                                    0,
@@ -26,6 +24,4 @@ void __MaskMove(uint64_t *src, uint64_t *target, uint32_t elem_count,
                  elem_count, (Data_Format)fmt);
 
   TsmExecute(&inst);
-
-  TsmDeleteMaskDataMove(move);
 }

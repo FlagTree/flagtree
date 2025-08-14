@@ -115,6 +115,13 @@ public:
                                   PtrState &state, const Location loc,
                                   OpBuilder &builder);
 
+  // Operand is the result of tt.bitcast.
+  // Expected result:
+  //  Directly grab op result
+  LogicalResult visitOperandBitcast(triton::BitcastOp bitcastOp,
+                                    PtrState &state, const Location loc,
+                                    OpBuilder &builder);
+
   // Operand is the result of arith.addi. Process both arguments and insert any
   // arith.addi instruction as needed.
   // Main assumptions:
@@ -243,6 +250,8 @@ public:
   // calculate strides and offsets, build PtrState for this operand, and record
   // PtrState for knownPtrs.
   LogicalResult rewriteAddptrOp(triton::AddPtrOp op);
+
+  LogicalResult rewriteBitcastOp(triton::BitcastOp op);
 
   LogicalResult rewriteMakeTensorPtrOp(triton::MakeTensorPtrOp op);
 

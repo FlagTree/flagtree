@@ -1,7 +1,5 @@
 //===------------------------ relation.c-----------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,7 +12,7 @@
 void __BoolEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                    uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -30,13 +28,12 @@ void __BoolEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolUnEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                      uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -50,15 +47,14 @@ void __BoolUnEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);
-
+  TsmWaitfinish();
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolGreaterEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                           uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -72,15 +68,14 @@ void __BoolGreaterEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);
-
+  TsmWaitfinish();
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolGreaterVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                      uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -96,13 +91,12 @@ void __BoolGreaterVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolLessEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                        uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -118,13 +112,12 @@ void __BoolLessEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolLessThenVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                       uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -140,13 +133,12 @@ void __BoolLessThenVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __EqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -162,13 +154,12 @@ void __EqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __UnEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                  uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -184,13 +175,12 @@ void __UnEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __GreaterEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                       uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -206,13 +196,12 @@ void __GreaterEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __GreaterVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                  uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -228,13 +217,12 @@ void __GreaterVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __LessEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                    uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -250,13 +238,12 @@ void __LessEqualVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __LessThenVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
                   uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -272,13 +259,12 @@ void __LessThenVV(uint64_t *src0, uint64_t *src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                    uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -294,13 +280,12 @@ void __BoolEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolUnEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                      uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -316,13 +301,12 @@ void __BoolUnEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolGreaterEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                           uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -338,13 +322,12 @@ void __BoolGreaterEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolGreaterVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                      uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -360,13 +343,12 @@ void __BoolGreaterVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolLessEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                        uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -382,13 +364,12 @@ void __BoolLessEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __BoolLessThenVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                       uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -404,13 +385,12 @@ void __BoolLessThenVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __EqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -426,13 +406,12 @@ void __EqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __UnEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                  uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -448,13 +427,12 @@ void __UnEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __GreaterEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                       uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -470,13 +448,12 @@ void __GreaterEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __GreaterVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                  uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -492,13 +469,12 @@ void __GreaterVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __LessEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                    uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -514,13 +490,12 @@ void __LessEqualVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }
 
 void __LessThenVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
                   uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmRelation *cmd = TsmNewRelation();
+  TsmRelation *cmd = g_intrinsic()->relation_pointer;
   TsmRelationInstr inst = {I_CGRA,
                            {
                                0,
@@ -536,5 +511,4 @@ void __LessThenVS(uint64_t *src0, uint32_t src1, uint64_t *dst,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteRelation(cmd);
 }

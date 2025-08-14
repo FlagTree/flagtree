@@ -215,6 +215,26 @@ LogicalResult MaskState::addStates(const MaskState &lhsState,
     return addStateScalar(lhsState, rhsState.scalar, loc, builder);
 }
 
+LogicalResult MaskState::minStateScalar(const MaskState &lhsState,
+                                        const MaskState &rhsState, Location loc,
+                                        OpBuilder &builder) {
+  if (!(lhsState.scalar || rhsState.scalar)) {
+    InFlightDiagnostic diag =
+        emitError(loc)
+        << "Unexpected case where both lhs and rhs are not scalars";
+    return failure();
+  }
+
+  assert(lhsState.getRank() == rhsState.getRank() &&
+         "Unexpected case where lhs is scalar and rhs has different rank");
+  for (uint32_t i = 0; i < lhsState.getRank(); i++) {
+    auto lhsDim = lhsState.dims[i];
+    auto rhsDim = rhsState.dims[i];
+    dims.push_back(minOFRs(lhsDim, rhsDim, loc, builder));
+  }
+  return success();
+}
+
 LogicalResult MaskState::minStates(const MaskState &lhsState,
                                    const MaskState &rhsState, Location loc,
                                    OpBuilder &builder) {
@@ -296,15 +316,16 @@ LogicalResult MaskState::parseAnd(arith::AndIOp andOp, const Location loc,
   assert(this->isEmpty());
 
   MaskState lhsState;
-  if (failed(lhsState.parse(andOp.getLhs(), loc, builder)) ||
-      !lhsState.isMask())
+  if (failed(lhsState.parse(andOp.getLhs(), loc, builder)))
     return failure();
 
   MaskState rhsState;
-  if (failed(rhsState.parse(andOp.getRhs(), loc, builder)) ||
-      !rhsState.isMask())
+  if (failed(rhsState.parse(andOp.getRhs(), loc, builder)))
     return failure();
 
+  if (!lhsState.isMask() || !rhsState.isMask()) {
+    return this->minStateScalar(lhsState, rhsState, loc, builder);
+  }
   return this->minStates(lhsState, rhsState, loc, builder);
 }
 
@@ -434,7 +455,14 @@ LogicalResult MaskState::parseLoopIterArg(Value v, const Location loc,
     if (failed(lhsState.parse(tritonValue, loc, builder))) {
       return failure();
     }
-
+    if (llvm::isa_and_nonnull<arith::ConstantOp>(tritonValue.getDefiningOp())) {
+      auto constOp = tritonValue.getDefiningOp<arith::ConstantOp>();
+      if (llvm::succeeded(this->parseConstant(constOp, loc, builder))) {
+        this->dims.push_back(builder.getIndexAttr(1));
+        return success();
+      }
+      return failure();
+    }
     // This is a bit of a hack!!
     //
     // The offsets and dimensions of a MaskState can now depend on a loop's

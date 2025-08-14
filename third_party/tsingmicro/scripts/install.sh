@@ -28,6 +28,14 @@ setup_proxy
 apt install git
 apt install lld
 
-pip3 install -r $project_dir/third_party/tsingmicro/requirements.txt
+triton_origin_req=python/requirements.txt
+if [ ! -f $triton_origin_req ]; then
+    triton_origin_req=requirements.txt
+fi
 
-pip3 install -r $project_dir/python/requirements.txt
+if [ ! -f $triton_origin_req ]; then
+    echo "error can't find:$triton_origin_req"
+    exit
+fi
+pip3 install -r $triton_origin_req
+pip3 install -r requirements_ts.txt

@@ -1,7 +1,5 @@
 //===------------------------ count.c -------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,7 +11,7 @@
 
 void __Count(uint64_t *src, uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmPeripheral *cmd = TsmNewPeripheral();
+  TsmPeripheral *cmd = g_intrinsic()->peripheral_pointer;
   TsmPeripheralInstr inst = {I_CGRA,
                              {
                                  0,
@@ -29,5 +27,4 @@ void __Count(uint64_t *src, uint32_t elem_count, uint16_t fmt) {
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeletePeripheral(cmd);
 }

@@ -19,4 +19,5 @@ add_triton_library(StructuredToMemref
   TritonTransforms
   TritonTilingExtIR
   TritonStructuredIR
+  MLIRAddress
 )

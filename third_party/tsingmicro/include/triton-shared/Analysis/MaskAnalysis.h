@@ -90,6 +90,10 @@ private:
   LogicalResult addStates(const MaskState &lhsState, const MaskState &rhsState,
                           Location loc, OpBuilder &builder);
 
+  LogicalResult minStateScalar(const MaskState &lhsState,
+                               const MaskState &rhsState, Location loc,
+                               OpBuilder &builder);
+
   LogicalResult minStates(const MaskState &lhsState, const MaskState &rhsState,
                           Location loc, OpBuilder &builder);
   // -------

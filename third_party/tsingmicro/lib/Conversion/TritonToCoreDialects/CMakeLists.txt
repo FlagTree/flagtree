@@ -27,5 +27,8 @@ add_triton_library(TritonToCoreDialects
 
   TritonArithToLinalg
   StructuredToMemref
+  UnstructuredToMemref
   TritonToStructured
+  TritonToUnstructured
+  ConvertTritonPtr
 )

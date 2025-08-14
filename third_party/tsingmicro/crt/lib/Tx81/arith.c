@@ -1,7 +1,5 @@
 //===------------------------ arith.c ------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,7 +12,7 @@
 void __AddVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE round, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -28,15 +26,14 @@ void __AddVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);
-
+  TsmWaitfinish();
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __SubVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE round, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -52,13 +49,12 @@ void __SubVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __MulVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE round, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -72,15 +68,14 @@ void __MulVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);
-
+  TsmWaitfinish();
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __DivVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE round, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -96,13 +91,12 @@ void __DivVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __AddVS(uint64_t *src0, uint32_t src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE round, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -118,13 +112,12 @@ void __AddVS(uint64_t *src0, uint32_t src1, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __SubVS(uint64_t *src0, uint32_t src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE round, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -140,13 +133,12 @@ void __SubVS(uint64_t *src0, uint32_t src1, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __MulVS(uint64_t *src0, uint32_t src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE round, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -162,13 +154,12 @@ void __MulVS(uint64_t *src0, uint32_t src1, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __DivVS(uint64_t *src0, uint32_t src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE round, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -184,13 +175,12 @@ void __DivVS(uint64_t *src0, uint32_t src1, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __MaxVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE reserved, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -206,13 +196,12 @@ void __MaxVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }
 
 void __MinVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
              RND_MODE reserved, uint16_t fmt) {
   // Create command buffer.
-  TsmArith *cmd = TsmNewArith();
+  TsmArith *cmd = g_intrinsic()->arith_pointer;
   TsmArithInstr inst = {I_CGRA,
                         {
                             0,
@@ -228,5 +217,4 @@ void __MinVV(uint64_t *src0, uint64_t *src1, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteArith(cmd);
 }

@@ -1,7 +1,5 @@
 //===--------------------- Tx81ToLLVM.cpp ---------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -55,6 +53,7 @@ namespace {
 // Crt func name
 const char rdmaFuncName[] = "__Rdma";
 const char wdmaFuncName[] = "__Wdma";
+const char memcpyFuncName[] = "__Memcpy";
 const char addVVFuncName[] = "__AddVV";
 const char subVVFuncName[] = "__SubVV";
 const char mulVVFuncName[] = "__MulVV";
@@ -62,6 +61,7 @@ const char divVVFuncName[] = "__DivVV";
 const char absVVFuncName[] = "__AbsVV";
 const char rsqrtVVFuncName[] = "__RsqrtVV";
 const char sqrtVVFuncName[] = "__SqrtVV";
+const char recipVVFuncName[] = "__RecipVV";
 const char lnFuncName[] = "__Ln";
 const char log2FuncName[] = "__Log2";
 const char expFuncName[] = "__Exp";
@@ -77,17 +77,54 @@ const char argMaxFuncName[] = "__ArgMax";
 const char reduceSumFuncName[] = "__ReduceSum";
 const char reduceMaxFuncName[] = "__ReduceMax";
 const char reduceMinFuncName[] = "__ReduceMin";
-const char fp16ToFp32FuncName[] = "__FP16_FP32";
+// Int8
+const char int8ToBf16FuncName[] = "__INT8_BF16";
+const char int8ToFp16FuncName[] = "__INT8_FP16";
+const char int8ToFp32FuncName[] = "__INT8_FP32";
+const char int8ToTf32FuncName[] = "__INT8_TF32";
+// Int16
 const char int16ToFp16FuncName[] = "__INT16_FP16";
+const char int16ToBf16FuncName[] = "__INT16_BF16";
 const char int16ToFp32FuncName[] = "__INT16_FP32";
+const char int16ToTf32FuncName[] = "__INT16_TF32";
+// Int32
 const char int32ToFp16FuncName[] = "__INT32_FP16";
+const char int32ToBf16FuncName[] = "__INT32_BF16";
 const char int32ToFp32FuncName[] = "__INT32_FP32";
+const char int32ToTf32FuncName[] = "__INT32_TF32";
+// BF16
+const char bf16ToInt8FuncName[] = "__BF16_INT8";
+const char bf16ToInt16FuncName[] = "__BF16_INT16";
+const char bf16ToInt32FuncName[] = "__BF16_INT32";
+const char bf16ToFp16FuncName[] = "__BF16_FP16";
+const char bf16ToFp32FuncName[] = "__BF16_FP32";
+const char bf16ToTf32FuncName[] = "__BF16_TF32";
+// FP16
+const char fp16ToBf16FuncName[] = "__FP16_BF16";
+const char fp16ToFp32FuncName[] = "__FP16_FP32";
+const char fp16ToTf32FuncName[] = "__FP16_TF32";
 const char fp16ToInt8FuncName[] = "__FP16_INT8";
 const char fp16ToInt16FuncName[] = "__FP16_INT16";
 const char fp16ToInt32FuncName[] = "__FP16_INT32";
+// FP32
 const char fp32ToInt8FuncName[] = "__FP32_INT8";
 const char fp32ToInt16FuncName[] = "__FP32_INT16";
 const char fp32ToInt32FuncName[] = "__FP32_INT32";
+const char fp32ToFp16FuncName[] = "__FP32_FP16";
+const char fp32ToBf16FuncName[] = "__FP32_BF16";
+const char fp32ToTf32FuncName[] = "__FP32_TF32";
+// TF32
+const char tf32ToInt8FuncName[] = "__TF32_INT8";
+const char tf32ToInt16FuncName[] = "__TF32_INT16";
+const char tf32ToInt32FuncName[] = "__TF32_INT32";
+const char tf32ToFp16FuncName[] = "__TF32_FP16";
+const char tf32ToBf16FuncName[] = "__TF32_BF16";
+const char tf32ToFp32FuncName[] = "__TF32_FP32";
+// MXFP
+const char fp8E4M3ToBF16FuncName[] = "__FP8E4M3_BF16";
+const char fp8E5M2ToBF16FuncName[] = "__FP8E5M2_BF16";
+const char fp4E2M1ToBF16FuncName[] = "__FP4E2M1_BF16";
+
 const char boolEqualVVFuncName[] = "__BoolEqualVV";
 const char boolUnEqualVVFuncName[] = "__BoolUnEqualVV";
 const char boolGreaterEqualVVFuncName[] = "__BoolGreaterEqualVV";
@@ -112,17 +149,19 @@ const char greaterEqualVSFuncName[] = "__GreaterEqualVS";
 const char greaterVSFuncName[] = "__GreaterVS";
 const char lessEqualVSFuncName[] = "__LessEqualVS";
 const char lessThenVSFuncName[] = "__LessThenVS";
-const char fp32ToFp16FuncName[] = "__FP32_FP16";
-const char fp32ToBf16FuncName[] = "__FP32_BF16";
-const char fp32ToTF32FuncName[] = "__FP32_TF32";
 const char andVVFuncName[] = "__AndVV";
 const char orVVFuncName[] = "__OrVV";
 const char xorVVFuncName[] = "__XorVV";
+const char boolNotVFuncName[] = "__BoolNotV";
+const char boolAndVFuncName[] = "__BoolAndV";
+const char boolOrVFuncName[] = "__BoolOrV";
+const char boolXorVFuncName[] = "__BoolXorV";
 const char MaxVVFuncName[] = "__MaxVV";
 const char MinVVFuncName[] = "__MinVV";
 const char transposeFuncName[] = "__Transpose";
 const char nchw2nhwcFuncName[] = "__Nchw2nhwc";
 const char nhwc2nchwFuncName[] = "__Nhwc2nchw";
+const char tanhFuncName[] = "__Tanh";
 
 static Value adjustElemCountType(ConversionPatternRewriter &rewriter,
                                  Location loc, Value elemCount) {
@@ -146,15 +185,68 @@ static Value castIndexToInt32(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 static Value createInt32ValueArray(ConversionPatternRewriter &rewriter,
-                                   Location loc, SmallVector<Value> array) {
+                                   Location loc, SmallVector<Value> array,
+                                   Operation *currentOp) {
   auto i32PtrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
   auto i32Ty = rewriter.getI32Type();
   auto i64Ty = rewriter.getI64Type();
 
+  // Find the parent function of the current operation
+  Operation *parentFunc = currentOp->getParentOfType<LLVM::LLVMFuncOp>();
+  LLVM::LLVMFuncOp funcOp = dyn_cast<LLVM::LLVMFuncOp>(parentFunc);
+  assert(funcOp &&
+         "Expected to find a parent function for the current operation\n");
+
+  // Save current insertion point
+  auto savedInsertionPoint = rewriter.saveInsertionPoint();
+
+  // Insert alloca at the beginning of the function entry block
+  Block &entryBlock = funcOp.getBody().front();
+  rewriter.setInsertionPointToStart(&entryBlock);
+
   // Allocate memory for array
   Value rank = rewriter.create<LLVM::ConstantOp>(
       loc, i64Ty, rewriter.getI64IntegerAttr(array.size()));
+
   auto allocaOp = rewriter.create<LLVM::AllocaOp>(loc, i32PtrTy, i32Ty, rank);
+
+  rewriter.restoreInsertionPoint(savedInsertionPoint);
+
+  //   assert(moduleOp && moduleOp->hasAttr("triton_tsm.spm_use") &&
+  //          "ModuleOp should not be null when creating an array");
+  //   auto spmPointer =
+  //   cast<IntegerAttr>(moduleOp->getAttr("triton_tsm.spm_use"))
+  //                         .getValue()
+  //                         .getZExtValue();
+  //   Value spmOffsetOp = rewriter.create<LLVM::ConstantOp>(
+  //       loc, rewriter.getI64Type(), rewriter.getI32IntegerAttr(spmPointer));
+  //   auto elementPtrType = LLVM::LLVMPointerType::get(rewriter.getContext());
+  //   Value spmAddr = rewriter.create<LLVM::ZeroOp>(loc, elementPtrType);
+  //   spmAddr =
+  //       rewriter.create<LLVM::PtrToIntOp>(loc, rewriter.getI64Type(),
+  //       spmAddr);
+  //   spmAddr = rewriter.create<LLVM::AddOp>(loc, rewriter.getI64Type(),
+  //   spmAddr,
+  //                                          spmOffsetOp);
+
+  //   // Types for function declaration
+  //   SmallVector<Type, 5> argTypes = {
+  //       rewriter.getI64Type() // offset
+  //   };
+
+  // Declare the function
+  //   Value funcPtr = triton::utils::declareTx81Function(
+  //       moduleOp, rewriter, loc, "get_spm_memory_mapping_wrapper",
+  //       elementPtrType, argTypes);
+
+  // Create the call to __Rdma
+  //   auto spmMemoryAddrPtr = rewriter.create<LLVM::CallOp>(
+  //       loc, TypeRange{elementPtrType},
+  //       "get_spm_memory_mapping_wrapper", // funcPtr,
+  //       ValueRange{spmAddr});
+
+  // Restore insertion point
+  rewriter.restoreInsertionPoint(savedInsertionPoint);
 
   // Store each dimension in the array
   for (size_t i = 0; i < array.size(); i++) {
@@ -169,12 +261,22 @@ static Value createInt32ValueArray(ConversionPatternRewriter &rewriter,
     // Store the value
     rewriter.create<LLVM::StoreOp>(loc, array[i], elemPtr);
   }
+
+  //   spmPointer += array.size() * sizeof(int32_t);
+  //   // Record spm usage.
+  //   moduleOp->setAttr(
+  //       "triton_tsm.spm_use",
+  //       mlir::IntegerAttr::get(mlir::IntegerType::get(moduleOp.getContext(),
+  //       32),
+  //                              spmPointer));
+
   return allocaOp;
 }
 
 static Value
 indexValueArrayToInt32ValueArray(ConversionPatternRewriter &rewriter,
-                                 Location loc, ValueRange array) {
+                                 Location loc, ValueRange array,
+                                 Operation *currentOp) {
 
   SmallVector<Value> arrayValues;
   for (size_t i = 0; i < array.size(); i++) {
@@ -182,12 +284,12 @@ indexValueArrayToInt32ValueArray(ConversionPatternRewriter &rewriter,
     arrayValues.push_back(castIndexToInt32(rewriter, loc, array[i]));
   }
 
-  return createInt32ValueArray(rewriter, loc, arrayValues);
+  return createInt32ValueArray(rewriter, loc, arrayValues, currentOp);
 }
 
 static Value int32ArrayToInt32ValueArray(ConversionPatternRewriter &rewriter,
-                                         Location loc,
-                                         ArrayRef<int32_t> array) {
+                                         Location loc, ArrayRef<int32_t> array,
+                                         Operation *currentOp) {
 
   SmallVector<Value> arrayValues;
   auto i32Ty = rewriter.getI32Type();
@@ -196,7 +298,7 @@ static Value int32ArrayToInt32ValueArray(ConversionPatternRewriter &rewriter,
     arrayValues.push_back(rewriter.create<LLVM::ConstantOp>(
         loc, i32Ty, rewriter.getI32IntegerAttr(array[i])));
   }
-  return createInt32ValueArray(rewriter, loc, arrayValues);
+  return createInt32ValueArray(rewriter, loc, arrayValues, currentOp);
 }
 
 //===----------------------------------------------------------------------===//
@@ -324,7 +426,7 @@ struct BarrierConversion : public OpConversionPattern<tx::BarrierOp> {
     // Get the module for function declarations
     auto module = op->getParentOfType<ModuleOp>();
 
-    // Declare the __Rdma runtime function if not already declared
+    // Declare the __Barrier runtime function if not already declared
     /*
     void __Barrier()
     */
@@ -335,7 +437,7 @@ struct BarrierConversion : public OpConversionPattern<tx::BarrierOp> {
     Value funcPtr = triton::utils::declareTx81Function(
         module, rewriter, op.getLoc(), "__Barrier", i8PtrTy, {});
 
-    // Create the call to __Rdma
+    // Create the call to __Barrier
     auto call = rewriter.create<LLVM::CallOp>(op.getLoc(), TypeRange{i8PtrTy},
                                               "__Barrier", // funcPtr,
                                               ValueRange{});
@@ -373,6 +475,7 @@ struct RdmaWdmaOpConversion : public OpConversionPattern<Tx81Op> {
         i32PtrTy, // src_strides array
         i32PtrTy, // dst_shape array
         i32PtrTy, // dst_strides array
+        i32Ty,    // rank
         i32Ty,    // elemBytes
         i32Ty     // fmt
     };
@@ -391,14 +494,18 @@ struct RdmaWdmaOpConversion : public OpConversionPattern<Tx81Op> {
     // Create arrays for shapes and strides
 
     // Create arrays for shapes and strides
-    Value srcShapeArray =
-        indexValueArrayToInt32ValueArray(rewriter, loc, adaptor.getSrcShape());
+    Value srcShapeArray = indexValueArrayToInt32ValueArray(
+        rewriter, loc, adaptor.getSrcShape(), op);
     Value srcStridesArray = indexValueArrayToInt32ValueArray(
-        rewriter, loc, adaptor.getSrcStrides());
-    Value dstShapeArray =
-        indexValueArrayToInt32ValueArray(rewriter, loc, adaptor.getDstShape());
+        rewriter, loc, adaptor.getSrcStrides(), op);
+    Value dstShapeArray = indexValueArrayToInt32ValueArray(
+        rewriter, loc, adaptor.getDstShape(), op);
     Value dstStridesArray = indexValueArrayToInt32ValueArray(
-        rewriter, loc, adaptor.getDstStrides());
+        rewriter, loc, adaptor.getDstStrides(), op);
+
+    // Handle rank attribute
+    Value rank = rewriter.create<LLVM::ConstantOp>(
+        loc, i32Ty, rewriter.getI32IntegerAttr(op.getRank()));
 
     // Handle elem byte attribute
     Value elemBytes = rewriter.create<LLVM::ConstantOp>(
@@ -412,7 +519,7 @@ struct RdmaWdmaOpConversion : public OpConversionPattern<Tx81Op> {
     auto call = rewriter.create<LLVM::CallOp>(
         loc, TypeRange{i8PtrTy}, funcPrefix,
         ValueRange{src, target, srcShapeArray, srcStridesArray, dstShapeArray,
-                   dstStridesArray, elemBytes, fmt});
+                   dstStridesArray, rank, elemBytes, fmt});
 
     // Replace the op with the result of the call
     rewriter.replaceOp(op, call.getResult());
@@ -528,9 +635,9 @@ struct TransformOpConversion : public OpConversionPattern<Tx81Op> {
 
     // Get shape llvm array
     auto srcArray =
-        int32ArrayToInt32ValueArray(rewriter, op.getLoc(), srcShape);
+        int32ArrayToInt32ValueArray(rewriter, op.getLoc(), srcShape, op);
     auto dstArray =
-        int32ArrayToInt32ValueArray(rewriter, op.getLoc(), dstShape);
+        int32ArrayToInt32ValueArray(rewriter, op.getLoc(), dstShape, op);
 
     // Handle format attribute
     Value fmt = rewriter.create<LLVM::ConstantOp>(
@@ -636,7 +743,7 @@ struct GatherScatterOpConversion
     auto dstIterW =
         rewriter.create<LLVM::ConstantOp>(loc, i32Ty, adaptor.getDstIterW());
 
-    // Create the call to __Rdma
+    // Create the call to __GatherScatter
     auto call = rewriter.create<LLVM::CallOp>(
         loc, TypeRange{i8PtrTy}, "__GatherScatter", // funcPtr,
         ValueRange{src, dst, bytes, srcStrideN, srcStrideH, srcStrideW,
@@ -1010,6 +1117,112 @@ struct BinaryLogicVVOpConversion : public OpConversionPattern<Tx81Op> {
   }
 };
 
+template <typename Tx81Op, const char *funcPrefix>
+struct UnaryBoolLogicVOpConversion : public OpConversionPattern<Tx81Op> {
+  using OpConversionPattern<Tx81Op>::OpConversionPattern;
+  using OpAdaptor = typename Tx81Op::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(Tx81Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the module for function declarations
+    auto module = op->template getParentOfType<ModuleOp>();
+
+    // Declare the runtime function if not already declared
+    // Signature: void* __BoolNotV(void* src, void* dst, uint32_t elem_count);
+    auto i8PtrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto i32Ty = rewriter.getI32Type();
+
+    // Types for function declaration
+    SmallVector<Type, 17> argTypes = {
+        i8PtrTy, // src_addr
+        i8PtrTy, // dst_addr
+        i32Ty    // elem_count
+    };
+
+    Value funcPtr = triton::utils::declareTx81Function(
+        module, rewriter, op.getLoc(), funcPrefix, i8PtrTy, argTypes);
+
+    // Convert operands
+    Value src = adaptor.getInput();
+    // Need to bitcast src to i8*
+    src = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, src);
+
+    Value out = adaptor.getOut();
+    // Need to bitcast dest to i8*
+    out = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, out);
+
+    // Get elem_count operand, convert Index to I32
+    Value elemCount = op.getElemCount();
+    elemCount = castIndexToInt32(rewriter, op.getLoc(), elemCount);
+
+    // Create the call
+    auto call = rewriter.create<LLVM::CallOp>(
+        op.getLoc(), i8PtrTy, funcPrefix, // funcPtr,
+        ArrayRef<Value>{src, out, elemCount});
+
+    // Replace the op with the result of the call
+    rewriter.replaceOp(op, call.getResult());
+
+    return success();
+  }
+};
+
+template <typename Tx81Op, const char *funcPrefix>
+struct BinaryBoolLogicVOpConversion : public OpConversionPattern<Tx81Op> {
+  using OpConversionPattern<Tx81Op>::OpConversionPattern;
+  using OpAdaptor = typename Tx81Op::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(Tx81Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the module for function declarations
+    auto module = op->template getParentOfType<ModuleOp>();
+
+    // Declare the runtime function if not already declared
+    // Signature: void* __BoolAndV(void* a, void* b, void* out, uint32_t
+    // elem_count);
+    auto i8PtrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto i32Ty = rewriter.getI32Type();
+
+    // Types for function declaration
+    SmallVector<Type, 17> argTypes = {
+        i8PtrTy, // src0_addr
+        i8PtrTy, // src1_addr
+        i8PtrTy, // dst_addr
+        i32Ty    // elem_count
+    };
+
+    Value funcPtr = triton::utils::declareTx81Function(
+        module, rewriter, op.getLoc(), funcPrefix, i8PtrTy, argTypes);
+
+    // Convert operands
+    Value srcA = adaptor.getInput0();
+    // Need to bitcast src to i8*
+    srcA = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, srcA);
+    Value srcB = adaptor.getInput1();
+    // Need to bitcast src to i8*
+    srcB = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, srcB);
+    Value out = adaptor.getOut();
+    // Need to bitcast src to i8*
+    out = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, out);
+
+    // Get elem_count operand, convert Index to I32
+    Value elemCount = op.getElemCount();
+    elemCount = castIndexToInt32(rewriter, op.getLoc(), elemCount);
+
+    // Create the call
+    auto call = rewriter.create<LLVM::CallOp>(
+        op.getLoc(), i8PtrTy, funcPrefix, // funcPtr,
+        ArrayRef<Value>{srcA, srcB, out, elemCount});
+
+    // Replace the op with the result of the call
+    rewriter.replaceOp(op, call.getResult());
+
+    return success();
+  }
+};
+
 template <typename RelationVVOp, const char *funcPrefix>
 struct RelationVVOpConversion : public OpConversionPattern<RelationVVOp> {
   using OpConversionPattern<RelationVVOp>::OpConversionPattern;
@@ -1122,6 +1335,53 @@ struct RelationVSOpConversion : public OpConversionPattern<Tx81Op> {
   }
 };
 
+// Convert tx81.ZeroPointConvertOp op to LLVM
+template <typename ZeroPointConvertOp, const char *funcPrefix>
+struct ZeroPointConvertOpConversion
+    : public OpConversionPattern<ZeroPointConvertOp> {
+  using OpConversionPattern<ZeroPointConvertOp>::OpConversionPattern;
+  using OpAdaptor = typename ZeroPointConvertOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(ZeroPointConvertOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the module for function declarations
+    auto module = op->template getParentOfType<ModuleOp>();
+
+    // Declare the runtime function if not already declared
+    // Signature: void __INT8_FP32(uint64_t *src, uint64_t *dst, uint32_t
+    // zero_point, uint32_t elem_count);
+    auto i8PtrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto i32Ty = rewriter.getI32Type();
+
+    // Types for function declaration
+    SmallVector<Type, 17> argTypes = {i8PtrTy, i8PtrTy, i32Ty, i32Ty};
+
+    Value funcPtr = triton::utils::declareTx81Function(
+        module, rewriter, op.getLoc(), funcPrefix, i8PtrTy, argTypes);
+
+    // Convert operands
+    Value input = adaptor.getSrc();
+    Value output = adaptor.getDst();
+    Value zeroPoint = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), i32Ty, adaptor.getZeroPointAttr());
+    Value elemCount = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), i32Ty, adaptor.getElemCountAttr());
+
+    // Bitcast all pointers to i8*
+    input = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, input);
+    output = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, output);
+
+    // Create the call
+    auto call = rewriter.create<LLVM::CallOp>(
+        op.getLoc(), i8PtrTy, funcPrefix, // funcPtr,
+        ArrayRef<Value>{input, output, zeroPoint, elemCount});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // Convert tx81.NormalConvertOp op to LLVM
 template <typename NormalConvertOp, const char *funcPrefix>
 struct NormalConvertOpConversion : public OpConversionPattern<NormalConvertOp> {
@@ -1213,6 +1473,54 @@ struct RoundConvertOpConversion : public OpConversionPattern<RoundConvertOp> {
     // Replace the op with the result of the call
     rewriter.replaceOp(op, call.getResult());
 
+    return success();
+  }
+};
+
+struct MXFPScaleBF16OpConversion
+    : public OpConversionPattern<tx::MXFPScaleBF16Op> {
+  using OpConversionPattern<tx::MXFPScaleBF16Op>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(tx::MXFPScaleBF16Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the module for function declarations
+    auto module = op->getParentOfType<ModuleOp>();
+
+    auto i8PtrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
+    auto i32Ty = rewriter.getI32Type();
+
+    // Types for function declaration
+    SmallVector<Type, 5> argTypes = {
+        i8PtrTy, // src
+        i8PtrTy, // scale
+        i8PtrTy, // dst
+        i32Ty,   // elem_count
+    };
+
+    // Declare the function
+    Value funcPtr = triton::utils::declareTx81Function(
+        module, rewriter, op.getLoc(), "__mxfpScaleBf16", i8PtrTy, argTypes);
+
+    // Get the operands
+    Value src = adaptor.getSrc();
+    Value scale = adaptor.getScale();
+    Value dst = adaptor.getDst();
+
+    // Need to bitcast src to i8*
+    src = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, src);
+    scale = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, scale);
+    dst = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, dst);
+
+    Value elemCount = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), i32Ty, adaptor.getElemCountAttr());
+
+    // Create the call
+    auto call = rewriter.create<LLVM::CallOp>(
+        op.getLoc(), i8PtrTy, "__mxfpScaleBf16", // funcPtr,
+        ArrayRef<Value>{src, scale, dst, elemCount});
+
+    op->erase();
     return success();
   }
 };
@@ -1598,30 +1906,26 @@ struct MemsetOpConversion : public OpConversionPattern<tx::MemsetOp> {
   LogicalResult
   matchAndRewrite(tx::MemsetOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
     // Get the module for function declarations
     auto module = op->getParentOfType<ModuleOp>();
 
     // Declare the __Memset runtime function if not already declared
-    // Signature: void* __Memset(void* dst, int64_t value, uint32_t elem_count,
+    // Signature: void* __Memset(void* dst, int64_t value, uint32_t rank,
     //                    int32_t* strides, int32_t* iterations, uint16_t fmt);
     auto i8PtrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
-    auto i64Ty = rewriter.getI64Type();
     auto i32Ty = rewriter.getI32Type();
     auto i32PtrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
     auto i16Ty = rewriter.getI16Type();
 
     // Types for function declaration
     SmallVector<Type, 6> argTypes = {
-        i8PtrTy, // Spm addr
-        i32Ty,   // value
-        i32Ty,   // shape_n/iterator_2
-        i32Ty,   // shape_h/iterator_1
-        i32Ty,   // shape_w/iterator_0
-        i32Ty,   // shape_c/elem_count
-        i32Ty,   // stride_n
-        i32Ty,   // stride_h
-        i32Ty,   // stride_w,
-        i16Ty    // fmt
+        i8PtrTy,  // Spm addr
+        i32Ty,    // value
+        i32PtrTy, // src_shape array
+        i32PtrTy, // src_strides array
+        i32Ty,    // rank
+        i16Ty     // fmt
     };
 
     // Declare the function
@@ -1629,32 +1933,29 @@ struct MemsetOpConversion : public OpConversionPattern<tx::MemsetOp> {
         module, rewriter, op.getLoc(), "__Memset", i8PtrTy, argTypes);
 
     // Get operands
-    Value src = adaptor.getSrc();
-    src = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, src);
+    Value dst = adaptor.getTarget();
+    dst = rewriter.create<LLVM::IntToPtrOp>(op.getLoc(), i8PtrTy, dst);
 
     Value value = adaptor.getValue();
 
     // Handle strides and iterations arrays
-    ValueRange shape = adaptor.getShape();
-    Value iteration2 = castIndexToInt32(rewriter, op->getLoc(), shape[0]);
-    Value iteration1 = castIndexToInt32(rewriter, op->getLoc(), shape[1]);
-    Value iteration0 = castIndexToInt32(rewriter, op->getLoc(), shape[2]);
-    Value elemCount = castIndexToInt32(rewriter, op->getLoc(), shape[3]);
-
-    ValueRange strides = adaptor.getStrides();
-    Value stride2 = castIndexToInt32(rewriter, op->getLoc(), strides[0]);
-    Value stride1 = castIndexToInt32(rewriter, op->getLoc(), strides[1]);
-    Value stride0 = castIndexToInt32(rewriter, op->getLoc(), strides[2]);
+    // Create arrays for shapes and strides
+    Value dstShapeArray = indexValueArrayToInt32ValueArray(
+        rewriter, loc, adaptor.getDstShape(), op);
+    Value dstStridesArray = indexValueArrayToInt32ValueArray(
+        rewriter, loc, adaptor.getDstStrides(), op);
 
     // Convert fmt attribute to Value
     Value fmt = rewriter.create<LLVM::ConstantOp>(
         op.getLoc(), i16Ty, rewriter.getI16IntegerAttr(op.getFmt()));
 
+    Value rank = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), i32Ty, rewriter.getI32IntegerAttr(op.getRank()));
+
     // Create the call to __Memset
     auto call = rewriter.create<LLVM::CallOp>(
         op.getLoc(), i8PtrTy, "__Memset", // funcPtr,
-        ArrayRef<Value>{src, value, elemCount, stride0, iteration0, stride1,
-                        iteration1, stride2, iteration2, fmt});
+        ArrayRef<Value>{dst, value, dstShapeArray, dstStridesArray, rank, fmt});
 
     // Replace the op with the result of the call
     rewriter.replaceOp(op, call.getResult());
@@ -1751,23 +2052,54 @@ public:
 
     // Add the Tx81 to LLVM conversion patterns
     // clang-format off
-    patterns.add</*ConstantOpConversion, IndexCastOpConversion,
-                 AddIOpConversion, MulIOpConversion,*/
-                 NormalConvertOpConversion<tx::FP16ToFP32Op, fp16ToFp32FuncName>,
+    patterns.add</* INT8 */
+                ZeroPointConvertOpConversion<tx::INT8ToFP16Op, int8ToFp16FuncName>,
+                ZeroPointConvertOpConversion<tx::INT8ToBF16Op, int8ToBf16FuncName>,
+                ZeroPointConvertOpConversion<tx::INT8ToFP32Op, int8ToFp32FuncName>,
+                ZeroPointConvertOpConversion<tx::INT8ToTF32Op, int8ToTf32FuncName>,
+                /* INT16 */
                  NormalConvertOpConversion<tx::INT16ToFP16Op, int16ToFp16FuncName>,
-                 RoundConvertOpConversion<tx::FP16ToINT8Op,fp16ToInt8FuncName>,
+                 RoundConvertOpConversion<tx::INT16ToBF16Op, int16ToBf16FuncName>,
+                 RoundConvertOpConversion<tx::INT16ToFP32Op, int16ToFp32FuncName>,
+                 RoundConvertOpConversion<tx::INT16ToTF32Op, int16ToTf32FuncName>,
+                 /* INT32 */
+                 RoundConvertOpConversion<tx::INT32ToFP16Op, int32ToFp16FuncName>,
+                 RoundConvertOpConversion<tx::INT32ToBF16Op, int32ToBf16FuncName>,
+                 RoundConvertOpConversion<tx::INT32ToFP32Op, int32ToFp32FuncName>,
+                 RoundConvertOpConversion<tx::INT32ToTF32Op, int32ToTf32FuncName>,
+                 /* BF16 */
+                 NormalConvertOpConversion<tx::BF16ToINT8Op, bf16ToInt8FuncName>,
+                 RoundConvertOpConversion<tx::BF16ToINT16Op, bf16ToInt16FuncName>,
+                 RoundConvertOpConversion<tx::BF16ToINT32Op, bf16ToInt32FuncName>,
+                 NormalConvertOpConversion<tx::BF16ToFP16Op, bf16ToFp16FuncName>,
+                 NormalConvertOpConversion<tx::BF16ToFP32Op, bf16ToFp32FuncName>,
+                 NormalConvertOpConversion<tx::BF16ToTF32Op, bf16ToTf32FuncName>,
+                 /* FP16 */
+                 RoundConvertOpConversion<tx::FP16ToINT8Op, fp16ToInt8FuncName>,
                  RoundConvertOpConversion<tx::FP16ToINT16Op,fp16ToInt16FuncName>,
-                 RoundConvertOpConversion<tx::FP16ToINT32Op,fp16ToInt32FuncName>,
-                 RoundConvertOpConversion<tx::FP32ToINT8Op,fp16ToInt8FuncName>,
-                 RoundConvertOpConversion<tx::FP32ToINT16Op,fp32ToInt16FuncName>,
-                 RoundConvertOpConversion<tx::FP32ToINT32Op,fp32ToInt32FuncName>,
-                 RoundConvertOpConversion<tx::INT16ToFP32Op,int16ToFp32FuncName>,
-                 RoundConvertOpConversion<tx::INT32ToFP32Op,int32ToFp32FuncName>,
-                 RoundConvertOpConversion<tx::INT32ToFP16Op,int32ToFp16FuncName>,
-                 RoundConvertOpConversion<tx::FP32ToINT32Op,fp32ToInt32FuncName>,
+                 RoundConvertOpConversion<tx::FP16ToINT32Op, fp16ToInt32FuncName>,
+                 RoundConvertOpConversion<tx::FP16ToBF16Op, fp16ToBf16FuncName>,
+                 NormalConvertOpConversion<tx::FP16ToFP32Op, fp16ToFp32FuncName>,
+                 NormalConvertOpConversion<tx::FP16ToTF32Op, fp16ToTf32FuncName>,
+                 /* FP32 */
+                 RoundConvertOpConversion<tx::FP32ToINT8Op, fp32ToInt8FuncName>,
+                 RoundConvertOpConversion<tx::FP32ToINT16Op, fp32ToInt16FuncName>,
+                 RoundConvertOpConversion<tx::FP32ToINT32Op, fp32ToInt32FuncName>,
                  RoundConvertOpConversion<tx::FP32ToFP16Op, fp32ToFp16FuncName>,
                  RoundConvertOpConversion<tx::FP32ToBF16Op,fp32ToBf16FuncName>,
-                 RoundConvertOpConversion<tx::FP32ToTF32Op, fp32ToTF32FuncName>,
+                 RoundConvertOpConversion<tx::FP32ToTF32Op, fp32ToTf32FuncName>,
+                 /* TF32 */
+                 RoundConvertOpConversion<tx::TF32ToINT8Op, tf32ToInt8FuncName>,
+                 RoundConvertOpConversion<tx::TF32ToINT16Op, tf32ToInt16FuncName>,
+                 RoundConvertOpConversion<tx::TF32ToINT32Op, tf32ToInt32FuncName>,
+                 NormalConvertOpConversion<tx::TF32ToFP16Op, tf32ToFp16FuncName>,
+                 RoundConvertOpConversion<tx::TF32ToBF16Op, tf32ToBf16FuncName>,
+                 NormalConvertOpConversion<tx::TF32ToFP32Op, tf32ToFp32FuncName>,
+                 /* MXFP */
+                 NormalConvertOpConversion<tx::FP8E4M3ToBF16Op, fp8E4M3ToBF16FuncName>,
+                 NormalConvertOpConversion<tx::FP8E5M2ToBF16Op, fp8E5M2ToBF16FuncName>,
+                 NormalConvertOpConversion<tx::FP4E2M1ToBF16Op, fp4E2M1ToBF16FuncName>,
+                 MXFPScaleBF16OpConversion,
                  ArgMinMaxOpConversion<tx::ArgMaxOp, argMaxFuncName>,
                  ArgMinMaxOpConversion<tx::ArgMinOp, argMinFuncName>,
                  ReduceOpConversion<tx::ReduceSumOp,reduceSumFuncName>,
@@ -1782,12 +2114,14 @@ public:
                  UnaryOpConversion<tx::AbsVVOp, absVVFuncName>,
                  UnaryOpConversion<tx::RsqrtVVOp, rsqrtVVFuncName>,
                  UnaryOpConversion<tx::SqrtVVOp, sqrtVVFuncName>,
+                 UnaryOpConversion<tx::RecipVVOp, recipVVFuncName>,
                  UnaryOpConversion<tx::LnOp, lnFuncName>,
                  UnaryOpConversion<tx::Log2Op, log2FuncName>,
                  UnaryOpConversion<tx::ExpOp, expFuncName>,
                  UnaryOpConversion<tx::Pow2Op, pow2FuncName>,
                  UnaryOpConversion<tx::SinOp, sinFuncName>,
                  UnaryOpConversion<tx::CosOp, cosFuncName>,
+                 UnaryOpConversion<tx::Tanh, tanhFuncName>,
                  BinaryVSOpConversion<tx::AddVSOp, addVSFuncName>,
                  BinaryVSOpConversion<tx::SubVSOp, subVSFuncName>,
                  BinaryVSOpConversion<tx::MulVSOp, mulVSFuncName>,
@@ -1819,8 +2153,13 @@ public:
                  BinaryLogicVVOpConversion<tx::AndVV, andVVFuncName>,
                  BinaryLogicVVOpConversion<tx::OrVV, orVVFuncName>,
                  BinaryLogicVVOpConversion<tx::XorVV, xorVVFuncName>,
+                 UnaryBoolLogicVOpConversion<tx::BoolNotV, boolNotVFuncName>,
+                 BinaryBoolLogicVOpConversion<tx::BoolAndV, boolAndVFuncName>,
+                 BinaryBoolLogicVOpConversion<tx::BoolXorV, boolXorVFuncName>,
+                 BinaryBoolLogicVOpConversion<tx::BoolOrV, boolOrVFuncName>,
                  RdmaWdmaOpConversion<tx::RdmaOp,rdmaFuncName>,
                  RdmaWdmaOpConversion<tx::WdmaOp,wdmaFuncName>,
+                 UnaryOpConversion<tx::MemCopyOp, memcpyFuncName>,
                  TransformOpConversion<tx::Transpose,transposeFuncName>,
                  TransformOpConversion<tx::Nchw2nhwc,nchw2nhwcFuncName>,
                  TransformOpConversion<tx::Nhwc2nchw,nhwc2nchwFuncName>,

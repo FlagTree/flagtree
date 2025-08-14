@@ -18,6 +18,8 @@
 #include "hrt_common.h"
 #include "hrt_interface.h"
 
+#include "profiler.h"
+
 namespace at {
 namespace detail {
 
@@ -39,6 +41,8 @@ bool init_device(std::string chip_out) {
     return true;
   }
 
+  uint32_t eventId = EVENT_INIT;
+  PROFILE_CALL(addOrderPorfile, TIME_RUNTIME, TIME_INIT_START, &eventId);
   bool is_succ_init = false;
   auto guard = std::shared_ptr<void>(nullptr, [&is_succ_init](void *) {
     if (!is_succ_init) {
@@ -93,6 +97,7 @@ bool init_device(std::string chip_out) {
   g_runtime_initialized = true;
   printf("====init_txda_device====success=======\n");
   is_succ_init = true;
+  PROFILE_CALL(addOrderPorfile, TIME_RUNTIME, TIME_INIT_END, &eventId);
   return true;
 }
 
@@ -102,6 +107,10 @@ bool cleanup_device() {
   if (!g_runtime_initialized) {
     return true;
   }
+
+  uint32_t eventId = EVENT_INIT;
+  PROFILE_CALL(addOrderPorfile, TIME_RUNTIME, TIME_RELEASE_START, &eventId);
+
   for (auto *dev : g_txda_devices) {
     // Reset and release each device
     TsmNpuPowerOff(dev);
@@ -112,6 +121,9 @@ bool cleanup_device() {
   TsmDeInitRuntime();
   g_runtime_initialized = false;
   printf("====cleanup_txda_runtime==== release success=======\n");
+
+  PROFILE_CALL(addOrderPorfile, TIME_RUNTIME, TIME_RELEASE_END, &eventId);
+  PROFILE_CALL(printProfileAll);
   return true;
 }
 
@@ -121,6 +133,7 @@ int current_stream(int id) { return stream_id; }
 
 uint64_t get_device() { return (uint64_t)g_txda_devices[device_id]; }
 
+int device_count() { return (int)1; }
 // TODO:
 bool is_available() { return true; }
 
@@ -135,6 +148,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("set_device", &set_device, "set tx device");
   m.def("cleanup_device", &cleanup_device, "cleanup tx device");
   m.def("synchronize", &synchronize, "synchronize all threads in block");
+  m.def("device_count", &device_count, "get device count");
 }
 
 struct TXDADeviceAllocator final : at::Allocator {
@@ -206,26 +220,30 @@ at::Tensor txda__copy_from(const at::Tensor &self, const at::Tensor &dst,
     //        (uint64_t)self.storage().data_ptr().get(),
     //        (uint64_t)dst.storage().data_ptr().get(),
     //        (uint64_t)self.storage().nbytes());
-
+    uint32_t eventId = EVENT_INIT;
+    PROFILE_CALL(addOrderPorfile, TIME_RUNTIME, TIME_H2D_START, &eventId);
     auto ret = TsmMemcpyH2D((uint64_t)dst.storage().data_ptr().get(),
                             (const void *)self.storage().data_ptr().get(),
                             self.storage().nbytes());
     if (ret != RET_SUCCESS) {
       PyErr_SetString(PyExc_RuntimeError, "Failed to TsmMemcpyH2D");
     }
+    PROFILE_CALL(addOrderPorfile, TIME_RUNTIME, TIME_H2D_END, &eventId);
     TORCH_CHECK(ret == RET_SUCCESS, "==H2DMemArray Error===");
   } else {
     // printf("D2H self: 0x%lx, dst: 0x%lx, size: 0x%lx\n",
     //        (uint64_t)self.storage().data_ptr().get(),
     //        (uint64_t)dst.storage().data_ptr().get(),
     //        (uint64_t)self.storage().nbytes());
-
+    uint32_t eventId = EVENT_INIT;
+    PROFILE_CALL(addOrderPorfile, TIME_RUNTIME, TIME_D2H_START, &eventId);
     auto ret = TsmMemcpyD2H((const void *)dst.storage().data_ptr().get(),
                             (uint64_t)self.storage().data_ptr().get(),
                             self.storage().nbytes());
     if (ret != RET_SUCCESS) {
       PyErr_SetString(PyExc_RuntimeError, "Failed to TsmMemcpyD2H");
     }
+    PROFILE_CALL(addOrderPorfile, TIME_RUNTIME, TIME_D2H_END, &eventId);
     TORCH_CHECK(ret == RET_SUCCESS, "==D2HMemArray Error===");
   }
   return dst;

@@ -1,6 +1,4 @@
 //===------------------------ bf16_fp32.c ---------------------------------===//
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -12,7 +10,7 @@
 
 void __BF16_FP32(uint64_t *src, uint64_t *dst, uint32_t elem_count) {
   // Create command buffer.
-  TsmConvert *cmd = TsmNewConvert();
+  TsmConvert *cmd = g_intrinsic()->convert_pointer;
   TsmConvertInstr inst = {I_CGRA,
                           {
                               0,
@@ -25,7 +23,6 @@ void __BF16_FP32(uint64_t *src, uint64_t *dst, uint32_t elem_count) {
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);
-
+  TsmWaitfinish();
   // Destroy the command buffer.
-  TsmDeleteConvert(cmd);
 }

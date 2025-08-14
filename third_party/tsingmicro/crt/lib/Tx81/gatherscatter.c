@@ -1,7 +1,5 @@
 //===------------------------ gatherscatter.c -----------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -19,7 +17,7 @@ void __GatherScatter(uint64_t *src, uint64_t *dst, uint32_t bytes,
                      uint32_t dst_strideW, uint32_t dst_iterN,
                      uint32_t dst_iterH, uint32_t dst_iterW) {
   // Create command buffer.
-  TsmDataMove *cmd = TsmNewDataMove();
+  TsmDataMove *cmd = g_intrinsic()->datamove_pointer;
   TsmDataMoveInstr inst = {I_CGRA,
                            {
                                0,
@@ -38,7 +36,6 @@ void __GatherScatter(uint64_t *src, uint64_t *dst, uint32_t bytes,
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);
-
+  TsmWaitfinish();
   // Destroy the command buffer.
-  TsmDeleteDataMove(cmd);
 }

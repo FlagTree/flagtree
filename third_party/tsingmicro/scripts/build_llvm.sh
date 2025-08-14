@@ -1,4 +1,5 @@
 #!/bin/bash
+# hash a66376b0dc3b2ea8a84fda26faca287980986f78
 
 if [ -z "${LLVM_PROJECT+x}" ]; then
     echo "Please set the environment variable “LLVM_PROJECT”." 1>&2

@@ -1,7 +1,5 @@
 //===------------------------ channelnorm.c -------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,7 +16,7 @@ void __ChannelNorm(uint64_t *src, uint64_t *dst, uint16_t n, uint16_t h,
   int dtype_size = bit_width / 8;
   int cx = c / calign_base;
 
-  TsmDataMove *dm = TsmNewDataMove();
+  TsmDataMove *dm = g_intrinsic()->datamove_pointer;
   TsmDataMoveInstr dm_param = {I_CGRA,
                                {
                                    0,
@@ -51,6 +49,7 @@ void __ChannelNorm(uint64_t *src, uint64_t *dst, uint16_t n, uint16_t h,
     dm->GatherScatter(&dm_param, (uint64_t)src, (uint64_t)dst, elem_size,
                       &src_it, &dst_it);
     TsmExecute(&dm_param);
+    TsmWaitfinish();
   }
 
   // align c0
@@ -77,9 +76,8 @@ void __ChannelNorm(uint64_t *src, uint64_t *dst, uint16_t n, uint16_t h,
     dm->GatherScatter(&dm_param, (uint64_t)src + src_offset,
                       (uint64_t)dst + dst_offset, elem_size, &src_it, &dst_it);
     TsmExecute(&dm_param);
+    TsmWaitfinish();
   }
-
-  TsmDeleteDataMove(dm);
 }
 
 void __DechannelNorm(uint64_t *src, uint64_t *dst, uint16_t n, uint16_t h,
@@ -88,7 +86,7 @@ void __DechannelNorm(uint64_t *src, uint64_t *dst, uint16_t n, uint16_t h,
   int dtype_size = bit_width / 8;
   int cx = c / calign_base;
 
-  TsmDataMove *dm = TsmNewDataMove();
+  TsmDataMove *dm = g_intrinsic()->datamove_pointer;
   TsmDataMoveInstr dm_param = {I_CGRA,
                                {
                                    0,
@@ -109,7 +107,7 @@ void __DechannelNorm(uint64_t *src, uint64_t *dst, uint16_t n, uint16_t h,
     src_it.iteration0 = cx;
     src_it.stride1 = elem_size;
     src_it.iteration1 = h * w;
-    src_it.stride2 = h * w * elem_size;
+    src_it.stride2 = cx * h * w * elem_size;
     src_it.iteration2 = n;
 
     dst_it.stride0 = elem_size;
@@ -122,6 +120,7 @@ void __DechannelNorm(uint64_t *src, uint64_t *dst, uint16_t n, uint16_t h,
     dm->GatherScatter(&dm_param, (uint64_t)src, (uint64_t)dst, elem_size,
                       &src_it, &dst_it);
     TsmExecute(&dm_param);
+    TsmWaitfinish();
   }
 
   // align c0
@@ -148,7 +147,6 @@ void __DechannelNorm(uint64_t *src, uint64_t *dst, uint16_t n, uint16_t h,
     dm->GatherScatter(&dm_param, (uint64_t)src + src_offset,
                       (uint64_t)dst + dst_offset, elem_size, &src_it, &dst_it);
     TsmExecute(&dm_param);
+    TsmWaitfinish();
   }
-
-  TsmDeleteDataMove(dm);
 }

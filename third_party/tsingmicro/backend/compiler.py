@@ -42,53 +42,71 @@ def _dump_ir_if_needed(files):
         shutil.copy(f, os.path.join(path, os.path.basename(f)))
 
 
+def _is_use_profile():
+    return os.getenv("USE_PROFILE", "").strip() == "1"
+
+
 # Build a accelerator controller ELF
-def compile_accelerator():
+def compile_accelerator(src, metadata):
     # TODO : cache mechanism
-    # name = "npu_" + name
-    # key = hashlib.sha256(src.encode("utf-8")).hexdigest()
-    # cache = get_cache_manager(key)
-    # cache_path = cache.get_file(f"{name}.so")
+    name = "kernel"
+    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    cache = get_cache_manager(key)
+    cache_path = cache.get_file(f"{name}.so")
 
-    # if cache_path is None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # FIXME: Hardcoded path
-        #dst_path = os.path.join(tmpdir, f"{name}.so")
-        dst_path = "/tmp/kernel.so"
-        libc_lib = os.path.join(_get_tx8_deps_path("Xuantie-900-gcc-elf-newlib-x86_64-V2.10.2"), "riscv64-unknown-elf",
-                                "lib", "rv64imafdc", "lp64d")
-        # libvr_path = os.path.join(os.path.dirname(__file__), "lib")
-        libvr_path = os.path.join(os.path.dirname(__file__), "lib")
-        clang_path = _get_llvm_bin_path("clang")
-        lld_path = _get_llvm_bin_path("ld.lld")
+    if cache_path is None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dst_path = os.path.join(tmpdir, f"{name}.so")
+            gcc_path = os.path.join(_get_tx8_deps_path("Xuantie-900-gcc-elf-newlib-x86_64-V2.10.2"), "bin",
+                                    "riscv64-unknown-elf-gcc")
+            libc_lib = os.path.join(_get_tx8_deps_path("Xuantie-900-gcc-elf-newlib-x86_64-V2.10.2"),
+                                    "riscv64-unknown-elf", "lib", "rv64imfdc", "lp64d")
+            libgcc_lib = os.path.join(_get_tx8_deps_path("Xuantie-900-gcc-elf-newlib-x86_64-V2.10.2"), "lib", "gcc",
+                                      "riscv64-unknown-elf", "10.4.0", "rv64imfdc", "lp64d")
+            libvr_path = os.path.join(os.path.dirname(__file__), "lib")
+            clang_path = _get_llvm_bin_path("clang")
+            lld_path = _get_llvm_bin_path("ld.lld")
 
-        tx8_lib = _get_tx8_deps_path("lib")
-        # Build shared library for simulator or hardware
-        if (os.getenv("USE_SIM_MODE", "0").lower() in ("1", "true", "yes")):
-            subprocess.check_call([
-                clang_path, "-shared", "-O2", f"-fuse-ld={lld_path}", "-nostdlib", "-nostartfiles",
-                "-Wl,--allow-shlib-undefined", "-Wl,--no-dynamic-linker",
-                # FIXME: Hardcoded path
-                "/tmp/kernel.o", f"-L{libvr_path}", f"-L{tx8_lib}", "-Wl,--whole-archive",
-                "-lvr",  # Wrapper API of Tx81 intrinsic
-                "-ltriton_cmodel", "-ltx8be_op_cmodel", "-Wl,--no-whole-archive", "-lm", "-o", dst_path
-            ])
-        else:
-            # Link wrapper, kernel with Tx81 crt and intrinsics(libinstr_tx81.a)
-            subprocess.check_call([
-                clang_path, "-shared", "--target=riscv64-unknown-linux-gnu", "-march=rv64imafdc", "-O2",
-                f"-fuse-ld={lld_path}", "-nostdlib", "-nostartfiles", "-Wl,--allow-shlib-undefined", "-mabi=lp64d",
-                "-Wl,--no-dynamic-linker",
-                # FIXME: Hardcoded path
-                "/tmp/kernel.o", f"-L{libvr_path}", f"-L{libc_lib}", f"-L{tx8_lib}", "-Wl,--whole-archive",
-                "-linstr_tx81",  # Tx81 intrinsic API
-                "-lvr",  # Wrapper API of Tx81 intrinsic
-                "-Wl,--no-whole-archive", "-lm", "-o", dst_path
-            ])
+            tx8_lib = _get_tx8_deps_path("lib")
+            # Build shared library for simulator or hardware
+            if (os.getenv("USE_SIM_MODE", "0").lower() in ("1", "true", "yes")):
+                subprocess.check_call([
+                    clang_path, "-shared", "-O2", f"-fuse-ld={lld_path}", "-nostdlib", "-nostartfiles",
+                    "-Wl,--allow-shlib-undefined", "-Wl,--no-dynamic-linker",
+                    # FIXME: Hardcoded path
+                    "/tmp/kernel.o", f"-L{libvr_path}", f"-L{tx8_lib}", "-Wl,--whole-archive",
+                    "-lvr",  # Wrapper API of Tx81 intrinsic
+                    "-ltriton_cmodel", "-ltx8be_op_cmodel", "-Wl,--no-whole-archive", "-lm", "-o", dst_path
+                ])
+            else:
+                # Link wrapper, kernel with Tx81 crt and intrinsics(libinstr_tx81.a)
+                gcc_args = [
+                    gcc_path, "-shared", "-march=rv64imfdc", "-O2", "-nostartfiles", "-Wl,--allow-shlib-undefined",
+                    "-mabi=lp64d", "-Wl,--no-dynamic-linker",
+                    # FIXME: Hardcoded path
+                    "/tmp/kernel.o", f"-L{libvr_path}", f"-L{libc_lib}", f"-L{libgcc_lib}", f"-L{tx8_lib}",
+                    "-Wl,--start-group", "-lcommon_util", "-linstr_tx81",  # Tx81 intrinsic API
+                    "-llibc_stub", "-lvr",  # Wrapper API of Tx81 intrinsic
+                    "-Wl,--end-group",
+                    # "-lm",
+                    # "-Wl,--gc-sections"
+                    "-lc", "-lgcc", "-o", dst_path
+                ]
 
-        _dump_ir_if_needed([dst_path])
-        with open(dst_path, 'rb') as f:
-            so = f.read()
+                if _is_use_profile():
+                    gcc_args.append("-lprofiler_riscv")
+
+                subprocess.check_call(gcc_args)
+
+            with open(dst_path, 'rb') as f:
+                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+                _dump_ir_if_needed([cache_path])
+    else:
+        print("cache_path: ", cache_path, flush=True)
+
+    with open(cache_path, 'rb') as fd_out:
+        so = fd_out.read()
+        metadata["kernel_path"] = cache_path
         return so
 
 
@@ -103,7 +121,7 @@ def _ttir_to_coreir(mod):
         _dump_ir_if_needed([src_path])
         subprocess.check_call([
             triton_opt_path, src_path, "--triton-to-core-dialects", "--core-dialects-to-mk",
-            "--one-shot-bufferize=allow-return-allocs-from-loops",
+            "--legalize-tensor-form-loops", "--one-shot-bufferize", "--canonicalize",
             #"--mlir-print-debuginfo",
             "-o", dst_path
         ])
@@ -147,7 +165,7 @@ def _coreir_to_txir(mod):
         triton_opt_path = _get_tsm_opt_path()
         _dump_ir_if_needed([src_path])
         subprocess.check_call([
-            triton_opt_path, src_path, "--expand-strided-metadata",
+            triton_opt_path, src_path, "--linalg-tiling", "--expand-strided-metadata",
             "--lower-affine",  # convert affine.load to memref.load, need exec before tx81-to-llvm since we will support spm offset to memref.load
             "--mk-to-tx81", "--cse",  # unused memref.subview/memref.reinterpret
             #"--mlir-print-debuginfo",
@@ -174,9 +192,11 @@ def _txir_to_llir(mod, metadata):
         args = [
             triton_opt_path, src_path,
             # Use tx81-memref-to-llvm to replace "--finalize-memref-to-llvm".
-            "--tx81-memref-to-llvm", "--convert-scf-to-cf", "--test-math-polynomial-approximation",
+            "--tx81-memref-to-llvm", "--addr-to-llvm", "--convert-scf-to-cf", "--test-math-polynomial-approximation",
             "--convert-math-to-llvm", "--convert-cf-to-llvm",  # need exec before "convert-func-to-llvm"
             "--convert-func-to-llvm",  # need exec before "kernel-arg-buffer", otherwise un-rank memref will translate to int(rank) + ptr
+            # FIXME: Move this pass into the pipeline from coreir to txir.
+            "--expand-strided-metadata",
             # Other unconverted memref ops, eg: memref.global from scan op conversion
             "--finalize-memref-to-llvm"
         ]
@@ -198,6 +218,18 @@ def _txir_to_llir(mod, metadata):
         subprocess.check_call(args)
 
         _dump_ir_if_needed([llvmir_path])
+
+        llvm_file = os.getenv("CUSTOMIZED_IR", "")
+        if (llvm_file != ""):
+            print(f"get CUSTOMIZED_IR path:{llvmir_path}")
+            llvmir_path = os.getenv("TRITON_DUMP_PATH", "")
+
+            if not llvmir_path:
+                print("TRITON_DUMP_PATH not find!")
+                return
+
+            llvmir_path = os.path.join(llvmir_path, llvm_file)
+            print(f"!!!!!!!!!!!!!!!!!!using customized ir:{llvmir_path}")
 
         # Get spm memory use metadata
         from mlir.ir import Context, Module
@@ -268,20 +300,24 @@ def _llir_to_bin(llir: str, metadata):
         #dst_path = os.path.join(tmpdir, "kernel.so")
         dst_path = "/tmp/kernel.o"
         Path(src_path).write_text(llir)
+        _dump_ir_if_needed([src_path])
         clang_path = _get_llvm_bin_path("clang++")
 
         compile_args = [clang_path, src_path, "-O2", "-c", "-fPIC", "-o", dst_path]
 
         # Add RISC-V specific flags when not in simulation mode
         if not sim_mode:
-            compile_args.extend(["--target=riscv64-unknown-linux-gnu", "-march=rv64imafdc"])
+            compile_args.extend(["--target=riscv64-unknown-elf", "-march=rv64imfdc"])
+
+        if _is_use_profile():
+            compile_args.append("-DUSE_PROFILE")
 
         subprocess.check_call(compile_args)
 
         _dump_ir_if_needed([dst_path])
 
         # compile kernel and intrinsic wrapper to shared library
-        return compile_accelerator()
+        return compile_accelerator(llir, metadata)
 
 
 @dataclass(frozen=True)
@@ -303,6 +339,8 @@ class TXDAOptions:
     allow_fp8e4nv: bool = False
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     sanitize_overflow: bool = True
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
+    deprecated_fp8_dtypes: Tuple[str] = ()
 
     def __post_init__(self):
         pass
@@ -371,4 +409,6 @@ class TXDABackend(BaseBackend):
 
     # The CPU backend does not use any extra python modules, return an empty dictionary
     def get_module_map(self) -> Dict[str, ModuleType]:
-        return {}
+        # FIXME: Need change folder name from cpu into tsingmicro
+        from triton.language.extra.txda import libdevice
+        return {"triton.language.extra.libdevice": libdevice}

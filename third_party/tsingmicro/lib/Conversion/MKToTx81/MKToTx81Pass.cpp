@@ -1,7 +1,5 @@
 //===--------------------- MKToTx81Pass.cpp -------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,6 +15,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "tsingmicro-tx81/Conversion/MKToTx81/MKToTx81.h"
 #include "tsingmicro-tx81/Dialect/IR/Tx81Dialect.h"
+#include "utils/utils.h"
 #include "llvm/Support/Debug.h"
 #include <memory>
 #include <mlir/IR/DialectRegistry.h>
@@ -45,40 +44,6 @@ public:
                     tx::Tx81Dialect, LLVM::LLVMDialect>();
   }
 
-  bool isOperandMemorySpaceSPM(Value operand) {
-    Operation *lastOp = operand.getDefiningOp();
-    Operation *op = lastOp;
-
-    do {
-      if (isa<memref::AllocOp>(op))
-        return true;
-      else if (isa<memref::GetGlobalOp>(op))
-        return false;
-      else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        // Here we assume that yieldResults (inner loop region) and
-        // loopResults (outer loop region) correspond one-to-one to obtain the
-        // inner loop region definingOp of the outer loop region value.
-        // FIXME:  Need reference the standard loop analysis to refactor this.
-
-        auto yieldResults = forOp.getYieldedValues();
-        mlir::ResultRange loopResults = forOp.getLoopResults().value();
-        assert(yieldResults.size() == loopResults.size());
-        auto idx = std::distance(
-            loopResults.begin(),
-            std::find(loopResults.begin(), loopResults.end(), operand));
-        operand = yieldResults[idx];
-        if (operand.getDefiningOp() == nullptr) {
-          operand = forOp.getInitArgs()[idx];
-        }
-      } else {
-        operand = op->getOperand(0);
-      }
-      lastOp = op;
-      op = operand.getDefiningOp();
-    } while (op);
-    return false;
-  }
-
   void runOnOperation() override {
     auto moduleOp = getOperation();
 
@@ -94,32 +59,16 @@ public:
       if (isa<memref::CopyOp>(op)) {
         auto copyOp = cast<memref::CopyOp>(op);
         op->setAttr("srcSpm",
-                    IntegerAttr::get(IntegerType::get(op->getContext(), 32),
-                                     llvm::APInt(32, isOperandMemorySpaceSPM(
-                                                         copyOp.getSource()))));
+                    IntegerAttr::get(
+                        IntegerType::get(op->getContext(), 32),
+                        llvm::APInt(32, triton::utils::isOperandMemorySpaceSPM(
+                                            copyOp.getSource()))));
         op->setAttr("dstSpm",
-                    IntegerAttr::get(IntegerType::get(op->getContext(), 32),
-                                     llvm::APInt(32, isOperandMemorySpaceSPM(
-                                                         copyOp.getTarget()))));
+                    IntegerAttr::get(
+                        IntegerType::get(op->getContext(), 32),
+                        llvm::APInt(32, triton::utils::isOperandMemorySpaceSPM(
+                                            copyOp.getTarget()))));
       }
-    });
-
-    // Transpose operand b from (K, N) to (N, K)
-    moduleOp->walk([&](linalg::MatmulOp op) {
-      OpBuilder builder(op);
-
-      auto b = op->getOperand(1);
-
-      auto memType = cast<MemRefType>(b.getType());
-      auto oldShape = memType.getShape();
-      llvm::SmallVector<int64_t> newShape({oldShape[1], oldShape[0]});
-      auto transposeInit = builder.create<memref::AllocOp>(
-          op->getLoc(), MemRefType::get(newShape, memType.getElementType()));
-
-      SmallVector<int64_t> perm({1, 0});
-      auto linalgTranspose = builder.create<linalg::TransposeOp>(
-          op->getLoc(), b, transposeInit, perm);
-      op->setOperand(1, transposeInit);
     });
 
     RewritePatternSet patterns(&getContext());
@@ -135,15 +84,9 @@ public:
         affine::AffineDialect, scf::SCFDialect, memref::MemRefDialect,
         cf::ControlFlowDialect, tx::Tx81Dialect, LLVM::LLVMDialect>();
 
-    // FIXME: Support copy rank > 4. Spm to Spm copy has supported
-    target.addDynamicallyLegalOp<memref::CopyOp>([&](memref::CopyOp op) {
-      auto shape = op.getSource().getType().getShape();
-      return shape.size() > 4 &&
-             !(op->getAttrOfType<IntegerAttr>("srcSpm").getInt() &&
-               op->getAttrOfType<IntegerAttr>("dstSpm").getInt());
-    });
+    target.addIllegalOp<memref::CopyOp>();
 
-    target.addLegalOp<ModuleOp>();
+    target.addLegalOp<ModuleOp, linalg::YieldOp>();
 
     triton::populateMKToTx81ConversionPatterns(patterns);
 
@@ -157,9 +100,10 @@ public:
     // memref::LoadOp/memref::StoreOp lowering
     moduleOp->walk([&](Operation *op) {
       if (isa<memref::LoadOp, memref::StoreOp>(op)) {
-        bool isSpm = isa<memref::LoadOp>(op)
-                         ? isOperandMemorySpaceSPM(op->getOperand(0))
-                         : isOperandMemorySpaceSPM(op->getOperand(1));
+        bool isSpm =
+            isa<memref::LoadOp>(op)
+                ? triton::utils::isOperandMemorySpaceSPM(op->getOperand(0))
+                : triton::utils::isOperandMemorySpaceSPM(op->getOperand(1));
 
         op->setAttr("isSpm",
                     IntegerAttr::get(IntegerType::get(op->getContext(), 32),

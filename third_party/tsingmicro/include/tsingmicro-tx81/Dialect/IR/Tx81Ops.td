@@ -1,8 +1,6 @@
 
 //===---------------------- Tx81Ops.td ------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -65,6 +63,7 @@ def RdmaOp : Tx81Op<"rdma", [
     Variadic<Index>:$src_strides,    // src strides
     Variadic<Index>:$dst_shape,      // dst shape
     Variadic<Index>:$dst_strides,    // dst strides
+    I32Attr:$rank,                   // rank
     I32Attr:$elem_bytes,             // elem bytes
     I32Attr:$fmt                     // elem fmt
   );
@@ -89,11 +88,33 @@ def WdmaOp : Tx81Op<"wdma", [
     Variadic<Index>:$src_strides,    // src strides
     Variadic<Index>:$dst_shape,      // dst shape
     Variadic<Index>:$dst_strides,    // dst strides
+    I32Attr:$rank,                   // rank
     I32Attr:$elem_bytes,             // elem bytes
     I32Attr:$fmt                     // elem fmt
   );
 
   let results = (outs I64:$dst); // The dest address in DDR
+}
+
+def MemCopyOp : Tx81Op<"memcpy", [
+    MemoryEffects<[MemRead, MemWrite]>
+]> {
+
+  let summary = "Copy data from local SPM(sram) to local SPM(sram)";
+
+  let description = [{
+    Copy data from local SPM(sram) to local SPM(sram).
+  }];
+
+  let arguments = (
+    ins
+    MemRefOrInt:$input,             // The source address in DDR
+    MemRefOrInt:$out,               // Out vector address
+    MemRefOrInt:$elem_count,        // elem count
+    I32Attr:$fmt                    // elem fmt
+  );
+
+  let results = (outs I64:$dst); // The dest address in SPM
 }
 
 // =============================================================================
@@ -265,8 +286,8 @@ def AbsVVOp : UnaryOp<"absvv"> {
 def SqrtVVOp : UnaryOp<"sqrtvv", [Pure, Elementwise]> {}
 def RsqrtVVOp : UnaryOp<"rsqrtvv", [Pure, Elementwise]> {}
 def NegVVOp : UnaryOp<"negvv", [Pure, Elementwise]> {}
-def RecipVVOp : Tx81Op<"recipvv", [Pure, Elementwise]> {}
-def SquareVVOp : Tx81Op<"squarevv", [Pure, Elementwise]> {}
+def RecipVVOp : UnaryOp<"recipvv", [Pure, Elementwise]> {}
+def SquareVVOp : UnaryOp<"squarevv", [Pure, Elementwise]> {}
 
 class BinaryVVOp<string mnemonic, list<Trait> traits = []> :
     Tx81Op<mnemonic, traits # [Elementwise]> {
@@ -466,6 +487,44 @@ def XorVV : BinaryLogicVVOp<"xorvv"> {
   let summary = "XOR operation on elements at the same position. If the element is not 0, it is represented as 1.";
 }
 
+class BoolUnaryLogicVVOp<string mnemonic, list<Trait> traits = []> :
+    Tx81Op<mnemonic, traits # [Elementwise]> {
+  let arguments = (ins
+    MemRefOrInt:$input,              // input vector address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$out,  // Out vector address
+    MemRefOrInt:$elem_count      // Number of input elements
+  );
+  let results = (outs Variadic<I64>:$dst);
+}
+
+def BoolNotV : BoolUnaryLogicVVOp<"boolnotvv"> {
+  let summary = "Not operation on elements at each bit position. src_elem_num must be an integer multiple of 8";
+}
+
+class BoolBinaryLogicVVOp<string mnemonic, list<Trait> traits = []> :
+    Tx81Op<mnemonic, traits # [Elementwise]> {
+  let arguments = (ins
+    MemRefOrInt:$input0,              // First input vector address
+    MemRefOrInt:$input1,              // Second vector address
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$out,  // Out vector address
+    MemRefOrInt:$elem_count      // Number of input elements
+  );
+  let results = (outs Variadic<I64>:$dst);
+}
+
+def BoolAndV : BoolBinaryLogicVVOp<"boolandvv"> {
+  let summary = "And operation on elements at each bit position. src_elem_num must be an integer multiple of 8";
+}
+
+def BoolXorV : BoolBinaryLogicVVOp<"boolxorvv"> {
+  let summary = "Xor operation on elements at each bit position. src_elem_num must be an integer multiple of 8";
+}
+
+def BoolOrV : BoolBinaryLogicVVOp<"boolorvv"> {
+  let summary = "Or operation on elements at each bit position. src_elem_num must be an integer multiple of 8";
+}
+
+
 // =============================================================================
 // 4.13. TsmTranscendental
 // =============================================================================
@@ -594,10 +653,10 @@ class ZeroPointConvertOp<string mnemonic, list<Trait> traits> :
     Tx81Op<mnemonic, traits> {
   let arguments = (ins
     MemRefOrInt:$src,
-    UI32Attr:$zp,
+    Arg<MemRefOrInt, "the target memref", [MemWrite]>:$dst,
+    UI32Attr:$zero_point,
     UI32Attr:$elem_count
   );
-  let results = (outs UI64:$dst);
 }
 
 def INT8ToFP16Op : ZeroPointConvertOp<"int8_fp16", []> {
@@ -690,8 +749,8 @@ def TF32ToINT16Op : RoundConvertOp<"tf32_int16", []> {
 def TF32ToINT32Op : RoundConvertOp<"tf32_int32", []> {
   let summary = "Data format from tf32 to int32";
 }
-def TF32ToFP32Op : RoundConvertOp<"tf32_fp32", []> {
-  let summary = "Data format from tf32 to fp32";
+def TF32ToBF16Op : RoundConvertOp<"tf32_bf16", []> {
+  let summary = "Data format from tf32 to bf16";
 }
 
 class NormalConvertOp<string mnemonic, list<Trait> traits> :
@@ -728,8 +787,39 @@ def FP16ToTF32Op : NormalConvertOp<"fp16_tf32", []> {
 def TF32ToFP16Op : NormalConvertOp<"tf32_fp16", []> {
   let summary = "Data format from tf32 to fp16";
 }
-def TF32ToBF16Op : NormalConvertOp<"tf32_bf16", []> {
-  let summary = "Data format from tf32 to bf16";
+def TF32ToFP32Op : NormalConvertOp<"tf32_fp32", []> {
+  let summary = "Data format from tf32 to fp16";
+}
+
+// Micro scaling format conversion operations
+def FP8E4M3ToBF16Op : NormalConvertOp<"fp8E4M3_bf16", []> {
+  let summary = "Convert data format from FP8 (4 exponent bits, 3 mantissa bits) to BF16";
+}
+def FP8E5M2ToBF16Op : NormalConvertOp<"fp8E5M2_bf16", []> {
+  let summary = "Convert data format from FP8 (5 exponent bits, 2 mantissa bits) to BF16";
+}
+def FP4E2M1ToBF16Op : NormalConvertOp<"fp4E2M1_bf16", []> {
+  let summary = "Convert data format from FP4 (2 exponent bits, 1 mantissa bit) to BF16";
+}
+
+def MXFPScaleBF16Op : Tx81Op<"MXFP_scale_bf16", []> {
+  let summary = "Scaling up bf16 tensor with e8m0 scale.";
+
+  let description = [{
+    Performs conversion of MXFP numbers to BF16/FP16 format according to the
+    Open Compute Project (OCP) microscaling formats specification v1.0.
+    See: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+  }];
+
+  let arguments = (
+    ins
+    MemRefOrInt:$src,          // Source tensor address in SPM
+    MemRefOrInt:$scale,        // Scale factor tensor address in SPM
+    MemRefOrInt:$dst,          // Destination tensor address in SPM
+    I32Attr:$elemCount         // Number of elements
+  );
+
+  let results = (outs Variadic<I64>:$output);  // Output tensor address in SPM
 }
 
 // =============================================================================
@@ -753,31 +843,19 @@ def CountOp : Tx81Op<"count", [Pure]> {
 }
 
 def MemsetOp : Tx81Op<"memset", [
-    AttrSizedOperandSegments,
-    PredOpTrait<"Constrain shape to 4d.",
-      CPred<"cast<tx::MemsetOp>($_op).getShape().size() == 4">>,
-    PredOpTrait<"Constrain strides to 3d.",
-      CPred<"cast<tx::MemsetOp>($_op).getStrides().size() == 3">>
-      ]> {
+  AttrSizedOperandSegments
+]> {
   let summary = "Write given `value` to range of address on SPM(sram)";
 
   let arguments = (
     ins
-    MemRefOrInt:$src,            // SPM address to be memset
+    MemRefOrInt:$target,            // SPM address to be memset
     I32:$value,                  // Value to be written
-    Variadic<Index>:$shape,      // NHWC shape
-    Variadic<Index>:$strides,    // 3 dim strides
+    Variadic<Index>:$dst_shape,      // src shape
+    Variadic<Index>:$dst_strides,    // src strides
+    I32Attr:$rank,                   // rank
     I16Attr:$fmt
   );
-
-  let builders = [
-    OpBuilder<(ins "MemRefType":$resultType,
-      "Value":$source, "Value":$value,
-      "ArrayRef<Value>":$shape,
-      "ArrayRef<Value>":$strides,
-      "IntegerAttr":$fmt
-    )>
-  ];
 
   // The address updated by memset in SPM
   let results = (outs MemRefOrInt:$dst);

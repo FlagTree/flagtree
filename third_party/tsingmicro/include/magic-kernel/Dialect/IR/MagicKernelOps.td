@@ -30,6 +30,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/IR/OpBase.td"
+include "mlir/IR/EnumAttr.td"
 
 //===----------------------------------------------------------------------===//
 // Bufferable type.
@@ -98,6 +99,20 @@ class MKTerElemWiseOp<string mnemonic> : MKOp<mnemonic, [Pure, Elementwise]> {
   let results = (outs AnyTensor:$dst);
 }
 
+// arith.bitcast doesn't support pointers
+def BitcastOp : MKOp<"bitcast", [Elementwise, Pure]> {
+    let summary = "Cast between types of the same bitwidth";
+
+    let arguments = (ins AnyType:$src);
+
+    let results = (outs AnyType:$result);
+
+    let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+
+    let hasFolder = 1;
+
+    // TODO: Add verifier
+}
 
 // =============================================================================
 // Memory allocation ops
@@ -235,6 +250,57 @@ def DotOp : MKOp<"dot", [DestinationStyleOpInterface]> {
   }];
 
   // let hasVerifier = 1;
+}
+
+
+// =============================================================================
+// Dot Scaled op
+// =============================================================================
+
+// Type for ScaleDotElemType kind of floats.
+def MK_ScaleDotElemTypeAttr : I32EnumAttr<
+    "ScaleDotElemType", "",
+    [
+      I32EnumAttrCase<"E4M3", 0, "e4m3">,
+      I32EnumAttrCase<"E5M2", 1, "e5m2">,
+      I32EnumAttrCase<"E2M3", 2, "e2m3">,
+      I32EnumAttrCase<"E3M2", 3, "e3m2">,
+      I32EnumAttrCase<"E2M1", 4, "e2m1">,
+      I32EnumAttrCase<"BF16", 5, "bf16">,
+      I32EnumAttrCase<"FP16", 6, "fp16">
+    ]>{
+  let cppNamespace = "::mlir::triton";
+}
+
+def DotScaledOp : MKOp<"dot_scaled", [DestinationStyleOpInterface, AttrSizedOperandSegments]> {
+    let summary = "dot_scaled";
+
+    let description = [{
+        $dst = matrix_multiply(scale($a, $a_scale), scale($b, $b_scale)).
+        Where scale(x, s) is a function that applies the scale per block following microscaling spec.
+    }];
+
+    let arguments = (
+      ins
+      // inputs are floats if we have a type for them, otherwise (fp4),
+      // they are packed in pairs in an I8Tensor
+      TensorOrMemref:$a,
+      Optional<TensorOrMemref>:$a_scale,
+      TensorOrMemref:$b,
+      Optional<TensorOrMemref>:$b_scale,
+      Arg<TensorOrMemref, "the target memref", [MemWrite]>:$dst,
+      MK_ScaleDotElemTypeAttr:$a_elem_type,
+      MK_ScaleDotElemTypeAttr:$b_elem_type,
+      BoolAttr:$fastMath
+    );
+
+    let results = (outs Variadic<TensorOrMemref>:$res);
+
+      let extraClassDeclaration = [{
+    MutableOperandRange getDpsInitsMutable() {
+      return getDstMutable();
+    }
+  }];
 }
 
 // =============================================================================

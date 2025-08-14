@@ -1,7 +1,5 @@
 //===------------------------ rotate180.c ---------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,7 +13,7 @@ void __Rotate180(uint64_t *src, uint16_t src_n, uint16_t src_h, uint16_t src_w,
                  uint16_t src_c, uint64_t *dst, uint16_t dst_n, uint16_t dst_h,
                  uint16_t dst_w, uint16_t dst_c, uint16_t fmt) {
   // Create command buffer.
-  TsmDataMove *cmd = TsmNewDataMove();
+  TsmDataMove *cmd = g_intrinsic()->datamove_pointer;
   TsmDataMoveInstr inst = {I_CGRA,
                            {
                                0,
@@ -33,5 +31,4 @@ void __Rotate180(uint64_t *src, uint16_t src_n, uint16_t src_h, uint16_t src_w,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteDataMove(cmd);
 }

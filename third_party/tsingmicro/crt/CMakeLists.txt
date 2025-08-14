@@ -98,11 +98,18 @@ else()
   # Define RISC-V specific compile options
   set(RISCV_COMPILE_OPTIONS
     --target=${RISCV_TRIPLE}
-    -march=rv64gc
+    -march=rv64imfdc
     -mabi=lp64d
     -mcmodel=medany
     -DCONFIG_TX8_KERNEL_PRINTF_SUPPORT=1
   )
+
+  if (USE_PROFILE)
+    # 只需要定义，不需要链接，编译kernel.so的时候链接profile
+    set(RISCV_COMPILE_OPTIONS ${RISCV_COMPILE_OPTIONS}
+      -DUSE_PROFILE
+    )
+  endif()
 
   # Add the library target
   add_library(${VENDOR_RUNTIME_LIB} STATIC ${VENDOR_SOURCES})

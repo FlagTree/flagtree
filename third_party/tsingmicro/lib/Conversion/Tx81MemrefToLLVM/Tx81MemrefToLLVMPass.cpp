@@ -1,7 +1,5 @@
 //===------------------- Tx81MemrefToLLVMPass.cpp--------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 
@@ -57,10 +55,10 @@ public:
     RewritePatternSet patterns(context);
     ConversionTarget target(*context);
 
-    target.addIllegalOp<memref::AllocOp, memref::LoadOp, memref::StoreOp,
-                        memref::ReinterpretCastOp,
-                        memref::ExtractStridedMetadataOp,
-                        memref::ExtractAlignedPointerAsIndexOp>();
+    target.addIllegalOp<
+        memref::AllocOp, memref::LoadOp, memref::StoreOp,
+        memref::ReinterpretCastOp, memref::ExtractStridedMetadataOp,
+        memref::ExtractAlignedPointerAsIndexOp, memref::CastOp>();
 
     target.addLegalDialect<LLVM::LLVMDialect, memref::MemRefDialect,
                            func::FuncDialect, arith::ArithDialect,

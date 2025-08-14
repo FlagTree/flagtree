@@ -1,7 +1,5 @@
 //===------------------- Tx81MemrefToLLVM.cpp------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 
@@ -38,8 +36,14 @@ struct TsmMemRefAllocOpLowering : public AllocLikeOpLLVMLowering {
   std::tuple<Value, Value>
   allocateBufferFromSPM(ConversionPatternRewriter &rewriter, Location loc,
                         Operation *op) const {
-    // create GEPOp for spm address.
+    auto allocOp = dyn_cast<memref::AllocOp>(op);
     MemRefType memRefType = getMemRefResultType(op);
+
+    // Align spm address.
+    if (allocOp.getAlignment().has_value()) {
+      auto alignment = allocOp.getAlignment().value();
+      spmPointer = (spmPointer + alignment - 1) & ~(alignment - 1);
+    }
     Value spmOffsetOp = rewriter.create<LLVM::ConstantOp>(
         loc, getIndexType(), rewriter.getI32IntegerAttr(spmPointer));
     Type elementType = typeConverter->convertType(memRefType.getElementType());
@@ -61,9 +65,7 @@ struct TsmMemRefAllocOpLowering : public AllocLikeOpLLVMLowering {
     // update spm pointer
     auto elemCount = memRefType.getNumElements();
     auto bitWidth = memRefType.getElementTypeBitWidth();
-    auto allocOp = dyn_cast<memref::AllocOp>(op);
-    if (allocOp.getAlignment().has_value())
-      bitWidth = allocOp.getAlignment().value();
+
     uint64_t totalByte = (elemCount * bitWidth + 7) / 8;
     spmPointer += totalByte;
 
@@ -86,13 +88,39 @@ struct MemrefLoadOrStoreOpLowering : public ConvertOpToLLVMPattern<MemrefOp> {
   LogicalResult
   matchAndRewrite(MemrefOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
     auto type = op.getMemRefType();
+    bool isMaskEle = type.getElementType().isInteger(1);
+    MemRefDescriptor memRefDescriptor(adaptor.getMemref());
+    Type indexType = ConvertToLLVMPattern::getTypeConverter()->getIndexType();
 
-    Value dataPtr = ConvertToLLVMPattern::getStridedElementPtr(
-        op.getLoc(), type, adaptor.getMemref(), adaptor.getIndices(), rewriter);
+    Value dataPtr, Offset;
+    if (isMaskEle) {
+      dataPtr = memRefDescriptor.alignedPtr(rewriter, loc);
+      Value index = memRefDescriptor.offset(rewriter, loc);
+      auto indices = adaptor.getIndices();
+      for (int i = 0, e = indices.size(); i < e; ++i) {
+        Value stride = memRefDescriptor.stride(rewriter, loc, i);
+        Value increment = rewriter.create<LLVM::MulOp>(loc, indices[i], stride);
+        index = rewriter.create<LLVM::AddOp>(loc, index, increment);
+      }
+
+      Value MaskC = rewriter.create<LLVM::ConstantOp>(loc, indexType, 7);
+      Value ShrAmtC = rewriter.create<LLVM::ConstantOp>(loc, indexType, 3);
+      Offset = rewriter.create<LLVM::AndOp>(loc, index, MaskC);
+      Offset =
+          rewriter.create<LLVM::TruncOp>(loc, rewriter.getI8Type(), Offset);
+      index = rewriter.create<LLVM::AShrOp>(loc, index, ShrAmtC);
+      dataPtr = rewriter.create<LLVM::GEPOp>(
+          loc, memRefDescriptor.getElementPtrType(), rewriter.getI8Type(),
+          dataPtr, index);
+    } else {
+      dataPtr = ConvertToLLVMPattern::getStridedElementPtr(
+          op.getLoc(), type, adaptor.getMemref(), adaptor.getIndices(),
+          rewriter);
+    }
 
     // TODO: Add spm offset according the memory space
-    MemRefDescriptor memRefDescriptor(adaptor.getMemref());
     auto intPtrType = ConvertToLLVMPattern::getIntPtrType(
         memRefDescriptor.getElementPtrType().getAddressSpace());
     Value ptrValue =
@@ -136,12 +164,40 @@ struct MemrefLoadOrStoreOpLowering : public ConvertOpToLLVMPattern<MemrefOp> {
 
     // Wether need memoryspace cast
     if constexpr (std::is_same<MemrefOp, memref::LoadOp>()) {
-
-      rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, op.getType(), adjustedPtr,
-                                                0, false, op.getNontemporal());
+      if (isMaskEle) {
+        Value newVal = rewriter.create<LLVM::LoadOp>(loc, rewriter.getI8Type(),
+                                                     adjustedPtr, 0, false,
+                                                     op.getNontemporal());
+        Value Zero =
+            rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI8Type(), 0);
+        Value MaskC =
+            rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI8Type(), 1);
+        MaskC = rewriter.create<LLVM::ShlOp>(loc, MaskC, Offset);
+        newVal = rewriter.create<LLVM::AndOp>(loc, newVal, MaskC);
+        newVal = rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
+                                               newVal, Zero);
+        rewriter.replaceOp(op, ValueRange{newVal});
+      } else {
+        rewriter.replaceOpWithNewOp<LLVM::LoadOp>(
+            op, op.getType(), adjustedPtr, 0, false, op.getNontemporal());
+      }
     } else {
-      rewriter.replaceOpWithNewOp<LLVM::StoreOp>(
-          op, adaptor.getValue(), adjustedPtr, 0, false, op.getNontemporal());
+      Value StoreVal = adaptor.getValue();
+      if (isMaskEle) {
+        Value srcVal = rewriter.create<LLVM::LoadOp>(loc, rewriter.getI8Type(),
+                                                     adjustedPtr, 0, false,
+                                                     op.getNontemporal());
+        Value MaskC =
+            rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI8Type(), 1);
+        MaskC = rewriter.create<LLVM::ShlOp>(loc, MaskC, Offset);
+        Value TrueVal = rewriter.create<LLVM::OrOp>(loc, srcVal, MaskC);
+        Value FalseVal = rewriter.create<LLVM::XOrOp>(loc, TrueVal, MaskC);
+        StoreVal =
+            rewriter.create<LLVM::SelectOp>(loc, StoreVal, TrueVal, FalseVal);
+      }
+
+      rewriter.replaceOpWithNewOp<LLVM::StoreOp>(op, StoreVal, adjustedPtr, 0,
+                                                 false, op.getNontemporal());
     }
 
     return success();
@@ -340,6 +396,89 @@ public:
   }
 };
 
+// Copy from llvm-project MemrefToLLVM.cpp
+// FIXME: Use ptr dialect to fix the error between un-ranked memref to llvm ptr
+struct MemRefCastOpLowering : public ConvertOpToLLVMPattern<memref::CastOp> {
+  using ConvertOpToLLVMPattern<memref::CastOp>::ConvertOpToLLVMPattern;
+
+public:
+  LogicalResult match(memref::CastOp memRefCastOp) const override {
+    Type srcType = memRefCastOp.getOperand().getType();
+    Type dstType = memRefCastOp.getType();
+
+    // memref::CastOp reduce to bitcast in the ranked MemRef case and can be
+    // used for type erasure. For now they must preserve underlying element type
+    // and require source and result type to have the same rank. Therefore,
+    // perform a sanity check that the underlying structs are the same. Once op
+    // semantics are relaxed we can revisit.
+    if (isa<MemRefType>(srcType) && isa<MemRefType>(dstType))
+      return success(typeConverter->convertType(srcType) ==
+                     typeConverter->convertType(dstType));
+
+    // At least one of the operands is unranked type
+    assert(isa<UnrankedMemRefType>(srcType) ||
+           isa<UnrankedMemRefType>(dstType));
+
+    // Unranked to unranked cast is disallowed
+    return !(isa<UnrankedMemRefType>(srcType) &&
+             isa<UnrankedMemRefType>(dstType))
+               ? success()
+               : failure();
+  }
+
+  void rewrite(memref::CastOp memRefCastOp, OpAdaptor adaptor,
+               ConversionPatternRewriter &rewriter) const override {
+    auto srcType = memRefCastOp.getOperand().getType();
+    auto dstType = memRefCastOp.getType();
+    auto targetStructType = typeConverter->convertType(memRefCastOp.getType());
+    auto loc = memRefCastOp.getLoc();
+
+    // For ranked/ranked case, just keep the original descriptor.
+    if (isa<MemRefType>(srcType) && isa<MemRefType>(dstType))
+      return rewriter.replaceOp(memRefCastOp, {adaptor.getSource()});
+
+    if (isa<MemRefType>(srcType) && isa<UnrankedMemRefType>(dstType)) {
+      // Casting ranked to unranked memref type
+      // Set the rank in the destination from the memref type
+      // Allocate space on the stack and copy the src memref descriptor
+      // Set the ptr in the destination to the stack space
+      auto srcMemRefType = cast<MemRefType>(srcType);
+      int64_t rank = srcMemRefType.getRank();
+      // ptr = AllocaOp sizeof(MemRefDescriptor)
+      auto ptr = getTypeConverter()->promoteOneMemRefDescriptor(
+          loc, adaptor.getSource(), rewriter);
+
+      // rank = ConstantOp srcRank
+      auto rankVal = rewriter.create<LLVM::ConstantOp>(
+          loc, getIndexType(), rewriter.getIndexAttr(rank));
+      // poison = PoisonOp
+      UnrankedMemRefDescriptor memRefDesc =
+          UnrankedMemRefDescriptor::poison(rewriter, loc, targetStructType);
+      // d1 = InsertValueOp poison, rank, 0
+      memRefDesc.setRank(rewriter, loc, rankVal);
+      // d2 = InsertValueOp d1, ptr, 1
+      memRefDesc.setMemRefDescPtr(rewriter, loc, ptr);
+      rewriter.replaceOp(memRefCastOp, (Value)memRefDesc);
+
+    } else if (isa<UnrankedMemRefType>(srcType) && isa<MemRefType>(dstType)) {
+      // Casting from unranked type to ranked.
+      // The operation is assumed to be doing a correct cast. If the destination
+      // type mismatches the unranked the type, it is undefined behavior.
+      UnrankedMemRefDescriptor memRefDesc(adaptor.getSource());
+      auto ptr = memRefDesc.memRefDescPtr(rewriter, loc);
+
+      auto desc = MemRefDescriptor::poison(rewriter, loc, targetStructType);
+      // FIXME: workaround, take memRefDescPtr as naked ptr.
+      desc.setAllocatedPtr(rewriter, loc, ptr);
+      desc.setAlignedPtr(rewriter, loc, ptr);
+
+      rewriter.replaceOp(memRefCastOp, SmallVector<Value>{desc});
+    } else {
+      llvm_unreachable("Unsupported unranked memref to unranked memref cast");
+    }
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateTx81MemrefToLLVMConversionPatterns(
@@ -349,6 +488,7 @@ void mlir::triton::populateTx81MemrefToLLVMConversionPatterns(
                 MemRefReinterpretCastOpLowering,
                 ExtractStridedMetadataOpLowering,
                 ConvertExtractAlignedPointerAsIndex,
+                MemRefCastOpLowering,
                 MemrefLoadOrStoreOpLowering<memref::LoadOp>,
                 MemrefLoadOrStoreOpLowering<memref::StoreOp>>(
                   converter);

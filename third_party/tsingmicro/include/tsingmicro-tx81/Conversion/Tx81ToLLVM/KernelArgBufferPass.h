@@ -1,7 +1,5 @@
 //===- KernelArgBufferPass.h ----------------------------------*- C++ -*---===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //

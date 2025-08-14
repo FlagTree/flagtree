@@ -1,7 +1,5 @@
 //===------------------------ bilinear.c ----------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,7 +13,7 @@ void __Bilinear(uint64_t *src, uint64_t *dst, uint16_t src_n, uint16_t src_h,
                 uint16_t src_w, uint16_t src_c, uint16_t dst_n, uint16_t dst_h,
                 uint16_t dst_w, uint16_t dst_c, uint16_t fmt) {
   // Create command buffer.
-  TsmPeripheral *cmd = TsmNewPeripheral();
+  TsmPeripheral *cmd = g_intrinsic()->peripheral_pointer;
   TsmPeripheralInstr inst = {I_CGRA,
                              {
                                  0,
@@ -35,5 +33,4 @@ void __Bilinear(uint64_t *src, uint64_t *dst, uint16_t src_n, uint16_t src_h,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeletePeripheral(cmd);
 }
