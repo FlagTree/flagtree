@@ -5,7 +5,3 @@ from .flash_attention import attention
 from .matmul import _matmul, get_higher_dtype, matmul
 
 __all__ = ["blocksparse", "_cross_entropy", "cross_entropy", "_matmul", "matmul", "attention", "get_higher_dtype"]
-
-# flagtree backend specialization
-from triton.runtime.driver import flagtree_backend_specialization
-__all__ = flagtree_backend_specialization("ops_get_all") or __all__
