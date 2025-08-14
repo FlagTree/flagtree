@@ -1,7 +1,38 @@
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+except Exception:
+    HAS_TORCH = False
+    import paddle
+    HAS_PADDLE = True
 
 from ... import cdiv, heuristics, jit
 from ... import language as tl
+
+
+def num_warps(n):
+    if n <= 128:
+        return 1
+    if n <= 256:
+        return 2
+    if n <= 512:
+        return 4
+    if n <= 4096:
+        return 8
+    return 16
+
+
+def get_paddle_strides(tensor):
+    """计算 PaddlePaddle 张量的 stride"""
+    shape = tensor.shape
+    if len(shape) == 0:
+        return []
+    
+    strides = [1] * len(shape)
+    for i in range(len(shape) - 2, -1, -1):
+        strides[i] = strides[i + 1] * shape[i + 1]
+    return strides
+
 
 # ********************************************************
 # --------------------------------------------------------
@@ -81,43 +112,91 @@ def _sdd_kernel(A, B, C,  #
 
 
 def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=None):
-    if a.stride(2) != 1 and a.stride(3) != 1:
-        a = a.contiguous()
-    if b.stride(2) != 1 and b.stride(3) != 1:
-        b = b.contiguous()
-    # (A * B)^T = B^T * A^T
-    if trans_c:
-        a, b = b, a
-        trans_a, trans_b = not trans_b, not trans_a
-    # shape constraints
-    a_dim = -2 if trans_a else -1
-    b_dim = -1 if trans_b else -2
-    Ka, Kb = a.shape[a_dim], b.shape[b_dim]
-    if Ka != Kb:
-        raise ValueError(f"Inner dimension mismatch (A: {Ka} vs B: {Kb})")
-    # allocate output
-    if out is None:
-        c = torch.empty((a.shape[0], lut.shape[0], block, block), dtype=a.dtype, device=a.device)
+    if HAS_TORCH:
+        if a.stride(2) != 1 and a.stride(3) != 1:
+            a = a.contiguous()
+        if b.stride(2) != 1 and b.stride(3) != 1:
+            b = b.contiguous()
+        # (A * B)^T = B^T * A^T
+        if trans_c:
+            a, b = b, a
+            trans_a, trans_b = not trans_b, not trans_a
+        # shape constraints
+        a_dim = -2 if trans_a else -1
+        b_dim = -1 if trans_b else -2
+        Ka, Kb = a.shape[a_dim], b.shape[b_dim]
+        if Ka != Kb:
+            raise ValueError(f"Inner dimension mismatch (A: {Ka} vs B: {Kb})")
+        # allocate output
+        if out is None:
+            c = torch.empty((a.shape[0], lut.shape[0], block, block), dtype=a.dtype, device=a.device)
+        else:
+            assert out.shape == (a.shape[0], lut.shape[0], block, block)
+            c = out
+        grid = [c.shape[1], 1, c.shape[0]]
+        _sdd_kernel[grid](
+            a, b, c,  #
+            a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),  #
+            b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),  #
+            c.stride(0), c.stride(1), c.stride(2), c.stride(3),  #
+            Ka, 0, lut,  #
+            TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block, num_stages=4,  #
+            num_warps=4  #
+        )
+        return c
     else:
-        assert out.shape == (a.shape[0], lut.shape[0], block, block)
-        c = out
-    grid = [c.shape[1], 1, c.shape[0]]
-    _sdd_kernel[grid](
-        a, b, c,  #
-        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),  #
-        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),  #
-        c.stride(0), c.stride(1), c.stride(2), c.stride(3),  #
-        Ka, 0, lut,  #
-        TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block, num_stages=4,  #
-        num_warps=4  #
-    )
-    return c
+        # PaddlePaddle 实现
+        # 检查是否需要 contiguous
+        a_strides = get_paddle_strides(a)
+        b_strides = get_paddle_strides(b)
+        if a_strides[2] != 1 and a_strides[3] != 1:
+            a = a.contiguous()
+        if b_strides[2] != 1 and b_strides[3] != 1:
+            b = b.contiguous()
+        # (A * B)^T = B^T * A^T
+        if trans_c:
+            a, b = b, a
+            trans_a, trans_b = not trans_b, not trans_a
+        # shape constraints
+        a_dim = -2 if trans_a else -1
+        b_dim = -1 if trans_b else -2
+        Ka, Kb = a.shape[a_dim], b.shape[b_dim]
+        if Ka != Kb:
+            raise ValueError(f"Inner dimension mismatch (A: {Ka} vs B: {Kb})")
+        # allocate output
+        if out is None:
+            c = paddle.empty((a.shape[0], lut.shape[0], block, block), dtype=a.dtype)
+        else:
+            assert out.shape == (a.shape[0], lut.shape[0], block, block)
+            c = out
+        
+        # 重新计算 stride（因为可能已经 contiguous）
+        a_strides = get_paddle_strides(a)
+        b_strides = get_paddle_strides(b)
+        c_strides = get_paddle_strides(c)
+        
+        grid = [c.shape[1], 1, c.shape[0]]
+        _sdd_kernel[grid](
+            a, b, c,  #
+            a_strides[0], a_strides[1], a_strides[3 if trans_a else 2], a_strides[2 if trans_a else 3],  #
+            b_strides[0], b_strides[1], b_strides[3 if trans_b else 2], b_strides[2 if trans_b else 3],  #
+            c_strides[0], c_strides[1], c_strides[2], c_strides[3],  #
+            Ka, 0, lut,  #
+            TILE_M=block, TILE_N=block, TILE_K=32, BLOCK=block, num_stages=4,  #
+            num_warps=4  #
+        )
+        return c
 
 
 def sdd_lut(layout, block, device):
-    lut = layout.nonzero(as_tuple=False).to(device).int()
-    lut = lut.contiguous()
-    return lut, None
+    if HAS_TORCH:
+        lut = layout.nonzero(as_tuple=False).to(device).int()
+        lut = lut.contiguous()
+        return lut, None
+    else:
+        lut = paddle.nonzero(layout).astype('int32')
+        lut = lut.contiguous()
+        return lut, None
 
 
 # -----------------------------
@@ -203,41 +282,86 @@ def _dsd_kernel(A, B, C,  #
 
 
 def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=None):
-    if a.stride(2) != 1 and a.stride(3) != 1:
-        a = a.contiguous()
-    if b.stride(2) != 1 and b.stride(3) != 1:
-        b = b.contiguous()
-    # shapes / dtypes
-    AS1 = block * spdims[2 if trans_a else 1]
-    BS0 = b.size(0)
-    BS1 = b.size(1)
-    BS3 = b.size(2 if trans_b else 3)
-    dtype = a.dtype
-    # allocate output
-    CS0 = BS0
-    CS1 = BS1
-    CS2 = BS3 if trans_c else AS1
-    CS3 = AS1 if trans_c else BS3
-    if out is None:
-        c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
+    if HAS_TORCH:
+        if a.stride(2) != 1 and a.stride(3) != 1:
+            a = a.contiguous()
+        if b.stride(2) != 1 and b.stride(3) != 1:
+            b = b.contiguous()
+        # shapes / dtypes
+        AS1 = block * spdims[2 if trans_a else 1]
+        BS0 = b.size(0)
+        BS1 = b.size(1)
+        BS3 = b.size(2 if trans_b else 3)
+        dtype = a.dtype
+        # allocate output
+        CS0 = BS0
+        CS1 = BS1
+        CS2 = BS3 if trans_c else AS1
+        CS3 = AS1 if trans_c else BS3
+        if out is None:
+            c = torch.empty((CS0, CS1, CS2, CS3), dtype=dtype, device=a.device)
+        else:
+            assert out.shape == (CS0, CS1, CS2, CS3)
+            c = out
+        # meta-parameter heuristics
+        TILE_N = 128
+        # compute output
+        grid = lambda meta: [cdiv(BS3, meta['TILE_N']), width, BS0]
+        _dsd_kernel[grid](
+            a, b, c,  #
+            a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),  #
+            b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),  #
+            c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),  #
+            BS3, AS1, lut,  #
+            TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,  #
+            num_warps=4, GROUP_SIZE_M=4  #
+        )
+        return c
     else:
-        assert out.shape == (CS0, CS1, CS2, CS3)
-        c = out
-    # meta-parameter heuristics
-    TILE_N = 128
-    # compute output
-    grid = lambda meta: [cdiv(BS3, meta['TILE_N']), width, BS0]
-    _dsd_kernel[grid](
-        a, b, c,  #
-        a.stride(0), a.stride(1), a.stride(3 if trans_a else 2), a.stride(2 if trans_a else 3),  #
-        b.stride(0), b.stride(1), b.stride(3 if trans_b else 2), b.stride(2 if trans_b else 3),  #
-        c.stride(0), c.stride(1), c.stride(3 if trans_c else 2), c.stride(2 if trans_c else 3),  #
-        BS3, AS1, lut,  #
-        TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,  #
-        num_warps=4, GROUP_SIZE_M=4  #
-    )
-    # exit()
-    return c
+        # PaddlePaddle 实现
+        # 检查是否需要 contiguous
+        a_strides = get_paddle_strides(a)
+        b_strides = get_paddle_strides(b)
+        if a_strides[2] != 1 and a_strides[3] != 1:
+            a = a.contiguous()
+        if b_strides[2] != 1 and b_strides[3] != 1:
+            b = b.contiguous()
+        # shapes / dtypes
+        AS1 = block * spdims[2 if trans_a else 1]
+        BS0 = b.shape[0]
+        BS1 = b.shape[1]
+        BS3 = b.shape[2 if trans_b else 3]
+        dtype = a.dtype
+        # allocate output
+        CS0 = BS0
+        CS1 = BS1
+        CS2 = BS3 if trans_c else AS1
+        CS3 = AS1 if trans_c else BS3
+        if out is None:
+            c = paddle.empty((CS0, CS1, CS2, CS3), dtype=dtype)
+        else:
+            assert out.shape == (CS0, CS1, CS2, CS3)
+            c = out
+        # meta-parameter heuristics
+        TILE_N = 128
+        # compute output
+        grid = lambda meta: [cdiv(BS3, meta['TILE_N']), width, BS0]
+        
+        # 重新计算 stride（因为可能已经 contiguous）
+        a_strides = get_paddle_strides(a)
+        b_strides = get_paddle_strides(b)
+        c_strides = get_paddle_strides(c)
+        
+        _dsd_kernel[grid](
+            a, b, c,  #
+            a_strides[0], a_strides[1], a_strides[3 if trans_a else 2], a_strides[2 if trans_a else 3],  #
+            b_strides[0], b_strides[1], b_strides[3 if trans_b else 2], b_strides[2 if trans_b else 3],  #
+            c_strides[0], c_strides[1], c_strides[3 if trans_c else 2], c_strides[2 if trans_c else 3],  #
+            BS3, AS1, lut,  #
+            TILE_M=block, TILE_N=TILE_N, TILE_K=min(block, 32), BLOCK=block, num_stages=4,  #
+            num_warps=4, GROUP_SIZE_M=4  #
+        )
+        return c
 
 
 def dsd_lut(layout, block, step, trans, device):
@@ -264,77 +388,143 @@ def dsd_lut(layout, block, step, trans, device):
     [32, 48, 64, 80]  <- row 1
     [0, 16, 64, 80]   <- row 2
     """
-    sizes = torch.sum(layout, 2 if trans else 1)
-    head_id, col_id = torch.ones_like(sizes).nonzero(as_tuple=True)
-    sizes = sizes.flatten()
-    segments = sizes * step
-    # pointer increments
-    if trans:
-        nnz = layout.nonzero(as_tuple=False)
+    if HAS_TORCH:
+        sizes = torch.sum(layout, 2 if trans else 1)
+        head_id, col_id = torch.ones_like(sizes).nonzero(as_tuple=True)
+        sizes = sizes.flatten()
+        segments = sizes * step
+        # pointer increments
+        if trans:
+            nnz = layout.nonzero(as_tuple=False)
+        else:
+            nnz = layout.transpose(1, 2).nonzero(as_tuple=False)
+        num_blocks = nnz.size(0)
+        offsets = torch.zeros_like(sizes)
+        offsets[1:] = torch.cumsum(sizes[:-1], dim=0)
+        offsets = torch.min(offsets, (num_blocks - 1) * torch.ones_like(offsets))
+        # -------------------------------
+        # dense input pointer increments
+        # -------------------------------
+        B_idx = nnz[:, 2] * block
+        B_incs = B_idx.clone()
+        B_incs[1:] -= B_idx[:-1]
+        div = block // step
+        B_incs = B_incs.view(-1, 1).repeat(1, div)
+        B_incs[:, 1:] = step
+        B_incs[:, 0] -= (div - 1) * step
+        # first increment for each reduction is actually the offset
+        B_incs[offsets[segments > 0], 0] = B_idx[offsets[segments > 0]]
+        B_incs = B_incs.view(-1)
+        # -------------------------------
+        # sparse input pointer increments
+        # -------------------------------
+        if trans:
+            A_idx = torch.arange(num_blocks, device=layout.device)
+        else:
+            A_idx = torch.tensor([], dtype=torch.int64, device=layout.device)
+            current_offset = 0
+            for z in range(layout.size(0)):
+                layoutw = layout[z, :, :].clone().long()
+                msum = layoutw.sum()
+                layoutw[layoutw > 0] = 1 + torch.arange(msum, device=layout.device)
+                A_idx = torch.cat((A_idx, current_offset + layoutw.T[layoutw.T > 0] - 1))
+                current_offset += msum
+        A_incs = A_idx * block * block
+        A_incs[1:] -= A_idx[:-1] * block * block
+        A_incs = A_incs.view(-1, 1).repeat(1, div)
+        if trans:
+            A_incs[:, 1:] = step
+            A_incs[:, 0] -= (div - 1) * step
+        else:
+            A_incs[:, 1:] = step * block
+            A_incs[:, 0] -= (div - 1) * step * block
+        A_incs[offsets[segments > 0], 0] = A_idx[offsets[segments > 0]]
+        A_incs = A_incs.view(-1)
+        # create header
+        width = col_id.size(0)
+        offsets = offsets * 2 * div + 4 * width
+        segments = segments * div
+        header = torch.stack((offsets, segments, col_id, head_id), dim=1).view(-1).contiguous()
+        # create increments
+        incs = torch.stack((B_incs, A_incs), dim=1).view(-1).contiguous()
+        # pad by a factor 2*MAX_NUM_STAGES
+        # to accommodate pre-fetching inside the kernel
+        pad = torch.zeros(20, device=incs.device, dtype=incs.dtype)
+        incs = torch.cat((incs, pad))
+        # create lut
+        lut = torch.cat((header, incs))
+        lut = lut.type(torch.int32).to(device)
+        # create locks
+        return lut, width
     else:
-        nnz = layout.transpose(1, 2).nonzero(as_tuple=False)
-    num_blocks = nnz.size(0)
-    offsets = torch.zeros_like(sizes)
-    offsets[1:] = torch.cumsum(sizes[:-1], dim=0)
-    offsets = torch.min(offsets, (num_blocks - 1) * torch.ones_like(offsets))
-    # -------------------------------
-    # dense input pointer increments
-    # -------------------------------
-    # Note that the inner loop matmul kernel may have a fixed step size (e.g., TILE_K)
-    # that is smaller than the block size, so we need to do a bit of extra work
-    # to handle this case
-    B_idx = nnz[:, 2] * block
-    B_incs = B_idx.clone()
-    B_incs[1:] -= B_idx[:-1]
-    div = block // step
-    B_incs = B_incs.view(-1, 1).repeat(1, div)
-    B_incs[:, 1:] = step
-    B_incs[:, 0] -= (div - 1) * step
-    # first increment for each reduction is actually the offset
-    B_incs[offsets[segments > 0], 0] = B_idx[offsets[segments > 0]]
-    B_incs = B_incs.view(-1)
-    # -------------------------------
-    # sparse input pointer increments
-    # -------------------------------
-    # same as above, except that the increments are in the sparse memory layout
-    if trans:
-        A_idx = torch.arange(num_blocks, device=layout.device)
-    else:
-        A_idx = torch.tensor([], dtype=torch.int64, device=layout.device)
-        current_offset = 0
-        for z in range(layout.size(0)):
-            layoutw = layout[z, :, :].clone().long()
-            msum = layoutw.sum()
-            layoutw[layoutw > 0] = 1 + torch.arange(msum, device=layout.device)
-            A_idx = torch.cat((A_idx, current_offset + layoutw.T[layoutw.T > 0] - 1))
-            current_offset += msum
-    A_incs = A_idx * block * block
-    A_incs[1:] -= A_idx[:-1] * block * block
-    A_incs = A_incs.view(-1, 1).repeat(1, div)
-    if trans:
-        A_incs[:, 1:] = step
-        A_incs[:, 0] -= (div - 1) * step
-    else:
-        A_incs[:, 1:] = step * block
-        A_incs[:, 0] -= (div - 1) * step * block
-    A_incs[offsets[segments > 0], 0] = A_idx[offsets[segments > 0]]
-    A_incs = A_incs.view(-1)
-    # create header
-    width = col_id.size(0)
-    offsets = offsets * 2 * div + 4 * width
-    segments = segments * div
-    header = torch.stack((offsets, segments, col_id, head_id), dim=1).view(-1).contiguous()
-    # create increments
-    incs = torch.stack((B_incs, A_incs), dim=1).view(-1).contiguous()
-    # pad by a factor 2*MAX_NUM_STAGES
-    # to accommodate pre-fetching inside the kernel
-    pad = torch.zeros(20, device=incs.device, dtype=incs.dtype)
-    incs = torch.cat((incs, pad))
-    # create lut
-    lut = torch.cat((header, incs))
-    lut = lut.type(torch.int32).to(device)
-    # create locks
-    return lut, width
+        # PaddlePaddle 实现
+        sizes = paddle.sum(layout, axis=2 if trans else 1)
+        head_id, col_id = paddle.nonzero(paddle.ones_like(sizes), as_tuple=True)
+        sizes = sizes.flatten()
+        segments = sizes * step
+        # pointer increments
+        if trans:
+            nnz = paddle.nonzero(layout)
+        else:
+            nnz = paddle.nonzero(paddle.transpose(layout, [0, 2, 1]))
+        num_blocks = nnz.shape[0]
+        offsets = paddle.zeros_like(sizes)
+        offsets[1:] = paddle.cumsum(sizes[:-1], axis=0)
+        offsets = paddle.minimum(offsets, (num_blocks - 1) * paddle.ones_like(offsets))
+        # -------------------------------
+        # dense input pointer increments
+        # -------------------------------
+        B_idx = nnz[:, 2] * block
+        B_incs = B_idx.clone()
+        B_incs[1:] -= B_idx[:-1]
+        div = block // step
+        B_incs = B_incs.reshape([-1, 1]).tile([1, div])
+        B_incs[:, 1:] = step
+        B_incs[:, 0] -= (div - 1) * step
+        # first increment for each reduction is actually the offset
+        B_incs[offsets[segments > 0], 0] = B_idx[offsets[segments > 0]]
+        B_incs = B_incs.reshape([-1])
+        # -------------------------------
+        # sparse input pointer increments
+        # -------------------------------
+        if trans:
+            A_idx = paddle.arange(num_blocks)
+        else:
+            A_idx = paddle.to_tensor([], dtype='int64')
+            current_offset = 0
+            for z in range(layout.shape[0]):
+                layoutw = layout[z, :, :].clone().astype('int64')
+                msum = layoutw.sum()
+                layoutw[layoutw > 0] = 1 + paddle.arange(msum)
+                A_idx = paddle.concat([A_idx, current_offset + layoutw.T[layoutw.T > 0] - 1])
+                current_offset += msum
+        A_incs = A_idx * block * block
+        A_incs[1:] -= A_idx[:-1] * block * block
+        A_incs = A_incs.reshape([-1, 1]).tile([1, div])
+        if trans:
+            A_incs[:, 1:] = step
+            A_incs[:, 0] -= (div - 1) * step
+        else:
+            A_incs[:, 1:] = step * block
+            A_incs[:, 0] -= (div - 1) * step * block
+        A_incs[offsets[segments > 0], 0] = A_idx[offsets[segments > 0]]
+        A_incs = A_incs.reshape([-1])
+        # create header
+        width = col_id.shape[0]
+        offsets = offsets * 2 * div + 4 * width
+        segments = segments * div
+        header = paddle.stack([offsets, segments, col_id, head_id], axis=1).reshape([-1])
+        # create increments
+        incs = paddle.stack([B_incs, A_incs], axis=1).reshape([-1])
+        # pad by a factor 2*MAX_NUM_STAGES
+        # to accommodate pre-fetching inside the kernel
+        pad = paddle.zeros([20], dtype=incs.dtype)
+        incs = paddle.concat([incs, pad])
+        # create lut
+        lut = paddle.concat([header, incs])
+        lut = lut.astype('int32')
+        # create locks
+        return lut, width
 
 
 # -----------------------------
@@ -352,49 +542,100 @@ def dds_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
 ##############
 
 
-class _matmul(torch.autograd.Function):
+if HAS_TORCH:
+    # PyTorch 实现
+    class _matmul(torch.autograd.Function):
 
-    fn = {'sdd': sdd_matmul, 'dsd': dsd_matmul, 'dds': dds_matmul}
+        fn = {'sdd': sdd_matmul, 'dsd': dsd_matmul, 'dds': dds_matmul}
 
-    @staticmethod
-    def forward(ctx, a, b, trans_a, trans_b, trans_c, mode, spdims, block, c_lut, c_width, da_lut, da_width, db_lut,
-                db_width, out):
-        c = _matmul.fn[mode](a, b, trans_a, trans_b, trans_c, spdims, block, c_lut, c_width, out=out)
-        # save for backward
-        ctx.save_for_backward(a, b)
-        ctx.da_lut = da_lut
-        ctx.da_width = da_width
-        ctx.db_lut = db_lut
-        ctx.db_width = db_width
-        ctx.mode = mode
-        ctx.spdims = spdims
-        ctx.block = block
-        ctx.trans_a = trans_a
-        ctx.trans_b = trans_b
-        ctx.trans_c = trans_c
-        ctx.has_out = out is not None
-        return c
+        @staticmethod
+        def forward(ctx, a, b, trans_a, trans_b, trans_c, mode, spdims, block, c_lut, c_width, da_lut, da_width, db_lut,
+                    db_width, out):
+            c = _matmul.fn[mode](a, b, trans_a, trans_b, trans_c, spdims, block, c_lut, c_width, out=out)
+            # save for backward
+            ctx.save_for_backward(a, b)
+            ctx.da_lut = da_lut
+            ctx.da_width = da_width
+            ctx.db_lut = db_lut
+            ctx.db_width = db_width
+            ctx.mode = mode
+            ctx.spdims = spdims
+            ctx.block = block
+            ctx.trans_a = trans_a
+            ctx.trans_b = trans_b
+            ctx.trans_c = trans_c
+            ctx.has_out = out is not None
+            return c
 
-    @staticmethod
-    def backward(ctx, dc):
-        # saved for backward
-        a, b = ctx.saved_tensors
-        da, db = None, None
-        mode = ctx.mode
-        # gradients w.r.t. a
-        if ctx.needs_input_grad[0]:
+        @staticmethod
+        def backward(ctx, dc):
+            # saved for backward
+            a, b = ctx.saved_tensors
+            da, db = None, None
+            mode = ctx.mode
+            # gradients w.r.t. a
+            if ctx.needs_input_grad[0]:
+                mode_da = mode[1] + mode[0] + mode[2]
+                da = _matmul.fn[mode_da](dc, b, ctx.trans_c, not ctx.trans_b, ctx.trans_a, ctx.spdims, ctx.block,
+                                         ctx.da_lut, ctx.da_width)
+            # gradients w.r.t. b
+            if ctx.needs_input_grad[1]:
+                mode_db = mode[2] + mode[1] + mode[0]
+                db = _matmul.fn[mode_db](a, dc, not ctx.trans_a, ctx.trans_c, ctx.trans_b, ctx.spdims, ctx.block,
+                                         ctx.db_lut, ctx.db_width)
+            dout = dc if ctx.has_out else None
+            return da, db, None, None, None, \
+                None, None, None, None, \
+                None, None, None, None, None, dout
+
+else:
+    # PaddlePaddle 实现
+    class _matmul_paddle(paddle.autograd.PyLayer):  # 重命名避免冲突
+
+        fn = {'sdd': sdd_matmul, 'dsd': dsd_matmul, 'dds': dds_matmul}
+
+        @staticmethod
+        def forward(ctx, a, b, trans_a, trans_b, trans_c, mode, spdims, block, c_lut, c_width, da_lut, da_width, db_lut,
+                    db_width, out):
+            # print(f"DEBUG: forward called with {len([a, b, trans_a, trans_b, trans_c, mode, spdims, block, c_lut, c_width, da_lut, da_width, db_lut, db_width, out])} arguments")
+            # print(f"DEBUG: forward arguments: {[type(arg) for arg in [a, b, trans_a, trans_b, trans_c, mode, spdims, block, c_lut, c_width, da_lut, da_width, db_lut, db_width, out]]}")
+            
+            c = _matmul_paddle.fn[mode](a, b, trans_a, trans_b, trans_c, spdims, block, c_lut, c_width, out=out)
+            # save for backward
+            ctx.save_for_backward(a, b)
+            ctx.da_lut = da_lut
+            ctx.da_width = da_width
+            ctx.db_lut = db_lut
+            ctx.db_width = db_width
+            ctx.mode = mode
+            ctx.spdims = spdims
+            ctx.block = block
+            ctx.trans_a = trans_a
+            ctx.trans_b = trans_b
+            ctx.trans_c = trans_c
+            ctx.has_out = out is not None
+            
+            return c
+
+        @staticmethod
+        def backward(ctx, dc):
+            # print(f"DEBUG: backward called with dc type: {type(dc)}")
+            # saved for backward
+            a, b = ctx.saved_tensor()
+            da, db = None, None
+            mode = ctx.mode
+            # gradients w.r.t. a
             mode_da = mode[1] + mode[0] + mode[2]
-            da = _matmul.fn[mode_da](dc, b, ctx.trans_c, not ctx.trans_b, ctx.trans_a, ctx.spdims, ctx.block,
+            da = _matmul_paddle.fn[mode_da](dc, b, ctx.trans_c, not ctx.trans_b, ctx.trans_a, ctx.spdims, ctx.block,
                                      ctx.da_lut, ctx.da_width)
-        # gradients w.r.t. b
-        if ctx.needs_input_grad[1]:
+            # gradients w.r.t. b
             mode_db = mode[2] + mode[1] + mode[0]
-            db = _matmul.fn[mode_db](a, dc, not ctx.trans_a, ctx.trans_c, ctx.trans_b, ctx.spdims, ctx.block,
+            db = _matmul_paddle.fn[mode_db](a, dc, not ctx.trans_a, ctx.trans_c, ctx.trans_b, ctx.spdims, ctx.block,
                                      ctx.db_lut, ctx.db_width)
-        dout = dc if ctx.has_out else None
-        return da, db, None, None, None, \
-            None, None, None, None, \
-            None, None, None, None, None, dout
+            dout = dc if ctx.has_out else None
+            
+            return da, db,   None, None,dout
+
 
 
 class matmul:
@@ -424,9 +665,16 @@ class matmul:
             self.db_lut, self.db_width = sdd_lut(layout, block, device)
 
     def __call__(self, a, b, out=None):
-        c = _matmul.apply(a, b, self.trans_a, self.trans_b, self.trans_c, self.mode, self.spdims, self.block,  #
-                          self.c_lut, self.c_width,  #
-                          self.da_lut, self.da_width,  #
-                          self.db_lut, self.db_width,  #
-                          out)
+        if HAS_TORCH:
+            c = _matmul.apply(a, b, self.trans_a, self.trans_b, self.trans_c, self.mode, self.spdims, self.block,  #
+                              self.c_lut, self.c_width,  #
+                              self.da_lut, self.da_width,  #
+                              self.db_lut, self.db_width,  #
+                              out)
+        else:
+            c = _matmul_paddle.apply(a, b, self.trans_a, self.trans_b, self.trans_c, self.mode, self.spdims, self.block,  #
+                              self.c_lut, self.c_width,  #
+                              self.da_lut, self.da_width,  #
+                              self.db_lut, self.db_width,  #
+                              out)
         return c
