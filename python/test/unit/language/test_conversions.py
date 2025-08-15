@@ -415,8 +415,3 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     for i in range(256):
         downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i, device=device)
-        print(i,"/256")
-
-
-if __name__ == '__main__':
-    test_typeconvert_downcast('float32', 'float16', 'rtne', 0x477fe000, None)
