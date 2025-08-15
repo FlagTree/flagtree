@@ -1,7 +1,5 @@
 //===------------------------ conv.c --------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,7 +18,7 @@ void __Conv(int64_t opType, int64_t *srcAct, int64_t *srcActDims,
             int64_t *dilations, bool enLeakyRelu, int64_t srcActFmt,
             int64_t weightFmt, int64_t dstFmt, int64_t *dst, int64_t *dstDims) {
   // Create convolution command buffer.
-  TsmConv *conv = TsmNewConv();
+  TsmConv *conv = g_intrinsic()->conv_pointer;
   TsmNeInstr inst = {I_NEUR,
                      {
                          0,
@@ -62,5 +60,4 @@ void __Conv(int64_t opType, int64_t *srcAct, int64_t *srcActDims,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteConv(conv);
 }

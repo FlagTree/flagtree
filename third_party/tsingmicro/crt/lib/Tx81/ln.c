@@ -1,7 +1,5 @@
 //===------------------------ ln.c ----------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,7 +11,7 @@
 
 void __Ln(uint64_t *src, uint64_t *dst, uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmTranscendental *cmd = TsmNewTranscendental();
+  TsmTranscendental *cmd = g_intrinsic()->transcendental_pointer;
   TsmTranscendentalInstr inst = {I_CGRA,
                                  {
                                      0,
@@ -28,5 +26,4 @@ void __Ln(uint64_t *src, uint64_t *dst, uint32_t elem_count, uint16_t fmt) {
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteTranscendental(cmd);
 }

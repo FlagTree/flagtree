@@ -86,9 +86,10 @@ public:
                                       SmallVectorImpl<Type> &types)
                                 -> std::optional<LogicalResult> {
       // Important note:
-      // We only care about tensor of index / int (in addition to pointer type)
-      // because only values of int and index type can potentially be part of a
-      // pointer arithmetic sequence.
+      // We only care about tensor of index / int (in addition to pointer
+      // type) because only values of int and index type can potentially be
+      // part of a pointer arithmetic sequence.
+      // FIXME: Integer type may not always involved in pointer arithmetic
       if (!isa<triton::PointerType>(tensorType.getElementType()) &&
           !tensorType.getElementType().isIntOrIndex()) {
         // There's a subtle difference between returning failure() and

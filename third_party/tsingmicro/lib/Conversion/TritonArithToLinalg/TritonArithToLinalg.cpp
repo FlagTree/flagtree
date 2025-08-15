@@ -34,6 +34,81 @@ using namespace triton;
 #define GEN_PASS_CLASSES
 #include "triton-shared/Conversion/TritonArithToLinalg/Passes.h.inc"
 
+namespace {
+static bool isElementwiseMappableOpOnRankedTensors(Operation *op) {
+  if (!OpTrait::hasElementwiseMappableTraits(op))
+    return false;
+
+  // TODO: The conversion pattern can be made to work for `any_of` here, but
+  // it's more complex as it requires tracking which operands are scalars.
+  return llvm::all_of(op->getOperandTypes(), llvm::IsaPred<RankedTensorType>);
+}
+
+static SmallVector<Value, 4>
+getOrCreateOperandsMatchingResultTypes(OpBuilder &b, Operation *op) {
+  assert(isElementwiseMappableOpOnRankedTensors(op));
+  Location loc = op->getLoc();
+  ValueRange operands = op->getOperands();
+  TypeRange rankedTensorTypes = op->getResultTypes();
+  SmallVector<Value, 4> res;
+  res.reserve(rankedTensorTypes.size());
+  for (Type t : rankedTensorTypes) {
+    // Extract static / dynamic shape mix from the first operand.
+    res.push_back(b.create<tensor::EmptyOp>(
+        loc, tensor::getMixedSizes(b, loc, operands.front()),
+        cast<RankedTensorType>(t).getElementType()));
+  }
+  return res;
+}
+
+struct ConvertAnyElementwiseMappableOpOnRankedTensors : public RewritePattern {
+  ConvertAnyElementwiseMappableOpOnRankedTensors(MLIRContext *context)
+      : RewritePattern(MatchAnyOpTypeTag(), /*benefit=*/1, context) {}
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const final {
+    if (!isElementwiseMappableOpOnRankedTensors(op))
+      return rewriter.notifyMatchFailure(
+          op, "requires elementwise op on ranked tensors");
+
+    auto rank = cast<RankedTensorType>(op->getResult(0).getType()).getRank();
+    SmallVector<AffineMap, 3> indexingMaps(
+        op->getNumResults() + op->getNumOperands(),
+        rewriter.getMultiDimIdentityMap(rank));
+    SmallVector<utils::IteratorType, 6> iteratorTypes(
+        rank, utils::IteratorType::parallel);
+    auto outputs = getOrCreateOperandsMatchingResultTypes(rewriter, op);
+    rewriter.replaceOpWithNewOp<linalg::GenericOp>(
+        op, /*resultTensorTypes=*/op->getResultTypes(),
+        /*inputs=*/op->getOperands(),
+        /*outputs=*/outputs,
+        /*indexingMaps=*/indexingMaps,
+        /*iteratorTypes=*/iteratorTypes,
+        /*bodyBuilder=*/
+        [&](OpBuilder &builder, Location loc, ValueRange regionArgs) {
+          auto resultTypes = llvm::to_vector<6>(
+              llvm::map_range(op->getResultTypes(), [](Type type) {
+                return cast<TensorType>(type).getElementType();
+              }));
+          auto *scalarOp =
+              builder.create(loc, op->getName().getIdentifier(),
+                             regionArgs.take_front(op->getNumOperands()),
+                             resultTypes, op->getAttrs());
+          builder.create<linalg::YieldOp>(loc, scalarOp->getResults());
+        });
+    return success();
+  }
+};
+
+// FIXME: When we fix the memory management inside the loop, replace it to mlir
+// upstream linalg::populateElementwiseToLinalgConversionPatterns
+void populateElementwiseToLinalgConversionPatterns(
+    RewritePatternSet &patterns) {
+  patterns.add<ConvertAnyElementwiseMappableOpOnRankedTensors>(
+      patterns.getContext());
+}
+
+} // namespace
+
 void mlir::triton::populateTritonArithToLinalgCanonicalizationPatterns(
     RewritePatternSet &patterns) {
   patterns.add<MinMaxConverter<arith::CmpFOp>, MinMaxConverter<arith::CmpIOp>>(
@@ -71,6 +146,7 @@ void mlir::triton::populateTritonArithToLinalgConversionPatterns(
   patterns.add<FpToFpConverter>(patterns.getContext());
   patterns.add<ClampConverter>(patterns.getContext());
   patterns.add<MatmulConverter>(patterns.getContext());
+  patterns.add<DotScaledConverter>(patterns.getContext());
   patterns.add<SplatConverter>(patterns.getContext());
   patterns.add<DenseConstantConverter>(patterns.getContext());
   patterns.add<ScanOpConverter>(patterns.getContext());
@@ -97,5 +173,5 @@ void mlir::triton::populateTritonArithToLinalgConversionPatterns(
 
   // Note: the ordering here matters!
   // These patterns are added last to they will be tried last.
-  linalg::populateElementwiseToLinalgConversionPatterns(patterns);
+  populateElementwiseToLinalgConversionPatterns(patterns);
 }

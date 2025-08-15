@@ -1,7 +1,5 @@
 //===--------------------- MKToTx81.cpp -----------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -29,9 +27,15 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "tsingmicro-tx81/Dialect/IR/Tx81Dialect.h"
 #include "utils/FusionHelper.h"
+#include "utils/utils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-// #define DEBUG_TYPE "mk-to-tx81"
+// FIXME: triton/Conversion/TritonGPUToLLVM/Utility.h which defined
+// TritonLLVMOpBuilder and other utilities has defined DEBUG_TYPE.
+#ifdef DEBUG_TYPE
+#undef DEBUG_TYPE
+#endif
+#define DEBUG_TYPE "mk-to-tx81"
 
 using namespace mlir;
 using namespace tx;
@@ -70,6 +74,14 @@ private:
 // Utilities
 //===----------------------------------------------------------------------===//
 
+LogicalResult convertLinalgOpToLoops(linalg::LinalgOp op,
+                                     ConversionPatternRewriter &rewriter) {
+  if (failed(linalg::linalgOpToLoops(rewriter, op)))
+    return rewriter.notifyMatchFailure(op, "operation not supported yet.");
+  rewriter.eraseOp(op);
+  return success();
+}
+
 // Get format code for tensor element type
 // This maps MLIR types to Tx81 format codes
 Data_Format getFormatCode(MemRefType type) {
@@ -80,8 +92,16 @@ Data_Format getFormatCode(MemRefType type) {
     return Fmt_FP16;
   } else if (elemType.isBF16()) {
     return Fmt_BF16;
+  } else if (elemType.isInteger(1)) {
+    return Fmt_BOOL;
   } else if (elemType.isInteger(8)) {
     return Fmt_INT8;
+  } else if (elemType.isInteger(16)) {
+    return Fmt_INT16;
+  } else if (elemType.isInteger(32)) {
+    return Fmt_INT32;
+  } else if (elemType.isInteger(64)) {
+    return Fmt_INT64;
   } else {
     llvm_unreachable("Tx8 unsupported the element type\n");
   }
@@ -218,20 +238,28 @@ template <typename T> llvm::SmallVector<Operation *> getRegionOps(T linalgOp) {
                              [](Operation &op) { return &op; });
 }
 
-static Data_Format getFormatFromValueType(MemRefType valueType) {
-  auto elemType = valueType.getElementType();
+static Data_Format getFormatFromElemType(mlir::Type elemType) {
+  // Convert the integer type to float type by just convert fmt.
+  // So here elemType can be integer type.
   auto bitWidth = elemType.getIntOrFloatBitWidth();
   switch (bitWidth) {
   case 8:
     return Fmt_INT8;
   case 16:
-    return Fmt_FP16;
+    return elemType.isBF16() ? Fmt_BF16 : Fmt_FP16;
   case 32:
-    return Fmt_FP32;
+    return elemType.isTF32() ? Fmt_TF32 : Fmt_FP32;
   default:
     llvm_unreachable("Unsupported bit width\n");
   }
   return Fmt_FP32;
+}
+
+static Data_Format getFormatFromValueType(MemRefType valueType) {
+  // Convert the integer type to float type by just convert fmt.
+  // So here elemType can be integer type.
+  auto elemType = valueType.getElementType();
+  return getFormatFromElemType(elemType);
 }
 
 // Convert integer type to float type for CGRA instruction
@@ -273,7 +301,8 @@ Data_Format insertConvertTypeOp(Value valuePtr, MemRefType valueType,
 
 // Restore float type to integer type to for CGRA instruction
 Value insertRestoreTypeOp(Value valuePtr, MemRefType valueType, Value elemCount,
-                          ConversionPatternRewriter &rewriter, Location loc) {
+                          ConversionPatternRewriter &rewriter, Location loc,
+                          int16_t roundMode = RND_MODE::RND_NEAREST_EVEN) {
   // TODO: Other integer type. May need realloc the memory
   auto elemType = valueType.getElementType();
   auto newValue = valuePtr;
@@ -286,13 +315,13 @@ Value insertRestoreTypeOp(Value valuePtr, MemRefType valueType, Value elemCount,
   case 16: { // 16 bit integer
     newValue = rewriter.create<tx::FP16ToINT16Op>(
         loc, rewriter.getI64Type(), valuePtr, valuePtr, elemCount,
-        rewriter.getI16IntegerAttr(0));
+        rewriter.getI16IntegerAttr(roundMode));
     break;
   }
   case 32: { // 32 bit integer
     newValue = rewriter.create<tx::FP32ToINT32Op>(
         loc, rewriter.getI64Type(), valuePtr, valuePtr, elemCount,
-        rewriter.getI16IntegerAttr(0));
+        rewriter.getI16IntegerAttr(roundMode));
     break;
   }
   default: {
@@ -341,38 +370,6 @@ class MemoryCopyConvertPattern : public OpConversionPattern<memref::CopyOp> {
 public:
   using OpConversionPattern<memref::CopyOp>::OpConversionPattern;
 
-  // Workaround: Avoid analyzing control flow as much as possible
-  bool isOperandMemorySpaceSPM(Value operand) const {
-
-    while (auto op = operand.getDefiningOp()) {
-      if (isa<memref::AllocOp>(op))
-        return true;
-      operand = op->getOperand(0);
-    }
-    return false;
-  }
-
-  // View int64 as int8
-  void reshapeInt64ToInt8(SmallVector<Value> &srcSizes,
-                          SmallVector<Value> &srcStrides,
-                          ConversionPatternRewriter &rewriter,
-                          Operation *op) const {
-    // Shape as int8, multiply bitsize to last dimension
-    auto lastDim = srcSizes.back();
-    srcSizes.back() = rewriter.create<arith::MulIOp>(
-        op->getLoc(), lastDim.getType(), lastDim,
-        rewriter.create<arith::ConstantIndexOp>(op->getLoc(), 8));
-
-    // Stride as int8, multiply bitsize to each stride
-    std::transform(srcStrides.begin(), srcStrides.end(), srcStrides.begin(),
-                   [&](Value size) {
-                     return rewriter.create<arith::MulIOp>(
-                         op->getLoc(), size.getType(), size,
-                         rewriter.create<arith::ConstantIndexOp>(
-                             op->getLoc(), 8)); // 8 bytes for int64_t
-                   });
-  }
-
   LogicalResult
   matchAndRewrite(memref::CopyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -392,50 +389,31 @@ public:
         createMetadata(rewriter, op->getLoc(), adaptor.getTarget());
 
     auto inputType = dyn_cast<MemRefType>(op.getSource().getType());
-    // For memory operations, 64 bit op can work as int8_t mode
-    if (inputType.getElementTypeBitWidth() == 64) {
-      // Need re-calculate sizes and strides, and convert type to int8_t
-      reshapeInt64ToInt8(srcSizes, srcStrides, rewriter, op);
-      reshapeInt64ToInt8(dstSizes, dstStrides, rewriter, op);
 
-      // Convert type to int8_t
-      SmallVector<int64_t, 4> shape(inputType.getShape().begin(),
-                                    inputType.getShape().end());
-      shape.back() *= sizeof(int64_t);
-
-      inputType =
-          MemRefType::get(shape, rewriter.getI8Type(), inputType.getLayout(),
-                          inputType.getMemorySpace());
-    }
-
-    auto elemCount = calculateElemCount(rewriter, op->getLoc(), srcSizes);
-    auto srcFmt = getFormatFromValueType(inputType);
+    auto srcFmt =
+        getFormatCode(cast<MemRefType>(inputType.clone(IntegerType::get(
+            inputType.getContext(), inputType.getElementTypeBitWidth()))));
 
     // SPM to SPM
     if (isSrcSPM && isDstSPM) {
-      // WORKAROUND: Assume no mask.
-      srcFmt = insertConvertTypeOp(srcPtr, inputType, elemCount, rewriter,
-                                   op->getLoc());
-      insertConvertTypeOp(dstPtr, inputType, elemCount, rewriter, op->getLoc());
-      auto constValue = rewriter.create<arith::ConstantIntOp>(
-          op.getLoc(), 0, rewriter.getI32Type());
-
-      rewriter.create<tx::AddVSOp>(op->getLoc(), rewriter.getI64Type(), srcPtr,
-                                   constValue, dstPtr,
-                                   elemCount, // Element count
-                                   rewriter.getI16IntegerAttr(0), // Round mode
-                                   rewriter.getI16IntegerAttr(srcFmt) // Format
+      auto elemCount = calculateElemCount(rewriter, op->getLoc(), srcSizes);
+      rewriter.create<tx::MemCopyOp>(
+          op.getLoc(), rewriter.getI64Type(), srcPtr, dstPtr, elemCount,
+          rewriter.getI32IntegerAttr(srcFmt) // Format
       );
-      insertRestoreTypeOp(srcPtr, inputType, elemCount, rewriter, op->getLoc());
-      insertRestoreTypeOp(dstPtr, inputType, elemCount, rewriter, op->getLoc());
       rewriter.eraseOp(op);
       return success();
     }
 
-    auto srcShape4d = padSizesToNHWC(rewriter, op->getLoc(), srcSizes);
-    auto srcStrides4d = padStridesToNHWC(rewriter, op->getLoc(), srcStrides);
-    auto dstShape4d = padSizesToNHWC(rewriter, op->getLoc(), dstSizes);
-    auto dstStrides4d = padStridesToNHWC(rewriter, op->getLoc(), dstStrides);
+    auto rank = inputType.getRank();
+    // Update rank to 4 if rank less than 4.
+    if (rank < 4) {
+      srcSizes = padSizesToNHWC(rewriter, op->getLoc(), srcSizes);
+      srcStrides = padStridesToNHWC(rewriter, op->getLoc(), srcStrides);
+      dstSizes = padSizesToNHWC(rewriter, op->getLoc(), dstSizes);
+      dstStrides = padStridesToNHWC(rewriter, op->getLoc(), dstStrides);
+      rank = 4;
+    }
 
     int bitWidth = inputType.getElementType().getIntOrFloatBitWidth();
     int elemBytes = bitWidth / 8;
@@ -443,20 +421,22 @@ public:
     if (isDstSPM) {
       auto rdmaOp = rewriter.create<tx::RdmaOp>(
           op.getLoc(), rewriter.getI64Type(), srcPtr, dstPtr,
-          srcShape4d,                            // src shape
-          srcStrides4d,                          // src stride
-          dstShape4d,                            // dst shape
-          dstStrides4d,                          // dst stride
+          srcSizes,                              // src shape
+          srcStrides,                            // src stride
+          dstSizes,                              // dst shape
+          dstStrides,                            // dst stride
+          rewriter.getI32IntegerAttr(rank),      // rank
           rewriter.getI32IntegerAttr(elemBytes), // elem bytes
           rewriter.getI32IntegerAttr(srcFmt)     // Format
       );
     } else {
       auto wdmaOp = rewriter.create<tx::WdmaOp>(
           op.getLoc(), rewriter.getI64Type(), srcPtr, dstPtr,
-          srcShape4d,                            // src shape
-          srcStrides4d,                          // src stride
-          dstShape4d,                            // dst shape
-          dstStrides4d,                          // dst stride
+          srcSizes,                              // src shape
+          srcStrides,                            // src stride
+          dstSizes,                              // dst shape
+          dstStrides,                            // dst stride
+          rewriter.getI32IntegerAttr(rank),      // rank
           rewriter.getI32IntegerAttr(elemBytes), // elem bytes
           rewriter.getI32IntegerAttr(srcFmt)     // Format
       );
@@ -481,20 +461,25 @@ public:
     if (op.getOutputs().size() != 1)
       return rewriter.notifyMatchFailure(op, "Only support single output\n");
 
-    auto [srcPtr, srcSizes, srcStrides] =
-        createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
-    auto inputType = op.getInputs()[0].getType();
-    auto bitWidth = op.getInputs()[0].getType().getIntOrFloatBitWidth();
-
-    if (bitWidth != 16 && bitWidth != 32) {
-      if (failed(linalg::linalgOpToLoops(rewriter, op)))
-        return rewriter.notifyMatchFailure(op, " op not yet supported");
+    auto rank = cast<MemRefType>(op.getOutputs()[0].getType()).getRank();
+    if (rank == 0) {
+      rewriter.create<memref::StoreOp>(op.getLoc(), adaptor.getInputs()[0],
+                                       adaptor.getOutputs()[0]);
       rewriter.eraseOp(op);
       return success();
     }
 
+    auto [srcPtr, srcSizes, srcStrides] =
+        createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
+    auto inputType = op.getInputs()[0].getType();
+    auto bitWidth = inputType.getIntOrFloatBitWidth();
+
+    if (bitWidth != 16 && bitWidth != 32) {
+      return convertLinalgOpToLoops(op, rewriter);
+    }
+
     // AddVS value need has fmt with input fmt and only support float type
-    Data_Format fmt = bitWidth == 16 ? Fmt_FP16 : Fmt_FP32;
+    Data_Format fmt = getFormatFromElemType(inputType);
 
     auto bitcastType =
         bitWidth == 16 ? rewriter.getI16Type() : rewriter.getI32Type();
@@ -506,22 +491,11 @@ public:
           op.getLoc(), rewriter.getI32Type(), fillValue);
     }
 
-    // TODO: For scalar data, instead of function call, we should convert
-    // linalg.fill to memref.store directly to get better performance.
-
-    // Use xor + addvs to simulate memset operation. Only support type fp32 and
-    // fp16
-    // 1. xor srcPtr with itself to get zero
-    // 2. addvs srcPtr with value to get the fill value
-    auto elemCount = calculateElemCount(rewriter, op->getLoc(), srcSizes);
-
-    auto init =
-        rewriter.create<tx::XorVV>(op.getLoc(), rewriter.getI64Type(), srcPtr,
-                                   srcPtr, srcPtr, elemCount, fmt);
-    auto resultOp = rewriter.create<tx::AddVSOp>(
-        op.getLoc(), rewriter.getI64Type(), srcPtr, fillValue, srcPtr,
-        elemCount,
-        rewriter.getI16IntegerAttr(0), // round_mode
+    // NOTE: When encounter NaN, use xor + addvs to simulate memset operation
+    // will get wrong result.
+    auto resultOp = rewriter.create<tx::MemsetOp>(
+        op.getLoc(), rewriter.getI64Type(), srcPtr, fillValue, srcSizes,
+        srcStrides, rewriter.getI32IntegerAttr(rank),
         rewriter.getI16IntegerAttr(fmt));
 
     rewriter.eraseOp(op);
@@ -549,6 +523,7 @@ public:
     SmallVector<int64_t, 4> srcShape(srcType.getShape());
     SmallVector<int64_t, 4> dstShape(dstType.getShape());
     SmallVector<int64_t, 4> perm4d(perm.begin(), perm.end());
+
     while (srcShape.size() < 4) {
       srcShape.push_back(1);
       dstShape.push_back(1);
@@ -576,11 +551,14 @@ public:
     auto srcPtr = createAddressFromMemref(rewriter, op->getLoc(), src);
     auto dstPtr = createAddressFromMemref(rewriter, op->getLoc(), dst);
 
+    // FIXME: Only in this way, we can get the correct answer.
+    // For GatherScatter, we need to read the data in a transposed manner first,
+    // and then write it in a sequential manner.
     auto newOp = rewriter.create<tx::GatherScatter>(
         op->getLoc(), rewriter.getI64Type(), srcPtr, dstPtr, bytes,
-        srcStride[0], srcStride[1], srcStride[2], srcShape[0], srcShape[1],
-        srcShape[2], dstStride[0], dstStride[1], dstStride[2], dstShape[0],
-        dstShape[1], dstShape[2]);
+        dstStride[0], dstStride[1], dstStride[2], dstShape[0], dstShape[1],
+        dstShape[2], srcStride[0], srcStride[1], srcStride[2], srcShape[0],
+        srcShape[1], srcShape[2]);
 
     rewriter.eraseOp(op);
     return success();
@@ -623,6 +601,11 @@ public:
 
     auto srcPtr = createAddressFromMemref(rewriter, op->getLoc(), src);
     auto dstPtr = createAddressFromMemref(rewriter, op->getLoc(), dst);
+
+    // TODO: Through fmt conversion to support more element types.
+    if (!isSupportedType(srcType)) {
+      return rewriter.notifyMatchFailure(op, "Unsupported element type\n");
+    }
     Data_Format fmt = getFormatCode(srcType);
 
     auto newOp =
@@ -639,10 +622,13 @@ public:
     auto perm = op.getPermutation();
     auto rank = perm.size();
 
-    // FIXME: tx.transpose/tx.gather_scatter need to cx align,
-    // convert 2d transpose to loops default now.
-    // if (rank == 2)
-    //   return convertToGatherScatter(op, adaptor, rewriter);
+    if (cast<MemRefType>(op.getInput().getType()).getElementTypeBitWidth() ==
+        1) {
+      return convertLinalgOpToLoops(op, rewriter);
+    }
+
+    if (rank == 2)
+      return convertToGatherScatter(op, adaptor, rewriter);
 
     if (rank == 3)
       return convertToGatherScatter(op, adaptor, rewriter);
@@ -661,10 +647,7 @@ public:
 
     // Default handling of remaining cases.
     // TODO:  Convert higher rank to tx.
-    if (failed(linalg::linalgOpToLoops(rewriter, op)))
-      return rewriter.notifyMatchFailure(op, " op not yet supported");
-    rewriter.eraseOp(op);
-    return success();
+    return convertLinalgOpToLoops(op, rewriter);
   }
 };
 
@@ -672,6 +655,48 @@ public:
 // mk.dot to tx.gemm Conversion Pattern
 //===----------------------------------------------------------------------===//
 
+Value createChannelNorm(Location loc, Value op,
+                        ConversionPatternRewriter &rewriter) {
+  auto memType = cast<MemRefType>(op.getType());
+  auto shape = memType.getShape();
+  int bitWidth = memType.getElementType().getIntOrFloatBitWidth();
+
+  int alignBase = bitWidth == 8 ? 128 : 64;
+
+  int c = shape.back();
+  // Has been cx aligned
+  bool noNeedChannelNorm =
+      (c >= 4 && c <= alignBase && c == next_power_of_two_64(c));
+  if (noNeedChannelNorm) {
+    return op;
+  }
+
+  int cx = c / alignBase;
+  int c0 = c % alignBase;
+  int alignedC0 = c0 ? next_power_of_two_64(c0) : 0;
+  if (c0 < 4 && c0 > 0) {
+    // If c0 is not zero, we need to align it to 4
+    alignedC0 = 4;
+  }
+  int alignedC = cx * alignBase + alignedC0;
+  SmallVector<int64_t, 4> alignedShape(shape.begin(), shape.end());
+  alignedShape.back() = alignedC;
+
+  auto alignedMemType = MemRefType::get(alignedShape, memType.getElementType());
+  auto alignedAlloc = rewriter.create<memref::AllocOp>(loc, alignedMemType);
+
+  auto srcPtr = createAddressFromMemref(rewriter, loc, op);
+  auto dstPtr = createAddressFromMemref(rewriter, loc, alignedAlloc);
+
+  SmallVector<int64_t, 4> shape4D =
+      reshapeReduceShapeTo4d(shape, shape.size() - 1);
+  auto channelNorm =
+      rewriter.create<tx::ChannelNormOp>(loc, TypeRange({}), srcPtr, dstPtr,
+                                         rewriter.getDenseI64ArrayAttr(shape4D),
+                                         rewriter.getI16IntegerAttr(alignedC0),
+                                         rewriter.getI16IntegerAttr(bitWidth));
+  return alignedAlloc;
+}
 class MKDotToTx81GemmOpConversion
     : public OpConversionPattern<linalg::MatmulOp> {
 
@@ -689,95 +714,53 @@ class MKDotToTx81GemmOpConversion
     );
   }
 
-  Value createChannelNorm(Location loc, Value op,
-                          ConversionPatternRewriter &rewriter) const {
-    auto memType = cast<MemRefType>(op.getType());
-    auto shape = memType.getShape();
-    int bitWidth = memType.getElementType().getIntOrFloatBitWidth();
-
-    int alignBase = bitWidth == 8 ? 128 : 64;
-
-    int c = shape.back();
-    // Has been cx aligned
-    bool noNeedChannelNorm =
-        (c >= 4 && c <= alignBase && c == next_power_of_two_64(c));
-    if (noNeedChannelNorm) {
-      return op;
-    }
-
-    int cx = c / alignBase;
-    int c0 = c % alignBase;
-    int alignedC0 = c0 ? next_power_of_two_64(c0) : 0;
-    if (c0 < 4 && c0 > 0) {
-      // If c0 is not zero, we need to align it to 4
-      alignedC0 = 4;
-    }
-    int alignedC = cx * alignBase + alignedC0;
-    SmallVector<int64_t, 4> alignedShape(shape.begin(), shape.end());
-    alignedShape.back() = alignedC;
-
-    auto alignedMemType =
-        MemRefType::get(alignedShape, memType.getElementType());
-    auto alignedAlloc = rewriter.create<memref::AllocOp>(loc, alignedMemType);
-
-    auto srcPtr = createAddressFromMemref(rewriter, loc, op);
-    auto dstPtr = createAddressFromMemref(rewriter, loc, alignedAlloc);
-
-    SmallVector<int64_t, 4> shape4D =
-        reshapeReduceShapeTo4d(shape, shape.size() - 1);
-    auto channelNorm = rewriter.create<tx::ChannelNormOp>(
-        loc, TypeRange({}), srcPtr, dstPtr,
-        rewriter.getDenseI64ArrayAttr(shape4D),
-        rewriter.getI16IntegerAttr(alignedC0),
-        rewriter.getI16IntegerAttr(bitWidth));
-    return alignedAlloc;
-  }
-
 public:
   using OpConversionPattern<linalg::MatmulOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(linalg::MatmulOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Extract dimensions from tensor types
-    MemRefType aTensorType = cast<MemRefType>(op->getOperand(0).getType());
-    MemRefType bTensorType = cast<MemRefType>(op->getOperand(1).getType());
-    assert(aTensorType.getElementType() == bTensorType.getElementType() &&
-           "a and b must have the same element type");
-    MemRefType dstType = cast<MemRefType>(op.getOutputs()[0].getType());
-    Data_Format srcFmt = getFormatCode(aTensorType);
-    Data_Format dstFmt = getFormatCode(dstType);
-
-    // Get converted operands
     auto loc = op->getLoc();
 
+    // Get operands
     auto a = adaptor.getInputs()[0];
     auto b = adaptor.getInputs()[1];
+    auto dst = adaptor.getOutputs()[0];
 
-    auto aShape = aTensorType.getShape();
-    auto bShape = bTensorType.getShape();
+    MemRefType aType = cast<MemRefType>(a.getType());
+    MemRefType bType = cast<MemRefType>(b.getType());
+    MemRefType dstType = cast<MemRefType>(dst.getType());
+    Data_Format srcFmt = getFormatCode(aType);
+    Data_Format dstFmt = getFormatCode(dstType);
 
-    // Matrix dimensions M, K, N for GEMM
-    int32_t M = aShape[0];
-    int32_t K = aShape[1];
-    // Notice: operand is (N, K) now.
-    int32_t N = bShape[0];
+    // Transpose b from (K, N) to (N, K)
+    auto oldShape = bType.getShape();
+    SmallVector<int64_t> perm({1, 0});
+    llvm::SmallVector<int64_t> transShape({oldShape[1], oldShape[0]});
+    auto transposeInit = rewriter.create<memref::AllocOp>(
+        op->getLoc(), MemRefType::get(transShape, bType.getElementType()));
+    rewriter.create<linalg::TransposeOp>(op->getLoc(), b, transposeInit, perm);
+    b = transposeInit;
 
     // Create dimensions array attribute [M, K, N]
+    int32_t M = aType.getShape()[0];
+    int32_t K = oldShape[0];
+    // Notice: operand is (N, K) now.
+    int32_t N = oldShape[1];
+
     auto dims = rewriter.getI32ArrayAttr({M, K, N});
 
+    // Channelnorm inputs
     auto alignedA = createChannelNorm(loc, a, rewriter);
     auto alignedB = createChannelNorm(loc, b, rewriter);
 
     // Get operand ptr
     auto [aPtr, aSizes, aStrides] = createMetadata(rewriter, loc, alignedA);
     auto [bPtr, bSizes, bStrides] = createMetadata(rewriter, loc, alignedB);
-
-    auto [dstPtr, dstSizes, dstStrides] =
-        createMetadata(rewriter, loc, adaptor.getOutputs()[0]);
+    auto dstPtr = createAddressFromMemref(rewriter, loc, dst);
 
     // Assume input type is same. Tx neural engine not support fp32 for input
-    if (aTensorType.getElementType().isF32()) {
+    if (aType.getElementType().isF32()) {
       srcFmt = Data_Format::Fmt_TF32;
       fp32ToTF32(rewriter, loc, aSizes, aPtr);
       fp32ToTF32(rewriter, loc, bSizes, bPtr);
@@ -786,12 +769,19 @@ public:
     auto zero =
         rewriter.create<arith::ConstantIntOp>(loc, 0, rewriter.getI64Type());
 
-    // Check if N is a power of 2 and greater than 4
-    if ((N & (N - 1)) != 0) { // Check if N is not a power of 2
-      return rewriter.notifyMatchFailure(op, "N must be a power of 2");
-    }
-    if (N < 4) {
-      return rewriter.notifyMatchFailure(op, "N must be greater than 4");
+    // DechannelNorm dst
+    int bitWidth = dstType.getElementType().getIntOrFloatBitWidth();
+    int alignBase = bitWidth == 8 ? 128 : 64;
+    bool needDeChannelNorm = N > alignBase;
+    assert(N % alignBase == 0 ||
+           (N >= 4 && N == next_power_of_two_64(N)) &&
+               "N should be power of two or be multiple of alignbase\n");
+    Value alignOutputPtr;
+    if (needDeChannelNorm) {
+      auto alignedOutput = rewriter.create<memref::AllocOp>(loc, dstType);
+      alignOutputPtr = createAddressFromMemref(rewriter, loc, alignedOutput);
+    } else {
+      alignOutputPtr = dstPtr;
     }
 
     // Create GemmOp
@@ -800,11 +790,11 @@ public:
         loc, rewriter.getI64Type(),
         aPtr,                        // src_a (Matrix A in SPM)
         bPtr,                        // src_b (Matrix B in SPM)
-        dstPtr,                      // src_bias. Unused for now.
-        dstPtr,                      // dst,
+        alignOutputPtr,              // src_bias. Unused for now.
+        alignOutputPtr,              // dst,
         dims,                        // dimensions [M,K,N]
         rewriter.getBoolAttr(false), // en_psum. Used as accumulate buffer
-        dstPtr, //  The address of psum in SPM, Always same to output
+        alignOutputPtr, //  The address of psum in SPM, Always same to output
         rewriter.getBoolAttr(false), // trans_src_a
         // NOTE: (N, K) is thought not trans in hardware
         rewriter.getBoolAttr(false),                   // trans_src_b.
@@ -820,20 +810,91 @@ public:
         rewriter.getI32IntegerAttr(dstFmt)             // dst_fmt
     );
 
-    // DechannelNorm dst
-    int bitWidth = dstType.getElementType().getIntOrFloatBitWidth();
-    int alignBase = bitWidth == 32 ? 64 : 128;
-    if (N > alignBase) {
+    if (needDeChannelNorm) {
       auto dechannelNorm = rewriter.create<tx::DechannelNormOp>(
-          loc, TypeRange({}), dstPtr, dstPtr,
+          loc, TypeRange({}), alignOutputPtr, dstPtr,
           rewriter.getDenseI64ArrayAttr({1, 1, M, N}),
           rewriter.getI16IntegerAttr(0) /*alignedC0*/,
           rewriter.getI16IntegerAttr(bitWidth));
     }
 
-    // Op has no result value
     rewriter.eraseOp(op);
+    return success();
+  }
+};
 
+struct DotScaledConverter : public OpConversionPattern<mk::DotScaledOp> {
+  using OpConversionPattern<mk::DotScaledOp>::OpConversionPattern;
+
+  Value convertMXFPToBF16(Value srcPtr, MemRefType srcType,
+                          triton::ScaleDotElemType elemType, Location loc,
+                          ConversionPatternRewriter &rewriter) const {
+    auto alloc = rewriter.create<memref::AllocOp>(
+        loc, MemRefType::get(srcType.getShape(), rewriter.getBF16Type()));
+    auto dstPtr = createAddressFromMemref(rewriter, loc, alloc);
+    auto elemCount =
+        rewriter.create<arith::ConstantIndexOp>(loc, srcType.getNumElements());
+    switch (elemType) {
+    case triton::ScaleDotElemType::E4M3:
+      rewriter.create<tx::FP8E4M3ToBF16Op>(loc, srcPtr, dstPtr, elemCount);
+      break;
+    case triton::ScaleDotElemType::E5M2:
+      rewriter.create<tx::FP8E5M2ToBF16Op>(loc, srcPtr, dstPtr, elemCount);
+      break;
+    case triton::ScaleDotElemType::E2M1:
+      rewriter.create<tx::FP4E2M1ToBF16Op>(loc, srcPtr, dstPtr, elemCount);
+      break;
+    case triton::ScaleDotElemType::FP16:
+      rewriter.create<tx::FP16ToBF16Op>(loc, srcPtr, dstPtr, elemCount, 0);
+      break;
+    default:
+      llvm::report_fatal_error("MXFP type unsupported!");
+    }
+    return alloc;
+  }
+
+  LogicalResult
+  matchAndRewrite(mk::DotScaledOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto a = op.getA();
+    auto b = op.getB();
+    auto dst = op.getDst();
+    Value aScale = op.getAScale();
+    Value bScale = op.getBScale();
+    auto aElemType = op.getAElemType();
+    auto bElemType = op.getBElemType();
+    MemRefType aMemType = cast<MemRefType>(a.getType());
+    MemRefType bMemType = cast<MemRefType>(b.getType());
+
+    // Get operand ptr
+    auto aPtr = createAddressFromMemref(rewriter, loc, a);
+    auto bPtr = createAddressFromMemref(rewriter, loc, b);
+
+    // Convert MXFP to BF16
+    auto aBuffer = convertMXFPToBF16(aPtr, aMemType, aElemType, loc, rewriter);
+    auto bBuffer = convertMXFPToBF16(bPtr, bMemType, bElemType, loc, rewriter);
+
+    aPtr = createAddressFromMemref(rewriter, loc, aBuffer);
+    bPtr = createAddressFromMemref(rewriter, loc, bBuffer);
+
+    // Scale the input
+    if (aScale) {
+      auto aScalePtr = createAddressFromMemref(rewriter, loc, aScale);
+      rewriter.create<tx::MXFPScaleBF16Op>(loc, TypeRange{}, aPtr, aScalePtr,
+                                           aPtr, aMemType.getNumElements());
+    }
+    if (bScale) {
+      auto bScalePtr = createAddressFromMemref(rewriter, loc, bScale);
+      rewriter.create<tx::MXFPScaleBF16Op>(loc, TypeRange{}, bPtr, bScalePtr,
+                                           bPtr, bMemType.getNumElements());
+    }
+
+    // Do standard matmul
+    rewriter.create<linalg::MatmulOp>(loc, ValueRange{aBuffer, bBuffer},
+                                      ValueRange{dst});
+
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -905,6 +966,8 @@ public:
 
     // Tx neural engine not support fp32 for input
     auto inputType = dyn_cast<MemRefType>(op.getSrc().getType());
+    assert(isSupportedType(inputType) &&
+           "Unsupported element type for Sigmoid operation\n");
     Data_Format srcFmt = getFormatCode(inputType);
 
     rewriter.create<tx::Sigmoid>(loc, rewriter.getI64Type(), input, dst,
@@ -915,99 +978,71 @@ public:
   }
 };
 
-template <typename TxOpT>
-class ArgMinMaxBaseConversion : public OpConversionPattern<linalg::ReduceOp> {
-  using OpConversionPattern<linalg::ReduceOp>::OpConversionPattern;
-
-public:
-  bool isArgMin;
-
-  ArgMinMaxBaseConversion(MLIRContext *context)
-      : OpConversionPattern(context) {}
-
-  LogicalResult
-  matchAndRewrite(linalg::ReduceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (op.getBody()->getNumArguments() != 4) {
-      return failure();
-    }
-
-    auto block = op.getBody();
-    auto ops = block->without_terminator();
-
-    Value currValue = block->getArgument(0);
-    Value currIndex = block->getArgument(1);
-    Value reduceValue = block->getArgument(2);
-    Value reduceIndex = block->getArgument(3);
-
-    auto opsIter = ops.begin();
-    Value indexSelectOp, valueSelectOp;
-    if (failed(matchArgMinMax(currValue, currIndex, reduceValue, reduceIndex,
-                              opsIter, indexSelectOp, valueSelectOp,
-                              isArgMin))) {
-      return failure();
-    }
-
-    // matching: linalg.yield %18, %19 : f32, i32
-    LLVM_DEBUG(llvm::dbgs() << "Matching: " << *opsIter << "\n");
-    auto termOp = dyn_cast<linalg::YieldOp>(*opsIter++);
-    if (termOp && termOp == block->getTerminator()) {
-      auto opnds = termOp.getOperands();
-      if (opnds != ArrayRef<Value>{valueSelectOp, indexSelectOp}) {
-        return failure();
-      }
-    } else {
-      return failure();
-    }
-
-    // Rewrite with tx81 operation
-    auto loc = op.getLoc();
-    auto dims = op.getDimensions();
-    if (dims.size() != 1)
-      return rewriter.notifyMatchFailure(op, "Only support one dim reduce.");
-    auto dim = dims[0];
-
-    auto input =
-        createAddressFromMemref(rewriter, op->getLoc(), adaptor.getInputs()[0]);
-    auto value =
-        createAddressFromMemref(rewriter, op->getLoc(), adaptor.getInits()[0]);
-    auto index =
-        createAddressFromMemref(rewriter, op->getLoc(), adaptor.getInits()[1]);
-    auto inputType = dyn_cast<MemRefType>(op.getInputs()[0].getType());
-    auto valueType = dyn_cast<MemRefType>(adaptor.getInits()[0].getType());
-
-    // TODO: Support any rank
-    auto inputShape = inputType.getShape();
-    if (inputShape.size() > 1)
-      return rewriter.notifyMatchFailure(op, "Rank > 1 unsupported yet.");
-
-    int64_t inputSize = inputShape.empty() ? 1 : inputShape[0];
-    auto tx81Op = rewriter.create<TxOpT>(
-        op->getLoc(), TypeRange{}, input,
-        // TODO: get output value and index
-        value, index, rewriter.getI32IntegerAttr(inputSize),
-        rewriter.getI16IntegerAttr(getFormatCode(valueType)));
-
-    rewriter.replaceOp(op, tx81Op);
-
-    return success();
-  }
-};
-
-struct ArgMinConversion : public ArgMinMaxBaseConversion<tx::ArgMinOp> {
-  ArgMinConversion(MLIRContext *context) : ArgMinMaxBaseConversion(context) {
-    isArgMin = true;
-  }
-};
-
-struct ArgMaxConversion : public ArgMinMaxBaseConversion<tx::ArgMaxOp> {
-  ArgMaxConversion(MLIRContext *context) : ArgMinMaxBaseConversion(context) {
-    isArgMin = false;
-  }
-};
-
 struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
   using OpConversionPattern<linalg::GenericOp>::OpConversionPattern;
+
+  LogicalResult convertIsNaNOp(linalg::GenericOp op, OpAdaptor adapter,
+                               ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto input = createAddressFromMemref(rewriter, loc, adapter.getInputs()[0]);
+    auto [output, sizes, strides] =
+        createMetadata(rewriter, op->getLoc(), adapter.getOutputs()[0]);
+    auto inputType = dyn_cast<MemRefType>(op.getInputs()[0].getType());
+    auto elemCount = inputType.getNumElements();
+    assert((elemCount % 8) == 0 &&
+           "ElemCount must be a multiple of 8 due to ElementwiseRewrite pass!");
+
+    auto elemCountValue = calculateElemCount(rewriter, op->getLoc(), sizes);
+
+    auto fmt = getFormatCode(inputType);
+    rewriter.create<tx::BoolUnEqualVV>(loc,                   // loc
+                                       rewriter.getI64Type(), // result type
+                                       input,                 // input0
+                                       input,                 // input1
+                                       output,                // out
+                                       elemCountValue,        // elem_count
+                                       rewriter.getI16IntegerAttr(fmt) // fmt
+    );
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  LogicalResult convertIsInfOp(linalg::GenericOp op, OpAdaptor adapter,
+                               ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto input = createAddressFromMemref(rewriter, loc, adapter.getInputs()[0]);
+    auto [output, sizes, strides] =
+        createMetadata(rewriter, op->getLoc(), adapter.getOutputs()[0]);
+    auto elemCountValue = calculateElemCount(rewriter, op->getLoc(), sizes);
+
+    auto inputType = dyn_cast<MemRefType>(op.getInputs()[0].getType());
+    Data_Format srcFmt = getFormatCode(inputType);
+
+    // 1 / inf == 0, Use recip and boolequalvs to calculate isinf.
+    rewriter.create<tx::RecipVVOp>(loc, rewriter.getI64Type(), input, output,
+                                   elemCountValue,
+                                   rewriter.getI16IntegerAttr(srcFmt));
+
+    auto elemCount = inputType.getNumElements();
+    // If element count is not divisible by 8, expand the number of elements to
+    // a multiple of 8.
+    if (elemCount % 8) {
+      elemCount = ((elemCount + 7) / 8) * 8;
+      op->emitRemark() << "element count was expanded to a multiple of 8, may "
+                          "access memory out of bounds!";
+    }
+
+    // Creat new element count value.
+    elemCountValue = rewriter.create<arith::ConstantIndexOp>(loc, elemCount);
+    auto constValue = rewriter.create<arith::ConstantIntOp>(
+        op.getLoc(), 0, rewriter.getI32Type());
+    rewriter.create<tx::BoolEqualVS>(op.getLoc(), rewriter.getI64Type(), output,
+                                     constValue, output, elemCountValue,
+                                     rewriter.getI16IntegerAttr(srcFmt));
+
+    rewriter.eraseOp(op);
+    return success();
+  }
 
   template <typename TxOpT>
   LogicalResult convertUnaryOp(linalg::GenericOp op, OpAdaptor adapter,
@@ -1079,6 +1114,79 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
       insertRestoreTypeOp(output, inputType, elemCount, rewriter, loc);
     }
 
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  template <typename TxOpT>
+  LogicalResult
+  convertBinaryLogicOp(linalg::GenericOp op, OpAdaptor adaptor,
+                       ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto input0 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[0]);
+    auto input1 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[1]);
+    auto [output, sizes, strides] =
+        createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
+    auto elemCount = calculateElemCount(rewriter, op->getLoc(), sizes);
+
+    auto inputType = dyn_cast<MemRefType>(op.getInputs()[0].getType());
+    assert(!inputType.getElementType().isInteger(8) &&
+           "i8 input type is not supported in binary logic operation!");
+    auto srcFmt = getFormatFromValueType(inputType);
+    rewriter.create<TxOpT>(loc, rewriter.getI64Type(), input0, input1, output,
+                           elemCount, rewriter.getI16IntegerAttr(srcFmt));
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  template <typename TxOpT>
+  LogicalResult
+  convertBoolBinaryLogicOp(linalg::GenericOp op, OpAdaptor adaptor,
+                           ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto input0 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[0]);
+    auto input1 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[1]);
+    auto [output, sizes, strides] =
+        createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
+
+    auto inputType = dyn_cast<MemRefType>(op.getInputs()[0].getType());
+    auto bitWidth = inputType.getElementType().getIntOrFloatBitWidth();
+    auto elemCount = inputType.getNumElements();
+
+    // If bit width is 1 and element count is not divisible by 8, expand
+    // the number of elements to a multiple of 8.
+    if (bitWidth == 1 && elemCount % 8) {
+      elemCount = ((elemCount + 7) / 8) * 8;
+    }
+
+    elemCount *= bitWidth;
+
+    // Creat new element count value.
+    Value elemCountValue =
+        rewriter.create<arith::ConstantIndexOp>(loc, elemCount);
+    rewriter.create<TxOpT>(loc, rewriter.getI64Type(), input0, input1, output,
+                           elemCountValue);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  template <typename TxOpT>
+  LogicalResult ZeroPointConvertOp(linalg::GenericOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto input = createAddressFromMemref(rewriter, loc, adaptor.getInputs()[0]);
+    auto output = createAddressFromMemref(rewriter, op->getLoc(),
+                                          adaptor.getOutputs()[0]);
+    auto elemCount =
+        cast<MemRefType>(op->getOperandTypes()[0]).getNumElements();
+
+    rewriter.create<TxOpT>(loc, input, output, 0, (uint32_t)elemCount);
     rewriter.eraseOp(op);
     return success();
   }
@@ -1178,8 +1286,57 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
     return success();
   }
 
+  LogicalResult convertI1Select(linalg::GenericOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto mask = createAddressFromMemref(rewriter, loc, adaptor.getInputs()[0]);
+    auto input1 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[1]);
+    auto input2 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[2]);
+    auto [output, sizes, strides] =
+        createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
+
+    auto inputType = dyn_cast<MemRefType>(op.getInputs()[1].getType());
+    auto rank = inputType.getRank();
+    auto elemCount = inputType.getNumElements();
+    auto elemCountAlign8 =
+        rewriter.create<arith::ConstantIndexOp>(loc, (elemCount + 7) & ~7);
+
+    auto tempLhs = rewriter.create<memref::AllocOp>(loc, inputType);
+    auto tempLhsAddr = createAddressFromMemref(rewriter, loc, tempLhs);
+
+    Value tempRhsAddr;
+    if (adaptor.getInputs()[1] == adaptor.getOutputs()[0] ||
+        adaptor.getInputs()[2] == adaptor.getOutputs()[0]) {
+      auto tempRhs = rewriter.create<memref::AllocOp>(loc, inputType);
+      tempRhsAddr = createAddressFromMemref(rewriter, loc, tempRhs);
+    } else {
+      tempRhsAddr = output;
+    }
+    // result[i] = (mask[i] AND A[i]) OR (NOT mask[i] AND B[i])
+    // mask[i] AND A[i]
+    rewriter.create<tx::BoolAndV>(loc, rewriter.getI64Type(), mask, input1,
+                                  tempLhsAddr, elemCountAlign8);
+    // NOT mask
+    rewriter.create<tx::BoolNotV>(loc, rewriter.getI64Type(), mask, tempRhsAddr,
+                                  elemCountAlign8);
+    // NOT mask[i] AND B[i]
+    rewriter.create<tx::BoolAndV>(loc, rewriter.getI64Type(), input2,
+                                  tempRhsAddr, tempRhsAddr, elemCountAlign8);
+    // result
+    rewriter.create<tx::BoolOrV>(loc, rewriter.getI64Type(), tempLhsAddr,
+                                 tempRhsAddr, output, elemCountAlign8);
+    rewriter.eraseOp(op);
+    return success();
+  }
+
   LogicalResult SelectConvertOp(linalg::GenericOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
+    auto inputType = dyn_cast<MemRefType>(op.getInputs()[1].getType());
+    if (getFormatCode(inputType) == Fmt_BOOL)
+      return convertI1Select(op, adaptor, rewriter);
+
     Location loc = op->getLoc();
     auto input0 =
         createAddressFromMemref(rewriter, loc, adaptor.getInputs()[0]);
@@ -1191,19 +1348,12 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
         createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
     auto elemCount = calculateElemCount(rewriter, op->getLoc(), sizes);
 
-    auto inputType = dyn_cast<MemRefType>(op.getInputs()[1].getType());
-    assert(inputType.getNumElements() % 8 == 0 &&
-           "Total elements need be multiple of 8\n");
-
-    Data_Format srcFmt =
-        insertConvertTypeOp(input1, inputType, elemCount, rewriter, loc);
-    insertConvertTypeOp(input2, inputType, elemCount, rewriter, loc);
+    Data_Format srcFmt = getFormatFromValueType(inputType);
 
     // Add zero const value
     auto zero = rewriter.create<arith::ConstantIntOp>(op.getLoc(), 0,
                                                       rewriter.getI32Type());
 
-    assert(adaptor.getInputs()[2] != adaptor.getOutputs()[0]);
     // Maskmove mask only support int8/fp, here mask is memref<i1>
     auto maskCast = rewriter.create<memref::AllocOp>(loc, inputType);
     auto maskCastAddr = createAddressFromMemref(rewriter, loc, maskCast);
@@ -1216,38 +1366,31 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
       // Create memref::allocOp
       auto temp = rewriter.create<memref::AllocOp>(loc, inputType);
       auto tempAddr = createAddressFromMemref(rewriter, loc, temp);
-      auto mid = rewriter.create<tx::AddVSOp>(
-          op.getLoc(), rewriter.getI64Type(), input2, zero, tempAddr, elemCount,
-          rewriter.getI16IntegerAttr(0), // round_mode
-          rewriter.getI16IntegerAttr(srcFmt));
+      auto mid = rewriter.create<tx::MemCopyOp>(
+          loc, rewriter.getI64Type(), input2, tempAddr, elemCount,
+          rewriter.getI32IntegerAttr(srcFmt));
 
       rewriter.create<tx::MaskMoveOp>(loc, rewriter.getI64Type(), input1,
                                       tempAddr, elemCount, maskCastAddr,
                                       rewriter.getI32IntegerAttr(srcFmt));
       // Res = input2 + 0;
-      rewriter.create<tx::AddVSOp>(op.getLoc(), rewriter.getI64Type(), tempAddr,
-                                   zero, output, elemCount,
-                                   rewriter.getI16IntegerAttr(0), // round_mode
-                                   rewriter.getI16IntegerAttr(srcFmt));
+      rewriter.create<tx::MemCopyOp>(loc, rewriter.getI64Type(), tempAddr,
+                                     output, elemCount,
+                                     rewriter.getI32IntegerAttr(srcFmt));
 
     } else {
-      insertConvertTypeOp(output, inputType, elemCount, rewriter, loc);
 
       // Res = input2 + 0;
-      auto mid = rewriter.create<tx::AddVSOp>(
-          op.getLoc(), rewriter.getI64Type(), input2, zero, output, elemCount,
-          rewriter.getI16IntegerAttr(0), // round_mode
-          rewriter.getI16IntegerAttr(srcFmt));
+      auto mid = rewriter.create<tx::MemCopyOp>(
+          loc, rewriter.getI64Type(), input2, output, elemCount,
+          rewriter.getI32IntegerAttr(srcFmt));
 
       // if input0 = 1, Res = input1;
       // if input0 = 0, Res = input2;
       rewriter.create<tx::MaskMoveOp>(loc, rewriter.getI64Type(), input1,
                                       output, elemCount, maskCastAddr,
                                       rewriter.getI32IntegerAttr(srcFmt));
-      insertRestoreTypeOp(output, inputType, elemCount, rewriter, loc);
     }
-    insertRestoreTypeOp(input1, inputType, elemCount, rewriter, loc);
-    insertRestoreTypeOp(input2, inputType, elemCount, rewriter, loc);
 
     rewriter.eraseOp(op);
     return success();
@@ -1295,12 +1438,16 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
 
     auto constValue = rewriter.create<arith::ConstantIntOp>(
         op.getLoc(), 0, rewriter.getI32Type());
-    rewriter.create<tx::AddVSOp>(op.getLoc(), rewriter.getI64Type(), lhs,
-                                 constValue, output, elemCount,
-                                 rewriter.getI16IntegerAttr(0), // round_mode
-                                 rewriter.getI16IntegerAttr(fmt));
 
-    rewriter.create<tx::MaskMoveOp>(loc, rewriter.getI64Type(), rhs, output,
+    // FIXME: Optimize copy ops though input and output are same buffer
+    // Create memref::allocOp
+    auto temp = rewriter.create<memref::AllocOp>(loc, inputType);
+    auto tempAddr = createAddressFromMemref(rewriter, loc, temp);
+
+    rewriter.create<tx::MemCopyOp>(loc, rewriter.getI64Type(), lhs, tempAddr,
+                                   elemCount, rewriter.getI32IntegerAttr(fmt));
+
+    rewriter.create<tx::MaskMoveOp>(loc, rewriter.getI64Type(), rhs, tempAddr,
                                     elemCount, isANanBufferAddr,
                                     rewriter.getI32IntegerAttr(fmt));
 
@@ -1330,84 +1477,184 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
     auto minMaxValueBufferAddr =
         createAddressFromMemref(rewriter, loc, isBNanBuffer);
     auto minMaxValue =
-        rewriter.create<TxOpT>(loc, rewriter.getI64Type(), output, rhs,
+        rewriter.create<TxOpT>(loc, rewriter.getI64Type(), tempAddr, rhs,
                                minMaxValueBufferAddr, elemCount,
                                rewriter.getI16IntegerAttr(0), // Round mode
                                rewriter.getI16IntegerAttr(fmt));
 
     auto result = rewriter.create<tx::MaskMoveOp>(
-        loc, rewriter.getI64Type(), minMaxValueBufferAddr, output, elemCount,
+        loc, rewriter.getI64Type(), minMaxValueBufferAddr, tempAddr, elemCount,
         shouldApplyMinMaxBufferAddr, rewriter.getI32IntegerAttr(fmt));
+
+    rewriter.create<tx::MemCopyOp>(loc, rewriter.getI64Type(), tempAddr, output,
+                                   elemCount, rewriter.getI32IntegerAttr(fmt));
 
     rewriter.eraseOp(op);
 
     return success();
   }
 
+  LogicalResult convertDivIntOp(linalg::GenericOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto input0 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[0]);
+    auto input1 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[1]);
+    auto [output, sizes, strides] =
+        createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
+    auto elemCount = calculateElemCount(rewriter, op->getLoc(), sizes);
+
+    auto inputType = dyn_cast<MemRefType>(op.getInputs()[0].getType());
+    // Data format after conversion
+    Data_Format srcFmt =
+        insertConvertTypeOp(input0, inputType, elemCount, rewriter, loc);
+    if (adaptor.getInputs()[0] != adaptor.getInputs()[1]) {
+      // If input0 and input1 are not the same, we need to convert input1 type
+      insertConvertTypeOp(input1, inputType, elemCount, rewriter, loc);
+    }
+
+    if (adaptor.getInputs()[0] != adaptor.getOutputs()[0] &&
+        adaptor.getInputs()[1] != adaptor.getOutputs()[0])
+      // If input and output are not the same, we need to convert output type
+      insertConvertTypeOp(output, inputType, elemCount, rewriter, loc);
+
+    auto recipResult = rewriter.create<memref::AllocOp>(loc, inputType);
+    auto recipResultPtr = createAddressFromMemref(rewriter, loc, recipResult);
+
+    rewriter.create<tx::DivVVOp>(loc, rewriter.getI64Type(), input0, input1,
+                                 output, elemCount,
+                                 rewriter.getI16IntegerAttr(0), // Round mode
+                                 rewriter.getI16IntegerAttr(srcFmt));
+
+    insertRestoreTypeOp(output, inputType, elemCount, rewriter, loc,
+                        RND_MODE::RND_NEG_INF);
+
+    if (adaptor.getInputs()[0] != adaptor.getOutputs()[0]) {
+      insertRestoreTypeOp(input0, inputType, elemCount, rewriter, loc);
+    }
+    if (adaptor.getInputs()[1] != adaptor.getOutputs()[0] &&
+        adaptor.getInputs()[1] != adaptor.getInputs()[0]) {
+      insertRestoreTypeOp(input1, inputType, elemCount, rewriter, loc);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  LogicalResult convertDivFloatOp(linalg::GenericOp op, OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto input0 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[0]);
+    auto input1 =
+        createAddressFromMemref(rewriter, loc, adaptor.getInputs()[1]);
+    auto [output, sizes, strides] =
+        createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
+    auto elemCount = calculateElemCount(rewriter, op->getLoc(), sizes);
+
+    auto inputType = dyn_cast<MemRefType>(op.getInputs()[0].getType());
+    // Data format after conversion
+    Data_Format srcFmt =
+        insertConvertTypeOp(input0, inputType, elemCount, rewriter, loc);
+    if (adaptor.getInputs()[0] != adaptor.getInputs()[1]) {
+      // If input0 and input1 are not the same, we need to convert input1 type
+      insertConvertTypeOp(input1, inputType, elemCount, rewriter, loc);
+    }
+
+    if (adaptor.getInputs()[0] != adaptor.getOutputs()[0] &&
+        adaptor.getInputs()[1] != adaptor.getOutputs()[0])
+      // If input and output are not the same, we need to convert output type
+      insertConvertTypeOp(output, inputType, elemCount, rewriter, loc);
+
+    auto recipResult = rewriter.create<memref::AllocOp>(loc, inputType);
+    auto recipResultPtr = createAddressFromMemref(rewriter, loc, recipResult);
+
+    // Create the div operation with RecipVVOp and MulVVOp operation
+    rewriter.create<tx::RecipVVOp>(loc, rewriter.getI64Type(), input1,
+                                   recipResultPtr, elemCount,
+                                   rewriter.getI16IntegerAttr(srcFmt));
+    auto mulResult = rewriter.create<tx::MulVVOp>(
+        loc, rewriter.getI64Type(), input0, recipResultPtr, output, elemCount,
+        rewriter.getI16IntegerAttr(0), // Round mode
+        rewriter.getI16IntegerAttr(srcFmt));
+    insertRestoreTypeOp(output, inputType, elemCount, rewriter, loc,
+                        RND_MODE::RND_ZERO);
+    if (adaptor.getInputs()[0] != adaptor.getOutputs()[0]) {
+      insertRestoreTypeOp(input0, inputType, elemCount, rewriter, loc);
+    }
+    if (adaptor.getInputs()[1] != adaptor.getOutputs()[0] &&
+        adaptor.getInputs()[1] != adaptor.getInputs()[0]) {
+      insertRestoreTypeOp(input1, inputType, elemCount, rewriter, loc);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
   LogicalResult
-  convertCeilAndFloorOp(linalg::GenericOp op, OpAdaptor adaptor,
-                        ConversionPatternRewriter &rewriter) const {
+  convertRoundOp(linalg::GenericOp op, OpAdaptor adaptor,
+                 ConversionPatternRewriter &rewriter,
+                 RND_MODE roundMode = RND_MODE::RND_NEAREST_EVEN) const {
     Location loc = op->getLoc();
     auto input = createAddressFromMemref(rewriter, loc, adaptor.getInputs()[0]);
     auto [output, sizes, strides] =
         createMetadata(rewriter, op->getLoc(), adaptor.getOutputs()[0]);
     auto elemCount = calculateElemCount(rewriter, op->getLoc(), sizes);
-    auto *body = op.getBody();
-    auto &operation = body->front();
-    auto roundMode = llvm::dyn_cast<mlir::math::CeilOp>(&operation)
-                         ? RND_MODE::RND_POS_INF
-                         : RND_MODE::RND_NEG_INF;
-    // TODO: Fix attribute
-    // Use IEEE round to positive infinity mode
+
+    // Use IEEE round to nearest mode
     auto fpToInt = rewriter.create<tx::FP32ToINT32Op>(
-        loc,
-        rewriter.getI64Type(),                // Result type
-        input,                                // Input
-        output,                               // Output
-        elemCount,                            // Element count
-        rewriter.getI16IntegerAttr(roundMode) // Round mode
-    );
+        loc, rewriter.getI64Type(), input, output, elemCount,
+        rewriter.getI16IntegerAttr(roundMode)); // Round mode
     auto intToFp = rewriter.create<tx::INT32ToFP32Op>(
-        loc,
-        rewriter.getI64Type(),        // Result type
-        output,                       // Input
-        output,                       // Output
-        elemCount,                    // Element count
-        rewriter.getI16IntegerAttr(0) // Round mode
-    );
+        loc, rewriter.getI64Type(), output, output, elemCount,
+        rewriter.getI16IntegerAttr(0)); // Round mode
 
     rewriter.eraseOp(op);
     return success();
   }
+
   LogicalResult
   matchAndRewrite(linalg::GenericOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     auto regionOps = getRegionOps<linalg::GenericOp>(op);
 
+    if (!op.getOutputs().empty() &&
+        cast<MemRefType>(op.getOutputs()[0].getType()).getRank() == 0)
+      return convertLinalgOpToLoops(op, rewriter);
+
     // Check if the operation is elementwise
-    if (op.getIteratorTypesArray().front() != utils::IteratorType::parallel)
+    if (op.getIteratorTypesArray().front() !=
+        mlir::utils::IteratorType::parallel)
       return rewriter.notifyMatchFailure(op, "Only support elementwise op.");
 
     // WORKAROUND: Select op input0 is bool(i1), cmp op result is bool(i1)
     // I64/F64 lowering to llvm
+    // NOTE: May exist scf.if which has not output
     if (regionOps.size() != 1 ||
-        (dyn_cast<MemRefType>(op.getOutputs()[0].getType())
-             .getElementType()
-             .getIntOrFloatBitWidth() == 64) ||
-        (dyn_cast<MemRefType>(op.getInputs()[0].getType())
-             .getElementType()
-             .getIntOrFloatBitWidth() == 64)) {
-      if (failed(linalg::linalgOpToLoops(rewriter, op)))
-        return rewriter.notifyMatchFailure(op,
-                                           "Element-wise op not yet supported");
-      rewriter.eraseOp(op);
-      return success();
+        (!op.getOutputs().empty() &&
+         dyn_cast<MemRefType>(op.getOutputs()[0].getType())
+                 .getElementType()
+                 .getIntOrFloatBitWidth() == 64) ||
+        (!op.getInputs().empty() &&
+         dyn_cast<MemRefType>(op.getInputs()[0].getType())
+                 .getElementType()
+                 .getIntOrFloatBitWidth() == 64)) {
+      return convertLinalgOpToLoops(op, rewriter);
     }
 
     auto elemWiseOp = regionOps[0];
-    auto resultType = elemWiseOp->getResult(0).getType();
     return llvm::TypeSwitch<Operation *, LogicalResult>(elemWiseOp)
+        .Case<math::IsInfOp>([&](auto elemWiseOp) {
+          return convertIsInfOp(op, adaptor, rewriter);
+        })
+        .Case<math::TanhOp>([&](auto elemWiseOp) {
+          return convertUnaryOp<tx::Tanh>(op, adaptor, rewriter);
+        })
+        .Case<math::IsNaNOp>([&](auto elemWiseOp) {
+          return convertIsNaNOp(op, adaptor, rewriter);
+        })
         .Case<arith::AddIOp, arith::AddFOp>([&](auto elemWiseOp) {
           return convertBinaryOp<tx::AddVVOp>(op, adaptor, rewriter);
         })
@@ -1417,10 +1664,12 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
         .Case<arith::MulIOp, arith::MulFOp>([&](auto elemWiseOp) {
           return convertBinaryOp<tx::MulVVOp>(op, adaptor, rewriter);
         })
-        .Case<arith::DivFOp, arith::DivSIOp, arith::DivUIOp>(
-            [&](auto elemWiseOp) {
-              return convertBinaryOp<tx::DivVVOp>(op, adaptor, rewriter);
-            })
+        .Case<arith::DivSIOp, arith::DivUIOp>([&](auto elemWiseOp) {
+          return convertDivIntOp(op, adaptor, rewriter);
+        })
+        .Case<arith::DivFOp>([&](auto elemWiseOp) {
+          return convertDivFloatOp(op, adaptor, rewriter);
+        })
         .Case<arith::MaxSIOp, arith::MaxUIOp, arith::MaximumFOp>(
             [&](auto elemWiseOp) {
               return convertBinaryOp<tx::MaxVVOp>(op, adaptor, rewriter);
@@ -1435,11 +1684,29 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
         .Case<arith::MinNumFOp>([&](auto elemWiseOp) {
           return convertMinMaxOp<tx::MinVVOp>(op, adaptor, rewriter);
         })
+        .Case<arith::AndIOp>([&](auto elemWiseOp) {
+          return convertBoolBinaryLogicOp<tx::BoolAndV>(op, adaptor, rewriter);
+        })
+        .Case<arith::OrIOp>([&](auto elemWiseOp) {
+          return convertBoolBinaryLogicOp<tx::BoolOrV>(op, adaptor, rewriter);
+        })
+        .Case<arith::XOrIOp>([&](auto elemWiseOp) {
+          return convertBoolBinaryLogicOp<tx::BoolXorV>(op, adaptor, rewriter);
+        })
         .Case<math::AbsFOp, math::AbsIOp>([&](auto elemWiseOp) {
           return convertUnaryOp<tx::AbsVVOp>(op, adaptor, rewriter);
         })
-        .Case<math::CeilOp, math::FloorOp>([&](auto elemWiseOp) {
-          return convertCeilAndFloorOp(op, adaptor, rewriter);
+        .Case<math::CeilOp>([&](auto elemWiseOp) {
+          return convertRoundOp(op, adaptor, rewriter, RND_MODE::RND_POS_INF);
+        })
+        .Case<math::FloorOp>([&](auto elemWiseOp) {
+          return convertRoundOp(op, adaptor, rewriter, RND_MODE::RND_NEG_INF);
+        })
+        .Case<math::TruncOp>([&](auto elemWiseOp) {
+          return convertRoundOp(op, adaptor, rewriter, RND_MODE::RND_ZERO);
+        })
+        .Case<math::RoundOp>([&](auto elemWiseOp) {
+          return convertRoundOp(op, adaptor, rewriter);
         })
         .Case<math::SqrtOp>([&](auto elemWiseOp) {
           return convertUnaryOp<tx::SqrtVVOp>(op, adaptor, rewriter);
@@ -1466,7 +1733,15 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
           return convertUnaryOp<tx::CosOp>(op, adaptor, rewriter);
         })
         .Case<arith::ExtFOp>([&](auto elemWiseOp) {
-          return NormalConvertOp<tx::FP16ToFP32Op>(op, adaptor, rewriter);
+          auto inputType = elemWiseOp.getIn().getType();
+          if (inputType.isF16())
+            return NormalConvertOp<tx::FP16ToFP32Op>(op, adaptor, rewriter);
+          else if (inputType.isBF16())
+            return NormalConvertOp<tx::BF16ToFP32Op>(op, adaptor, rewriter);
+          else
+            return rewriter.notifyMatchFailure(
+                op, "Unsupported input/output type combination for ExtFOp "
+                    "conversion");
         })
         .Case<math::FmaOp>([&](auto elemWiseOp) {
           return FmaConvertOp(op, adaptor, rewriter);
@@ -1480,7 +1755,12 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
                                .getElementType();
           auto outputType = dyn_cast<MemRefType>(op.getOutputs()[0].getType())
                                 .getElementType();
-          if (inputType.isInteger(16) && outputType.isF32()) {
+
+          if (inputType.isInteger(8) && outputType.isF32()) {
+            return ZeroPointConvertOp<tx::INT8ToFP32Op>(op, adaptor, rewriter);
+          } else if (inputType.isInteger(8) && outputType.isF16()) {
+            return ZeroPointConvertOp<tx::INT8ToFP16Op>(op, adaptor, rewriter);
+          } else if (inputType.isInteger(16) && outputType.isF32()) {
             return RoundConvertOp<tx::INT16ToFP32Op>(op, adaptor, rewriter);
           } else if (inputType.isInteger(16) && outputType.isF16()) {
             return NormalConvertOp<tx::INT16ToFP16Op>(op, adaptor, rewriter);
@@ -1523,11 +1803,7 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
           if (dyn_cast<MemRefType>(op.getOperandTypes()[0]).getNumElements() %
                   8 !=
               0) {
-            if (failed(linalg::linalgOpToLoops(rewriter, op)))
-              return rewriter.notifyMatchFailure(
-                  op, "Element-wise op not yet supported");
-            rewriter.eraseOp(op);
-            return success();
+            return convertLinalgOpToLoops(op, rewriter);
           }
           arith::CmpIPredicate predicate = elemWiseOp.getPredicate();
           switch (predicate) {
@@ -1554,11 +1830,7 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
           if (dyn_cast<MemRefType>(op.getOperandTypes()[0]).getNumElements() %
                   8 !=
               0) {
-            if (failed(linalg::linalgOpToLoops(rewriter, op)))
-              return rewriter.notifyMatchFailure(
-                  op, "Element-wise op not yet supported");
-            rewriter.eraseOp(op);
-            return success();
+            return convertLinalgOpToLoops(op, rewriter);
           }
           arith::CmpFPredicate predicate = elemWiseOp.getPredicate();
           switch (predicate) {
@@ -1587,6 +1859,8 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
           }
         })
         .Case<arith::TruncFOp>([&](auto elemWiseOp) {
+          // May exist elemWiseOp has no result
+          auto resultType = elemWiseOp->getResult(0).getType();
           if (resultType.isF16())
             return RoundConvertOp<tx::FP32ToFP16Op>(op, adaptor, rewriter);
           else if (resultType.isBF16())
@@ -1604,11 +1878,7 @@ struct ElementwiseConversion : public OpConversionPattern<linalg::GenericOp> {
 
           // Affine dialect should handled before this pass. So here lower it
           // to scf.for
-          if (failed(linalg::linalgOpToLoops(rewriter, op)))
-            return rewriter.notifyMatchFailure(
-                op, "Element-wise op not yet supported");
-          rewriter.eraseOp(op);
-          return success();
+          return convertLinalgOpToLoops(op, rewriter);
         });
   }
 };
@@ -1617,13 +1887,6 @@ struct ReduceConversion : public OpConversionPattern<linalg::ReduceOp> {
   using OpConversionPattern<linalg::ReduceOp>::OpConversionPattern;
 
 private:
-  bool isReductionOpSupported(Operation *redOp) const {
-    return isa<arith::AddFOp, arith::AddIOp, arith::MaximumFOp,
-               arith::MaxNumFOp, arith::MinimumFOp, arith::MinNumFOp,
-               arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp,
-               arith::XOrIOp>(redOp);
-  }
-
   template <typename Tx81Op>
   LogicalResult convertToReduceOp(linalg::ReduceOp op,
                                   typename linalg::ReduceOp::Adaptor adaptor,
@@ -1685,11 +1948,12 @@ private:
     }
 
     auto output = adaptor.getInits()[0];
+    auto outputType = cast<MemRefType>(output.getType());
+    auto reduceVal = rewriter.create<memref::AllocOp>(loc, outputType);
     Value alignOutputPtr;
     bool needDeChannelNorm = reduceCDim || needChannelNorm;
     SmallVector<int64_t, 4> outputShape4D;
     if (needDeChannelNorm) {
-      auto outputType = dyn_cast<MemRefType>(output.getType());
       SmallVector<int64_t, 4> alignedOutputShape4D;
       if (outputType.getRank() == 0) {
         outputShape4D =
@@ -1710,7 +1974,7 @@ private:
       auto alignedPtr = createAddressFromMemref(rewriter, loc, alignedAlloc);
       alignOutputPtr = alignedPtr;
     } else {
-      alignOutputPtr = createAddressFromMemref(rewriter, loc, output);
+      alignOutputPtr = createAddressFromMemref(rewriter, loc, reduceVal);
     }
 
     auto format = getFormatCode(inputType);
@@ -1722,7 +1986,7 @@ private:
         rewriter.getI16IntegerAttr(format));
 
     if (needDeChannelNorm) {
-      auto outputPtr = createAddressFromMemref(rewriter, loc, output);
+      auto outputPtr = createAddressFromMemref(rewriter, loc, reduceVal);
       alignedC0 = reduceCDim ? 4 : alignedC0;
       auto dechannelNorm = rewriter.create<tx::DechannelNormOp>(
           loc, TypeRange({}), alignOutputPtr, outputPtr,
@@ -1731,31 +1995,30 @@ private:
           rewriter.getI16IntegerAttr(bitWidth));
     }
 
-    rewriter.replaceOp(op, reduceOp);
+    auto rank = outputType.getRank();
+    SmallVector<AffineMap> idMaps(3, rewriter.getMultiDimIdentityMap(rank));
+    SmallVector<mlir::utils::IteratorType> iterators(
+        rank, mlir::utils::IteratorType::parallel);
+    auto genericOp = rewriter.create<linalg::GenericOp>(
+        op->getLoc(), ValueRange{reduceVal, output}, ValueRange{output}, idMaps,
+        iterators);
+    genericOp.getRegion().takeBody(op.getRegion());
+    genericOp.getRegion().front().addArgument(outputType.getElementType(), loc);
+
+    rewriter.eraseOp(op);
     return success();
   }
 
-public:
-  LogicalResult
-  matchAndRewrite(linalg::ReduceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult lowerToTxReduce(linalg::ReduceOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
     auto reductionOps = getRegionOps(op);
-
-    if (reductionOps.size() != 1 ||
-        !isReductionOpSupported(reductionOps.front())) {
-      return rewriter.notifyMatchFailure(
-          op, "Only support lowering reduction with body "
-              "containing 1 max(i/f) or addf.");
-    }
     auto redOp = reductionOps[0];
-
     auto inputType = dyn_cast<MemRefType>(op.getInputs()[0].getType());
 
+    assert(reductionOps.size() == 1);
+
     if (!isSupportedType(inputType)) {
-      if (failed(linalg::linalgOpToLoops(rewriter, op)))
-        return rewriter.notifyMatchFailure(op, "operation not supported yet.");
-      rewriter.eraseOp(op);
-      return success();
+      return failure();
     }
 
     // TODO: Convert integer to float
@@ -1774,12 +2037,119 @@ public:
         .Default([&](auto redOp) {
           // For other operation, we don't have specific tx81 op,
           // so we need to convert it to loops.
-          if (failed(linalg::linalgOpToLoops(rewriter, op)))
-            return rewriter.notifyMatchFailure(op,
-                                               "operation not supported yet.");
-          rewriter.eraseOp(op);
-          return success();
+          return failure();
         });
+  }
+
+  // TODO: Move to triton-to-core-dialect stage, decide whether to merge to
+  // argmin/argmax based on hardware configuration
+  template <typename TxOpT>
+  LogicalResult lowerToTxArgMinMax(linalg::ReduceOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter) const {
+    // Get input and output types
+    auto input = adaptor.getInputs()[0];
+    auto outVal = adaptor.getInits()[0];
+    auto outIdx = adaptor.getInits()[1];
+    auto inputType = cast<MemRefType>(input.getType());
+    auto valueType = cast<MemRefType>(outVal.getType());
+    auto indexType = cast<MemRefType>(outIdx.getType());
+    auto inputShape = inputType.getShape();
+
+    // Get the reduction block and its operations
+    auto block = op.getBody();
+    auto ops = block->without_terminator();
+
+    // Extract block arguments for current and reduced values/indices
+    Value currValue = block->getArgument(0);
+    Value currIndex = block->getArgument(1);
+    Value reduceValue = block->getArgument(2);
+    Value reduceIndex = block->getArgument(3);
+
+    // Match the ArgMin/ArgMax pattern in the block
+    bool isArgMin = std::is_same<TxOpT, tx::ArgMinOp>::value;
+    auto opsIter = ops.begin();
+    Value indexSelectOp, valueSelectOp;
+    if (failed(matchArgMinMax(currValue, currIndex, reduceValue, reduceIndex,
+                              opsIter, indexSelectOp, valueSelectOp,
+                              isArgMin))) {
+      return failure();
+    }
+
+    // Verify the terminator operation matches expected pattern
+    LLVM_DEBUG(llvm::dbgs() << "Matching: " << *opsIter << "\n");
+    auto termOp = dyn_cast<linalg::YieldOp>(*opsIter++);
+    if (termOp && termOp == block->getTerminator()) {
+      auto opnds = termOp.getOperands();
+      if (opnds != ArrayRef<Value>{valueSelectOp, indexSelectOp}) {
+        return failure();
+      }
+    } else {
+      return failure();
+    }
+
+    // Create Tx81 operation to replace the original reduction
+    auto loc = op.getLoc();
+    auto value = rewriter.create<memref::AllocOp>(loc, valueType);
+    auto index = rewriter.create<memref::AllocOp>(loc, indexType);
+
+    // Get input size and create Tx81 operation
+    int64_t inputSize = inputShape.empty() ? 1 : inputShape[0];
+    auto tx81Op = rewriter.create<TxOpT>(
+        loc, TypeRange{}, createAddressFromMemref(rewriter, loc, input),
+        createAddressFromMemref(rewriter, loc, value),
+        createAddressFromMemref(rewriter, loc, index),
+        rewriter.getI32IntegerAttr(inputSize),
+        rewriter.getI16IntegerAttr(getFormatCode(valueType)));
+
+    auto rank = valueType.getRank();
+    SmallVector<AffineMap> idMaps(6, rewriter.getMultiDimIdentityMap(rank));
+    SmallVector<mlir::utils::IteratorType> iterators(
+        rank, mlir::utils::IteratorType::parallel);
+    auto genericOp = rewriter.create<linalg::GenericOp>(
+        op->getLoc(), ValueRange{value, index, outVal, outIdx},
+        ValueRange{outVal, outIdx}, idMaps, iterators);
+    genericOp.getRegion().takeBody(op.getRegion());
+    genericOp.getRegion().front().addArguments(
+        {valueType.getElementType(), indexType.getElementType()}, {loc, loc});
+    rewriter.eraseOp(op);
+
+    return success();
+  }
+
+public:
+  LogicalResult
+  matchAndRewrite(linalg::ReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto reductionOps = getRegionOps(op);
+    // If there is only one reduction operation, try to convert it to Tx81
+    // reduce op.
+    if (reductionOps.size() == 1) {
+      if (lowerToTxReduce(op, adaptor, rewriter).succeeded())
+        return success();
+      else
+        return convertLinalgOpToLoops(op, rewriter);
+    }
+
+    // Try to convert the reduction to Tx81 ArgMin/ArgMax op.
+
+    auto inputType = cast<MemRefType>(op.getInputs()[0].getType());
+    auto elementType = inputType.getElementType();
+    // Only handle 1D input tensors
+    if (inputType.getRank() > 1 || elementType.isInteger() ||
+        elementType.getIntOrFloatBitWidth() == 64) {
+      return convertLinalgOpToLoops(op, rewriter);
+    }
+    // Verify the reduction block has exactly 4 arguments
+    if (op.getBody()->getNumArguments() != 4) {
+      return convertLinalgOpToLoops(op, rewriter);
+    }
+    if (lowerToTxArgMinMax<tx::ArgMinOp>(op, adaptor, rewriter).succeeded()) {
+      return success();
+    }
+    if (lowerToTxArgMinMax<tx::ArgMaxOp>(op, adaptor, rewriter).succeeded()) {
+      return success();
+    }
+    return convertLinalgOpToLoops(op, rewriter);
   }
 };
 
@@ -1834,8 +2204,8 @@ private:
     if (isa<LLVM::LLVMPointerType>(type)) {
       return "%p";
     }
-    // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
-    // type (so 4 for fp16, 8 for int32, 16 for int64).
+    // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in
+    // the type (so 4 for fp16, 8 for int32, 16 for int64).
     if (hex) {
       // Ignore `width` for `hex` values, pad to typeWidth.
       std::string ret =
@@ -1869,7 +2239,7 @@ private:
     auto *context = rewriter.getContext();
     auto type = value.getType();
     auto loc = UnknownLoc::get(context);
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto b = LLVM::TritonLLVMOpBuilder(loc, rewriter);
 
     bool isUnsigned = type.isUnsignedInteger();
     if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
@@ -1923,7 +2293,7 @@ private:
                                            bool isSigned = false) {
     assert(!prefix.empty() && "printf with empty string not supported");
     auto loc = UnknownLoc::get(rewriter.getContext());
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto b = LLVM::TritonLLVMOpBuilder(loc, rewriter);
 
     std::string formatStr;
     llvm::raw_string_ostream os(formatStr);
@@ -2055,6 +2425,71 @@ private:
 // patterns
 //===----------------------------------------------------------------------===//
 namespace {
+template <typename NaryOp>
+void createElemwiseNaryOp(OpBuilder &builder, Location loc, ValueRange inputs,
+                          Value output) {
+  auto outputTy = cast<MemRefType>(output.getType());
+  auto rank = outputTy.getRank();
+  if (rank == 0) {
+    SmallVector<Value> loadVals;
+    llvm::transform(inputs, std::back_inserter(loadVals), [&](Value input) {
+      return builder.create<memref::LoadOp>(loc, input, ValueRange{});
+    });
+    auto val = builder.create<NaryOp>(loc, outputTy.getElementType(), loadVals);
+    builder.create<memref::StoreOp>(loc, val, output, ValueRange{});
+  } else {
+    SmallVector<AffineMap> idMaps(2, builder.getMultiDimIdentityMap(rank));
+    SmallVector<mlir::utils::IteratorType> iterators(
+        rank, mlir::utils::IteratorType::parallel);
+    builder.create<linalg::GenericOp>(
+        loc, inputs, ValueRange{output}, idMaps, iterators,
+        [](OpBuilder &b, Location loc, ValueRange args) {
+          Value val =
+              b.create<NaryOp>(loc, args.back().getType(), args.drop_back());
+          b.create<linalg::YieldOp>(loc, val);
+        });
+  }
+}
+
+static LogicalResult convertSIOpToF32Op(
+    Operation *srcOp, PatternRewriter &rewriter, ValueRange inputs,
+    ValueRange outputs,
+    std::function<void(Operation *srcOp, PatternRewriter &rewrite,
+                       ValueRange inputs, ValueRange outputs)>
+        fpOpBuildFn) {
+  Location loc = srcOp->getLoc();
+  SmallVector<Value> fpInputs, fpOutputs;
+
+  for (auto input : inputs) {
+    auto inputTy = cast<MemRefType>(input.getType());
+    auto fpMemrefTy = cast<MemRefType>(inputTy.clone(rewriter.getF32Type()));
+    Value fpInput = rewriter.create<memref::AllocOp>(loc, fpMemrefTy);
+    createElemwiseNaryOp<arith::SIToFPOp>(rewriter, loc, {input}, fpInput);
+    fpInputs.push_back(fpInput);
+  }
+  for (auto output : outputs) {
+    auto outputTy = cast<MemRefType>(output.getType());
+    auto fpMemrefTy = cast<MemRefType>(outputTy.clone(rewriter.getF32Type()));
+    Value fpInput = rewriter.create<memref::AllocOp>(loc, fpMemrefTy);
+    // NOTE: Reduce op need calculate init value, so we need copy the value to
+    // the new alloc buffer
+    if (isa<linalg::ReduceOp>(srcOp)) {
+      createElemwiseNaryOp<arith::SIToFPOp>(rewriter, loc, {output}, fpInput);
+    }
+
+    fpOutputs.push_back(fpInput);
+  }
+
+  fpOpBuildFn(srcOp, rewriter, fpInputs, fpOutputs);
+
+  for (auto output : llvm::zip(fpOutputs, outputs)) {
+    createElemwiseNaryOp<arith::FPToSIOp>(rewriter, loc, {std::get<0>(output)},
+                                          std::get<1>(output));
+  }
+  rewriter.eraseOp(srcOp);
+  return success();
+}
+
 struct ElementwiseRewrite : public OpRewritePattern<linalg::GenericOp> {
   using OpRewritePattern<linalg::GenericOp>::OpRewritePattern;
 
@@ -2070,71 +2505,66 @@ struct ElementwiseRewrite : public OpRewritePattern<linalg::GenericOp> {
 
   template <typename SIOp, typename FPOp> void registerSIOpMapFPOp() {
     OperationName SIOpName(SIOp::getOperationName(), getContext());
-    assert(!SIOpMapFPOpFns.contains(SIOpName) &&
+    assert(!SIToFPOpBuildFnMap.contains(SIOpName) &&
            "SIOp already registered for conversion to FPOp");
-    SIOpMapFPOpFns[SIOpName] = [](OpBuilder &b, Location loc, ValueRange args) {
-      // Create the floating-point operation
-      Value fpVal = b.create<FPOp>(loc, b.getF32Type(), args.drop_back());
-      b.create<linalg::YieldOp>(loc, fpVal);
+    SIToFPOpBuildFnMap[SIOpName] = [](Operation *srcOp,
+                                      PatternRewriter &rewriter,
+                                      ValueRange inputs, ValueRange outputs) {
+      auto genericOp = cast<linalg::GenericOp>(srcOp);
+      rewriter.create<linalg::GenericOp>(
+          genericOp->getLoc(), inputs, outputs,
+          genericOp.getIndexingMapsArray(), genericOp.getIteratorTypesArray(),
+          [](OpBuilder &b, Location loc, ValueRange args) {
+            Value val =
+                b.create<FPOp>(loc, args.back().getType(), args.drop_back());
+            b.create<linalg::YieldOp>(loc, val);
+          });
     };
   }
 
-  LogicalResult convertSIOpToFPOp(linalg::GenericOp op, Operation *elemWiseOp,
-                                  PatternRewriter &rewriter) const {
-    OperationName SIOpName = elemWiseOp->getName();
-    if (!SIOpMapFPOpFns.contains(SIOpName))
-      return failure();
+  bool linearizeShape(linalg::GenericOp op, PatternRewriter &rewriter) const {
+    assert(op.getOutputs().size() == 1 && "Only support single output");
+    assert(llvm::all_of(op.getIndexingMapsArray(),
+                        [](AffineMap &map) { return map.isIdentity(); }) &&
+           "All affine maps must be identity affine map.");
 
     Location loc = op->getLoc();
-    auto inputs = op.getInputs();
-    auto output = op.getOutputs()[0];
-    auto outputTy = cast<MemRefType>(output.getType());
-    auto outputEleTy = outputTy.getElementType();
+    auto dstMemrefTy = cast<MemRefType>(op.getOutputs()[0].getType());
 
-    assert(op.getOutputs().size() == 1 &&
-           "Elementwise conversion only support single output");
-    assert((outputEleTy.isInteger(16) || outputEleTy.isInteger(32) ||
-            outputEleTy.isInteger(64)) &&
-           "Output type must be integer type (16, 32 or 64 bits)");
-    assert(
-        llvm::all_of(
-            inputs, [&outputTy](Value v) { return v.getType() == outputTy; }) &&
-        "All inputs must have the same type as output");
+    if (dstMemrefTy.getRank() == 1)
+      return false;
 
-    MemRefType fpMemrefTy =
-        MemRefType::get(outputTy.getShape(), rewriter.getF32Type(),
-                        outputTy.getLayout(), outputTy.getMemorySpace());
-    auto rank = fpMemrefTy.getRank();
-    auto id = AffineMap::getMultiDimIdentityMap(rank, rewriter.getContext());
-    SmallVector<AffineMap> idMaps = {id, id};
-    SmallVector<utils::IteratorType> iterators(rank,
-                                               utils::IteratorType::parallel);
-    SmallVector<Value> fpInputs;
-    for (auto input : inputs) {
-      auto fpInput = rewriter.create<memref::AllocOp>(loc, fpMemrefTy);
-      rewriter.create<linalg::GenericOp>(
-          loc, ValueRange{input}, ValueRange{fpInput}, idMaps, iterators,
-          [&](OpBuilder &b, Location loc, ValueRange args) {
-            // Convert integer to float
-            Value fpVal =
-                b.create<arith::SIToFPOp>(loc, b.getF32Type(), args[0]);
-            b.create<linalg::YieldOp>(loc, fpVal);
-          });
-      fpInputs.push_back(fpInput);
-    }
+    auto elemCount = dstMemrefTy.getNumElements();
+    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value elemCountVal = rewriter.create<arith::ConstantIntOp>(
+        loc, elemCount, rewriter.getI32Type());
+    Value shape = rewriter.create<memref::AllocOp>(
+        loc, MemRefType::get({1}, rewriter.getI32Type()));
+    rewriter.create<memref::StoreOp>(loc, elemCountVal, shape,
+                                     ValueRange{zero});
 
-    auto fpOutput = rewriter.create<memref::AllocOp>(loc, fpMemrefTy);
-    rewriter.create<linalg::GenericOp>(
-        loc, fpInputs, ValueRange{fpOutput}, op.getIndexingMapsArray(),
-        op.getIteratorTypesArray(), SIOpMapFPOpFns.at(SIOpName));
-    rewriter.replaceOpWithNewOp<linalg::GenericOp>(
-        op, ValueRange{fpOutput}, ValueRange{output}, idMaps, iterators,
-        [&](OpBuilder &b, Location loc, ValueRange args) {
-          // Convert float to integer
-          Value intVal = b.create<arith::FPToSIOp>(loc, outputEleTy, args[0]);
-          b.create<linalg::YieldOp>(loc, intVal);
+    SmallVector<Value> inputs1D = llvm::map_to_vector(
+        llvm::concat<Value>(op.getInputs(), op.getOutputs()),
+        [&](Value val) -> Value {
+          auto valTy = cast<MemRefType>(val.getType());
+          return rewriter.create<memref::ReshapeOp>(
+              loc,
+              MemRefType::get({elemCount}, valTy.getElementType(),
+                              MemRefLayoutAttrInterface{},
+                              valTy.getMemorySpace()),
+              val, shape);
         });
-    return success();
+
+    Value output1D = inputs1D.pop_back_val();
+    SmallVector<AffineMap> idMaps(inputs1D.size() + 1,
+                                  rewriter.getMultiDimIdentityMap(1));
+    SmallVector<mlir::utils::IteratorType> iters(
+        1, mlir::utils::IteratorType::parallel);
+    auto newOp = rewriter.create<linalg::GenericOp>(
+        loc, inputs1D, ValueRange{output1D}, idMaps, iters);
+    newOp.getRegion().takeBody(op.getRegion());
+    rewriter.replaceOp(op, newOp);
+    return true;
   }
 
   LogicalResult matchAndRewrite(linalg::GenericOp op,
@@ -2143,20 +2573,227 @@ struct ElementwiseRewrite : public OpRewritePattern<linalg::GenericOp> {
     if (regionOps.size() != 1)
       return failure();
 
-    return convertSIOpToFPOp(op, regionOps[0], rewriter);
+    Location loc = op->getLoc();
+    auto elemWiseOp = regionOps[0];
+    OperationName OpName = elemWiseOp->getName();
+    auto inputs = op.getInputs();
+    auto outputs = op.getOutputs();
+
+    if (SIToFPOpBuildFnMap.contains(OpName)) {
+      assert(outputs.size() == 1 &&
+             "Elementwise conversion only support single output");
+      assert(
+          cast<MemRefType>(outputs[0].getType()).getElementType().isInteger() &&
+          "Output type must be integer type");
+      return convertSIOpToF32Op(op, rewriter, op.getInputs(), op.getOutputs(),
+                                SIToFPOpBuildFnMap.at(OpName));
+    }
+
+    if (isa<arith::CmpIOp, arith::CmpFOp, math::IsNaNOp>(elemWiseOp)) {
+      if (linearizeShape(op, rewriter))
+        return success();
+
+      auto dstMemrefTy = cast<MemRefType>(outputs[0].getType());
+      auto elemCount = dstMemrefTy.getNumElements();
+
+      assert(dstMemrefTy.getRank() == 1);
+
+      if (elemCount & 0x7) {
+        // Legalize operations that are not multiples of 8
+        unsigned mainCount = elemCount & ~0x7;
+        if (mainCount) {
+          SmallVector<Value> ins = llvm::map_to_vector(
+              llvm::concat<Value>(inputs, outputs), [&](Value val) -> Value {
+                return rewriter.create<memref::SubViewOp>(
+                    loc, val, ArrayRef<int64_t>{0},
+                    ArrayRef<int64_t>{mainCount}, ArrayRef<int64_t>{1});
+              });
+
+          Value out = ins.pop_back_val();
+          SmallVector<AffineMap> idMaps(inputs.size() + 1,
+                                        rewriter.getMultiDimIdentityMap(1));
+          SmallVector<mlir::utils::IteratorType> iters(
+              1, mlir::utils::IteratorType::parallel);
+          auto newOp = rewriter.create<linalg::GenericOp>(
+              loc, ins, ValueRange{out}, idMaps, iters);
+          newOp.getRegion().takeBody(op.getRegion());
+        }
+
+        for (unsigned idx = mainCount; idx < elemCount; ++idx) {
+          auto idxVal = rewriter.create<arith::ConstantIndexOp>(loc, idx);
+          auto loadIns = llvm::map_to_vector(inputs, [&](Value memref) {
+            return rewriter.create<memref::LoadOp>(loc, memref,
+                                                   ValueRange{idxVal});
+          });
+          IRMapping mapper;
+          mapper.map(elemWiseOp->getOperands(), loadIns);
+          auto newVal = rewriter.clone(*elemWiseOp, mapper);
+          rewriter.create<memref::StoreOp>(loc, newVal->getResult(0),
+                                           outputs[0], ValueRange{idxVal});
+        }
+
+        rewriter.eraseOp(op);
+        return success();
+      }
+    }
+
+    if (auto cmpiOp = dyn_cast<arith::CmpIOp>(elemWiseOp)) {
+      arith::CmpFPredicate fpPred;
+      switch (cmpiOp.getPredicate()) {
+      default:
+        return failure();
+      case arith::CmpIPredicate::eq:
+        fpPred = arith::CmpFPredicate::OEQ;
+        break;
+      case arith::CmpIPredicate::ne:
+        fpPred = arith::CmpFPredicate::ONE;
+        break;
+      case arith::CmpIPredicate::sge:
+        fpPred = arith::CmpFPredicate::OGE;
+        break;
+      case arith::CmpIPredicate::sgt:
+        fpPred = arith::CmpFPredicate::OGT;
+        break;
+      case arith::CmpIPredicate::sle:
+        fpPred = arith::CmpFPredicate::OLE;
+        break;
+      case arith::CmpIPredicate::slt:
+        fpPred = arith::CmpFPredicate::OLT;
+        break;
+      }
+
+      return convertSIOpToF32Op(
+          op, rewriter, op.getInputs(), ValueRange{},
+          [&](Operation *srcOp, PatternRewriter &rewriter, ValueRange inputs,
+              ValueRange outputs) {
+            auto genericOp = cast<linalg::GenericOp>(srcOp);
+            rewriter.create<linalg::GenericOp>(
+                genericOp->getLoc(), inputs, genericOp.getOutputs(),
+                genericOp.getIndexingMapsArray(),
+                genericOp.getIteratorTypesArray(),
+                [&](OpBuilder &b, Location loc, ValueRange args) {
+                  Value val =
+                      b.create<arith::CmpFOp>(loc, fpPred, args[0], args[1]);
+                  b.create<linalg::YieldOp>(loc, val);
+                });
+          });
+    }
+
+    return failure();
   }
 
 private:
   // Map from SIOp to FPOp conversion functions
   llvm::DenseMap<OperationName,
-                 std::function<void(OpBuilder &, Location, ValueRange)>>
-      SIOpMapFPOpFns;
+                 std::function<void(Operation *, PatternRewriter &, ValueRange,
+                                    ValueRange)>>
+      SIToFPOpBuildFnMap;
+};
+
+struct MemrefStoreRewrite : public OpRewritePattern<memref::StoreOp> {
+  using OpRewritePattern<memref::StoreOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(memref::StoreOp op,
+                                PatternRewriter &rewriter) const override {
+    if (triton::utils::isOperandMemorySpaceSPM(op.getMemref())) {
+      return rewriter.notifyMatchFailure(
+          op, "StoreOp with isSpm attribute must be false");
+    }
+    if (op.getIndices().size() != 1) {
+      return rewriter.notifyMatchFailure(op, "StoreOp must have one index");
+    }
+    auto index = op.getIndices()[0];
+    Value one = rewriter.create<arith::ConstantIndexOp>(op.getLoc(), 1);
+
+    // Create memref subview if the index is not zero.
+    auto dst = rewriter.create<memref::SubViewOp>(
+        op.getLoc(), op.getMemref(), ValueRange{index}, ValueRange{one},
+        ValueRange{one});
+
+    auto loc = op->getLoc();
+
+    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value tempAlloc = rewriter.create<memref::AllocOp>(
+        loc, MemRefType::get({1}, op.getMemRefType().getElementType()));
+    rewriter.create<memref::StoreOp>(loc, op.getValue(), tempAlloc,
+                                     ValueRange{zero});
+
+    auto copyOp = rewriter.create<memref::CopyOp>(loc, tempAlloc, dst);
+    rewriter.eraseOp(op);
+    return failure();
+  }
+};
+
+struct ReduceRewrite : public OpRewritePattern<linalg::ReduceOp> {
+  using OpRewritePattern<linalg::ReduceOp>::OpRewritePattern;
+
+  void initialize() {
+    // Register conversions from SIOp to FPOp
+    registerSIOpMapFPOp<arith::AddIOp, arith::AddFOp>();
+    registerSIOpMapFPOp<arith::MaxSIOp, arith::MaximumFOp>();
+    registerSIOpMapFPOp<arith::MinSIOp, arith::MinimumFOp>();
+  }
+
+  template <typename SIOp, typename FPOp> void registerSIOpMapFPOp() {
+    OperationName SIOpName(SIOp::getOperationName(), getContext());
+    assert(!SIToFPOpBuildFnMap.contains(SIOpName) &&
+           "SIOp already registered for conversion to FPOp");
+    SIToFPOpBuildFnMap[SIOpName] = [](Operation *op, PatternRewriter &rewriter,
+                                      ValueRange inputs, ValueRange outputs) {
+      auto reduceOp = cast<linalg::ReduceOp>(op);
+      rewriter.create<linalg::ReduceOp>(
+          reduceOp->getLoc(), inputs, outputs, reduceOp.getDimensions(),
+          [](OpBuilder &b, Location loc, ValueRange args) {
+            Value val = b.create<FPOp>(loc, args.back().getType(), args);
+            b.create<linalg::YieldOp>(loc, val);
+          });
+    };
+  }
+
+  LogicalResult matchAndRewrite(linalg::ReduceOp op,
+                                PatternRewriter &rewriter) const override {
+    auto regionOps = getRegionOps<linalg::ReduceOp>(op);
+    if (regionOps.size() != 1)
+      return failure();
+
+    auto reduceOp = regionOps[0];
+    OperationName OpName = reduceOp->getName();
+
+    if (SIToFPOpBuildFnMap.contains(OpName)) {
+      assert(op.getInits().size() == 1 &&
+             "Reduce conversion only support single output");
+      return convertSIOpToF32Op(op, rewriter, op.getInputs(), op.getInits(),
+                                SIToFPOpBuildFnMap.at(OpName));
+    }
+
+    return failure();
+  }
+
+private:
+  // Map from SIOp to FPOp conversion functions
+  llvm::DenseMap<OperationName,
+                 std::function<void(Operation *, PatternRewriter &, ValueRange,
+                                    ValueRange)>>
+      SIToFPOpBuildFnMap;
+};
+
+struct LinalgCopyRewrite : public OpRewritePattern<linalg::CopyOp> {
+  using OpRewritePattern<linalg::CopyOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(linalg::CopyOp op,
+                                PatternRewriter &rewriter) const override {
+    assert(op.getInputs().size() == 1 && op.getOutputs().size() == 1 &&
+           "LinalgCopyRewrite only supports single input and output");
+    rewriter.replaceOpWithNewOp<memref::CopyOp>(op, op.getInputs()[0],
+                                                op.getOutputs()[0]);
+    return success();
+  }
 };
 } // namespace
 
 void mlir::triton::populateMKToTx81CanonicalizationPatterns(
     RewritePatternSet &patterns) {
-  patterns.add<ElementwiseRewrite>(patterns.getContext());
+  patterns.add<MemrefStoreRewrite, ElementwiseRewrite, ReduceRewrite,
+               LinalgCopyRewrite>(patterns.getContext());
 }
 
 void mlir::triton::populateMKToTx81ConversionPatterns(
@@ -2176,9 +2813,8 @@ void mlir::triton::populateMKToTx81ConversionPatterns(
                TransposeOpConversion,
                LinalgFillOpConversion,
                MKDotToTx81GemmOpConversion,
+               DotScaledConverter,
                MKSigmoidToTx81SigmoidOpConversion,
-               ArgMinConversion,
-               ArgMaxConversion,
                GatherConvertPattern,
                ElementwiseConversion,
                BarrierConversion,

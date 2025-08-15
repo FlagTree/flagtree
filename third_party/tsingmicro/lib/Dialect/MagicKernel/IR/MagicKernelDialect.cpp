@@ -26,12 +26,20 @@ void MagicKernelDialect::initialize() {
       >();
   // TODO: Add BufferizableOpInterface to all ops that can be bufferized
   declarePromisedInterfaces<bufferization::BufferizableOpInterface, mk::DotOp,
-                            mk::SigmoidOp, mk::GatherOp, mk::PrintOp>();
+                            mk::DotScaledOp, mk::SigmoidOp, mk::GatherOp,
+                            mk::PrintOp>();
 }
 
 //===----------------------------------------------------------------------===//
 // TableGen'd op method definitions
 //===----------------------------------------------------------------------===//
+
+OpFoldResult mk::BitcastOp::fold(FoldAdaptor adaptor) {
+  if (getOperand().getType() == getResult().getType()) {
+    return getOperand();
+  }
+  return {};
+}
 
 #define GET_OP_CLASSES
 #include "magic-kernel/Dialect/IR/MagicKernelOps.cpp.inc"

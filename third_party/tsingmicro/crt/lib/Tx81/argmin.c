@@ -1,7 +1,5 @@
 //===------------------------ argmin.c ------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,7 +12,7 @@
 void __ArgMin(uint64_t *src, uint64_t *dst0, uint64_t *dst1,
               uint32_t elem_count, uint16_t fmt) {
   // Create command buffer.
-  TsmPeripheral *cmd = TsmNewPeripheral();
+  TsmPeripheral *cmd = g_intrinsic()->peripheral_pointer;
   TsmPeripheralInstr inst = {I_CGRA,
                              {
                                  0,
@@ -35,5 +33,4 @@ void __ArgMin(uint64_t *src, uint64_t *dst0, uint64_t *dst1,
   *(int32_t *)dst1 = *(int32_t *)inst.param.wb_data1;
 
   // Destroy the command buffer.
-  TsmDeletePeripheral(cmd);
 }

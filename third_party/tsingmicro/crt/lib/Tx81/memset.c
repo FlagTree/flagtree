@@ -1,7 +1,5 @@
 //===------------------------ memset.c ------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,11 +9,10 @@
 
 #include "tx81.h"
 
-void __Memset(uint64_t *dst, uint32_t value, uint32_t elem_count, uint32_t s0,
-              uint32_t i0, uint32_t s1, uint32_t i1, uint32_t s2, uint32_t i2,
+void __Memset(char *dst, int value, int *dst_shape, int *dst_stride, int rank,
               uint16_t fmt) {
   // Create command buffer.
-  TsmPeripheral *cmd = TsmNewPeripheral();
+  TsmPeripheral *cmd = g_intrinsic()->peripheral_pointer;
   TsmDataMoveInstr inst = {I_CGRA,
                            {
                                0,
@@ -33,7 +30,10 @@ void __Memset(uint64_t *dst, uint32_t value, uint32_t elem_count, uint32_t s0,
   int iteration1 = 1;
   int iteration2 = 1;
 
-  elem_count *= i0 * i1 * i2;
+  int elem_count = 1;
+  for (int i = 0; i < rank; i++) {
+    elem_count *= dst_shape[i];
+  }
 
   St_StrideIteration si = {stride0,    iteration0, stride1,
                            iteration1, stride1,    iteration2};
@@ -41,7 +41,6 @@ void __Memset(uint64_t *dst, uint32_t value, uint32_t elem_count, uint32_t s0,
 
   // Dispatch the command to accelerator
   TsmExecute(&inst);
-
+  TsmWaitfinish();
   // Destroy the command buffer.
-  TsmDeletePeripheral(cmd);
 }

@@ -940,6 +940,11 @@ struct BitcastConverter : public OpConversionPattern<triton::BitcastOp> {
   LogicalResult
   matchAndRewrite(triton::BitcastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto inputType = op.getOperand().getType();
+    auto resultType = op.getType();
+    if (isa<PointerType>(inputType) || isa<PointerType>(resultType)) {
+      return success();
+    }
     auto arithBitcast = rewriter.create<arith::BitcastOp>(
         op.getLoc(), op.getType(), op.getOperand());
 
@@ -1201,39 +1206,42 @@ struct MulHiUIOpConverter : public OpConversionPattern<triton::MulhiUIOp> {
   }
 };
 
-// TODO: Move this MatmulConverter to MK related folder as it converts
-// triton::DotOp directly into mk::DotOp which carries more information than
-// linalg.matmul.
-struct MatmulConverter : public OpConversionPattern<triton::DotOp> {
-  using OpConversionPattern<triton::DotOp>::OpConversionPattern;
-
-  // true means tensor elements are zeros
-  // false means not zero or it cannot be determined
-  bool isZeroTensor(Value &v, bool integers) const {
-    if (auto splatOp = v.getDefiningOp<triton::SplatOp>()) {
-      if (auto constOp = splatOp.getSrc().getDefiningOp<arith::ConstantOp>()) {
-        if (auto val = dyn_cast<FloatAttr>(constOp.getValue())) {
-          return val.getValueAsDouble() == 0.;
-        }
-        if (auto val = dyn_cast<IntegerAttr>(constOp.getValue())) {
-          return val.getValue() == 0;
-        }
+// Check if tensor is all zeros
+// Returns true if all tensor elements are zero
+// Returns false if tensor is not all zeros or cannot be determined
+bool isZeroTensor(Value &v, bool integers) {
+  // Check SplatOp case
+  if (auto splatOp = v.getDefiningOp<triton::SplatOp>()) {
+    if (auto constOp = splatOp.getSrc().getDefiningOp<arith::ConstantOp>()) {
+      // Check floating point constant
+      if (auto val = dyn_cast<FloatAttr>(constOp.getValue())) {
+        return val.getValueAsDouble() == 0.;
       }
-      return false;
-    }
-
-    if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
-      if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
-        if (denseAttr.isSplat()) {
-          if (integers)
-            return denseAttr.getSplatValue<APInt>().isZero();
-          return denseAttr.getSplatValue<APFloat>().isZero();
-        }
+      // Check integer constant
+      if (auto val = dyn_cast<IntegerAttr>(constOp.getValue())) {
+        return val.getValue() == 0;
       }
     }
-
     return false;
   }
+
+  // Check ConstantOp case
+  if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
+      if (denseAttr.isSplat()) {
+        // Check zero value based on type
+        if (integers)
+          return denseAttr.getSplatValue<APInt>().isZero();
+        return denseAttr.getSplatValue<APFloat>().isZero();
+      }
+    }
+  }
+
+  return false;
+}
+
+struct MatmulConverter : public OpConversionPattern<triton::DotOp> {
+  using OpConversionPattern<triton::DotOp>::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
@@ -1279,6 +1287,58 @@ struct MatmulConverter : public OpConversionPattern<triton::DotOp> {
   }
 };
 
+struct DotScaledConverter : public OpConversionPattern<triton::DotScaledOp> {
+  using OpConversionPattern<triton::DotScaledOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(triton::DotScaledOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+
+    // Get operands
+    auto a = op.getA();
+    auto b = op.getB();
+    auto c = op.getC();
+    Value aScale = op.getAScale();
+    Value bScale = op.getBScale();
+    auto aElemType = op.getAElemTypeAttr();
+    auto bElemType = op.getBElemTypeAttr();
+    auto fastMath = op.getFastMathAttr();
+
+    // Get type information
+    auto aType = a.getType();
+    auto bType = b.getType();
+    auto dstType = cast<RankedTensorType>(op.getType());
+    auto elementType = dstType.getElementType();
+
+    // Create initial zero tensor
+    auto init =
+        rewriter.create<tensor::EmptyOp>(loc, dstType.getShape(), elementType);
+    TypedAttr constantAttr =
+        static_cast<TypedAttr>(rewriter.getFloatAttr(elementType, 0));
+    auto zero = rewriter.create<mlir::arith::ConstantOp>(
+        op.getLoc(), elementType, constantAttr);
+    auto zeroes =
+        rewriter.create<linalg::FillOp>(loc, ValueRange{zero}, ValueRange{init})
+            .result();
+
+    // Perform scaled dot product operation
+    Value res = rewriter
+                    .create<mk::DotScaledOp>(loc, TypeRange{op.getType()}, a,
+                                             aScale, b, bScale, zeroes,
+                                             aElemType, bElemType, fastMath)
+                    .getResult(0);
+
+    // Check if C needs to be added
+    bool skipC = isZeroTensor(c, false);
+    if (!skipC) {
+      res = rewriter.create<arith::AddFOp>(loc, c, res);
+    }
+
+    rewriter.replaceOp(op, res);
+    return success();
+  }
+};
+
 struct ReduceConverter : public OpConversionPattern<triton::ReduceOp> {
   using OpConversionPattern<triton::ReduceOp>::OpConversionPattern;
 
@@ -1290,10 +1350,11 @@ private:
   }
 
   bool isReductionOpSupported(Operation *redOp) const {
-    return isa<arith::AddFOp, arith::AddIOp, arith::MaximumFOp,
-               arith::MaxNumFOp, arith::MinimumFOp, arith::MinNumFOp,
-               arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp,
-               arith::XOrIOp>(redOp);
+    return isa<arith::AddFOp, arith::AddIOp, arith::MulIOp, arith::MulFOp,
+               arith::MaximumFOp, arith::MaxNumFOp, arith::MinimumFOp,
+               arith::MinNumFOp, arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp,
+               arith::MaxUIOp, arith::XOrIOp, arith::AndIOp, arith::OrIOp>(
+        redOp);
   }
 
   arith::ConstantOp getRedBaseConstOp(ConversionPatternRewriter &rewriter,
@@ -1308,6 +1369,12 @@ private:
             })
             .Case([&](arith::AddIOp) {
               return rewriter.getIntegerAttr(constantType, 0);
+            })
+            .Case([&](arith::MulFOp) {
+              return rewriter.getFloatAttr(constantType, 1.f);
+            })
+            .Case([&](arith::MulIOp) {
+              return rewriter.getIntegerAttr(constantType, 1);
             })
             .Case<arith::MaximumFOp, arith::MaxNumFOp>([&](auto) {
               return rewriter.getFloatAttr(
@@ -1332,8 +1399,15 @@ private:
             .Case([&](arith::MaxUIOp) {
               return rewriter.getIntegerAttr(constantType, 0);
             })
+            .Case([&](arith::OrIOp) {
+              return rewriter.getIntegerAttr(constantType, 0);
+            })
             .Case([&](arith::XOrIOp) {
               return rewriter.getIntegerAttr(constantType, 0);
+            })
+            .Case([&](arith::AndIOp) {
+              return rewriter.getIntegerAttr(constantType,
+                                             llvm::maxUIntN(bitWidth));
             })
             .Default([](Operation *op) {
               op->dump();
@@ -1350,26 +1424,26 @@ private:
            elemType.getIntOrFloatBitWidth() <
                cast<FloatType>(Float32Type::get(elemType.getContext()))
                    .getWidth() &&
-           isa<arith::AddFOp>(redOp);
+           (isa<arith::AddFOp>(redOp) || isa<arith::MulFOp>(redOp));
   }
 
   Value getRedElement(Value lhs, Value rhs, const Location loc,
                       Operation *redOp, OpBuilder &b,
                       const bool convertLhsToF32Precision) const {
     return llvm::TypeSwitch<Operation *, Value>(redOp)
-        .Case([&](arith::AddFOp) {
+        .Case<arith::AddFOp, arith::MulFOp>([&](auto redOp) {
           if (convertLhsToF32Precision) {
             lhs = b.create<arith::ExtFOp>(loc, Float32Type::get(b.getContext()),
                                           lhs);
           }
-          return b.create<arith::AddFOp>(loc, lhs, rhs);
+          return b.create<decltype(redOp)>(loc, lhs, rhs);
         })
-        .Case<arith::AddIOp, arith::MaximumFOp, arith::MaxNumFOp,
+        .Case<arith::AddIOp, arith::MulIOp, arith::MaximumFOp, arith::MaxNumFOp,
               arith::MinimumFOp, arith::MinNumFOp, arith::MinSIOp,
-              arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp, arith::XOrIOp>(
-            [&](auto redOp) {
-              return b.create<decltype(redOp)>(loc, lhs, rhs);
-            })
+              arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp, arith::XOrIOp,
+              arith::AndIOp, arith::OrIOp>([&](auto redOp) {
+          return b.create<decltype(redOp)>(loc, lhs, rhs);
+        })
         .Default([](Operation *op) {
           op->dump();
           llvm_unreachable("Reduction op not yet supported");
@@ -1547,9 +1621,18 @@ public:
     // the result value to either -inf or +inf depending on
     // whether we're dealing with argmax or argmin
     auto valueType = elemTypes[0];
-    auto valuesAccBaseVal = rewriter.create<arith::ConstantOp>(
-        loc, valueType,
-        rewriter.getFloatAttr(valueType, T::getBaseReductionValue()));
+
+    auto valuesAccBaseVal =
+        valueType.isInteger()
+            ? rewriter.create<arith::ConstantOp>(
+                  loc, valueType,
+                  rewriter.getIntegerAttr(
+                      valueType, T::getBaseReductionIntValue(
+                                     elemTypes[0].getIntOrFloatBitWidth())))
+            : rewriter.create<arith::ConstantOp>(
+                  loc, valueType,
+                  rewriter.getFloatAttr(valueType,
+                                        T::getBaseReductionFloatValue()));
 
     // Set the initial value of the rank-0 tensor containing the index of the
     // min or max value to -1
@@ -1606,7 +1689,11 @@ public:
 };
 
 struct ArgMaxConverter : public ArgMinMaxBaseConverter<ArgMaxConverter> {
-  static float getBaseReductionValue() {
+  // TODO: min value according the bitwidth? Now this is not used in tx8
+  static int64_t getBaseReductionIntValue(int bitwidth) {
+    return llvm::minIntN(bitwidth);
+  }
+  static float getBaseReductionFloatValue() {
     return -std::numeric_limits<float>::infinity();
   }
 
@@ -1616,7 +1703,10 @@ struct ArgMaxConverter : public ArgMinMaxBaseConverter<ArgMaxConverter> {
 };
 
 struct ArgMinConverter : public ArgMinMaxBaseConverter<ArgMinConverter> {
-  static float getBaseReductionValue() {
+  static int64_t getBaseReductionIntValue(int bitwidth) {
+    return llvm::maxIntN(bitwidth);
+  }
+  static float getBaseReductionFloatValue() {
     return std::numeric_limits<float>::infinity();
   }
 
@@ -1956,6 +2046,90 @@ struct GatherConverter : public OpConversionPattern<triton::GatherOp> {
   }
 };
 
+class ExternElementwiseFiniteOpConverter
+    : public OpConversionPattern<triton::ExternElementwiseOp> {
+  using OpConversionPattern<triton::ExternElementwiseOp>::OpConversionPattern;
+
+public:
+  LogicalResult
+  matchAndRewrite(triton::ExternElementwiseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    if (!op.getPure() || op.getSrcs().size() != 1 ||
+        op.getSymbol() != "__nv_finitef")
+      return failure();
+
+    // get input value
+    Value x = op.getSrcs()[0];
+    auto shapedType = cast<ShapedType>(x.getType());
+    auto elemType = shapedType.getElementType();
+
+    if (!elemType.isF32()) {
+      return failure();
+    }
+
+    // step 1: check x == x (not NaN)
+    Value notNaN =
+        rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OEQ, x, x);
+
+    // step 2: check x + 1 != x (not Infinity)
+    Value one = rewriter.create<arith::ConstantOp>(
+        loc, rewriter.getFloatAttr(elemType, 1.0f));
+
+    // create constant tensor
+    auto constTensor =
+        rewriter.create<tensor::EmptyOp>(loc, shapedType.getShape(), elemType);
+    auto filledTensor = rewriter
+                            .create<linalg::FillOp>(loc, ValueRange{one},
+                                                    ValueRange{constTensor})
+                            .getResult(0);
+
+    // x + 1
+    Value xPlusOne = rewriter.create<arith::AddFOp>(loc, x, filledTensor);
+    // x + 1 != x
+    Value notInf = rewriter.create<arith::CmpFOp>(
+        loc, arith::CmpFPredicate::ONE, xPlusOne, x);
+
+    // step 3: combine two conditions (notNaN && notInf)
+    Value isFinite = rewriter.create<arith::AndIOp>(loc, notNaN, notInf);
+
+    rewriter.replaceOp(op, isFinite);
+    return success();
+  }
+};
+
+class ExternElementwiseFmodOpConverter
+    : public OpConversionPattern<triton::ExternElementwiseOp> {
+  using OpConversionPattern<triton::ExternElementwiseOp>::OpConversionPattern;
+
+public:
+  LogicalResult
+  matchAndRewrite(triton::ExternElementwiseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    if (op.getSrcs().size() != 2 ||
+        (op.getSymbol() != "__nv_fmodf" && op.getSymbol() != "__nv_fmod")) {
+      return failure();
+    }
+
+    // get input values
+    Value input1 = op.getSrcs()[0];
+    Value input2 = op.getSrcs()[1];
+    auto elemType = cast<ShapedType>(input1.getType()).getElementType();
+
+    if (!elemType.isF32()) {
+      return failure();
+    }
+    auto divResult = rewriter.create<arith::DivFOp>(loc, input1, input2);
+    auto truncResult = rewriter.create<math::TruncOp>(loc, divResult);
+    auto mulResult = rewriter.create<arith::MulFOp>(loc, truncResult, input2);
+    auto subResult = rewriter.create<arith::SubFOp>(loc, input1, mulResult);
+
+    rewriter.replaceOp(op, subResult);
+    return success();
+  }
+};
+
 class ExternElementwiseBinaryOpConverter
     : public OpConversionPattern<triton::ExternElementwiseOp> {
   using OpConversionPattern<triton::ExternElementwiseOp>::OpConversionPattern;
@@ -1977,6 +2151,8 @@ public:
     POPULATE_BINARY_OP("__nv_atan2", math::Atan2Op);
     POPULATE_BINARY_OP("__nv_powf", math::PowFOp);
     POPULATE_BINARY_OP("__nv_pow", math::PowFOp);
+    POPULATE_BINARY_OP("__nv_powif", math::FPowIOp);
+    POPULATE_BINARY_OP("__nv_powi", math::FPowIOp);
 
 #undef POPULATE_BINARY_OP
     return failure();
@@ -2019,7 +2195,7 @@ public:
     POPULATE_UNARY_OP("__nv_coshf", math::CoshOp);
     POPULATE_UNARY_OP("__nv_cosh", math::CoshOp);
     POPULATE_UNARY_OP("__nv_tanhf", math::TanhOp);
-    POPULATE_UNARY_OP("__nv_tanhf", math::TanhOp);
+    POPULATE_UNARY_OP("__nv_tanh", math::TanhOp);
     POPULATE_UNARY_OP("__nv_acoshf", math::AcoshOp);
     POPULATE_UNARY_OP("__nv_acosh", math::AcoshOp);
     POPULATE_UNARY_OP("__nv_asinhf", math::AsinhOp);
@@ -2048,6 +2224,12 @@ public:
     POPULATE_UNARY_OP("__nv_floor", math::FloorOp);
     POPULATE_UNARY_OP("__nv_truncf", math::TruncOp);
     POPULATE_UNARY_OP("__nv_trunc", math::TruncOp);
+    POPULATE_UNARY_OP("__nv_isnanf", math::IsNaNOp);
+    POPULATE_UNARY_OP("__nv_isnand", math::IsNaNOp);
+    POPULATE_UNARY_OP("__nv_isinff", math::IsInfOp);
+    POPULATE_UNARY_OP("__nv_isinfd", math::IsInfOp);
+    POPULATE_UNARY_OP("__nv_rintf", math::RoundOp);
+    POPULATE_UNARY_OP("__nv_rint", math::RoundOp);
 
 #undef POPULATE_UNARY_OP
     return failure();
@@ -2055,8 +2237,10 @@ public:
 };
 
 static void populateExternElementwiseOpToMLIROps(RewritePatternSet &patterns) {
-  patterns.add<ExternElementwiseBinaryOpConverter,
-               ExternElementwiseUnaryOpConverter>(patterns.getContext());
+  patterns
+      .add<ExternElementwiseFiniteOpConverter, ExternElementwiseFmodOpConverter,
+           ExternElementwiseBinaryOpConverter,
+           ExternElementwiseUnaryOpConverter>(patterns.getContext());
 }
 
 struct HistogramOpConversion : public OpConversionPattern<triton::HistogramOp> {
@@ -2092,16 +2276,23 @@ struct HistogramOpConversion : public OpConversionPattern<triton::HistogramOp> {
     RankedTensorType cmpVecTy =
         RankedTensorType::get(resTy.getShape(), srcTy.getElementType());
 
-    // This will be a global constant, copy to allocated memory
-    Value rangeVec = rewriter.create<arith::ConstantOp>(
-        loc, resTy, makeRangeAttr(cmpVecTy, rewriter));
-    Value empty = rewriter.create<tensor::EmptyOp>(loc, resTy.getShape(),
-                                                   cmpVecTy.getElementType());
-    Value allocatedRangeVec = rewriter.create<tensor::InsertSliceOp>(
-        loc, cmpVecTy, rangeVec, empty, ValueRange(), ValueRange(),
-        ValueRange(), SmallVector<int64_t>({0}),
-        SmallVector<int64_t>({resTy.getNumElements()}),
-        SmallVector<int64_t>({0}));
+    Value allocatedRangeVec = rewriter.create<tensor::EmptyOp>(
+        loc, resTy.getShape(), cmpVecTy.getElementType());
+    SmallVector<AffineMap> indexingMaps{AffineMap::get(
+        /* dimCount */ 1, /* symbolCount */ 0,
+        SmallVector<AffineExpr>{
+            mlir::getAffineDimExpr(0, rewriter.getContext())},
+        rewriter.getContext())};
+    auto linalgOp = rewriter.create<linalg::GenericOp>(
+        loc, cmpVecTy, /* operands */ ValueRange{},
+        ValueRange{allocatedRangeVec}, indexingMaps, getNParallelLoopsAttrs(1),
+        [&](OpBuilder &nestedBuilder, Location nestedLoc,
+            ValueRange blockArgs) {
+          Value index = nestedBuilder.create<linalg::IndexOp>(loc, 0);
+          Value res = nestedBuilder.create<arith::IndexCastOp>(
+              loc, resTy.getElementType(), index);
+          nestedBuilder.create<linalg::YieldOp>(loc, res);
+        });
 
     Value res = zero;
 
@@ -2124,7 +2315,7 @@ struct HistogramOpConversion : public OpConversionPattern<triton::HistogramOp> {
 
           // Compare with range vector
           Value mask = builder.create<arith::CmpIOp>(
-              loc, arith::CmpIPredicate::eq, elemVec, allocatedRangeVec);
+              loc, arith::CmpIPredicate::eq, elemVec, linalgOp.getResult(0));
           // Select based on mask
           Value delta =
               builder.create<arith::SelectOp>(loc, resTy, mask, one, zero);
@@ -2192,71 +2383,107 @@ private:
                                               inputType.getElementType());
     });
 
-    auto strides = computeStrides(shape);
-    // Remove trailing elems to build indices of required rank.
-    strides.erase(strides.begin() + axis, strides.end());
-    int64_t numElems = inputType.getNumElements();
-    int64_t step = strides.back();
+    SmallVector<scf::ForOp> loops;
+    SmallVector<Value, 8> loopIndices;
 
-    for (int64_t idx = 0; idx < numElems; idx += step) {
-      auto indices = delinearize(idx, strides);
+    std::function<void(unsigned)> buildLoops = [&](unsigned d) {
+      // Setup loop bounds and step.
+      Value lowerBound = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+      Value upperBound = rewriter.create<arith::ConstantIndexOp>(loc, shape[d]);
+      Value step = rewriter.create<arith::ConstantIndexOp>(loc, 1);
 
-      SmallVector<int64_t> static_offsets = indices;
-      static_offsets.insert(static_offsets.end(), shape.size() - indices.size(),
-                            (int64_t)0);
-      SmallVector<int64_t> static_size(indices.size(), 1);
-      static_size.insert(static_size.end(), shape.begin() + axis, shape.end());
-      SmallVector<int64_t> static_stride(shape.size(), 1);
+      SmallVector<Value> curRes =
+          d == 0 ? res : loops[d - 1].getInitArgs().take_front(res.size());
+      auto loop = rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step,
+                                              ValueRange{curRes});
+      auto loopIdx = loop.getInductionVar();
+      loopIndices.push_back(loopIdx);
+      loops.push_back(loop);
 
-      // {1,1,..shape[axis],shape[axis+1],..shape[rank]}
-      SmallVector<int64_t> extract_shape = static_size;
+      rewriter.setInsertionPointToStart(loop.getBody());
+      if (d == axis - 1) {
+        SmallVector<Value, 8> dynamicIndices = loopIndices;
+        dynamicIndices.insert(dynamicIndices.end(), shape.size() - axis,
+                              rewriter.create<arith::ConstantIndexOp>(loc, 0));
 
-      // {shape[axis],shape[axis+1],..shape[rank]}
-      SmallVector<int64_t> reshape_shape(shape.begin() + axis, shape.end());
+        SmallVector<int64_t> static_size(axis, 1);
+        static_size.insert(static_size.end(), shape.begin() + axis,
+                           shape.end());
+        SmallVector<int64_t> static_stride(shape.size(), 1);
 
-      SmallVector<Value> subInputs(inputs.size());
-      std::transform(
-          inputs.begin(), inputs.end(), subInputs.begin(), [&](auto val) {
-            auto extract_tensor = rewriter.create<tensor::ExtractSliceOp>(
-                loc,
-                RankedTensorType::get(extract_shape,
-                                      inputType.getElementType()),
-                val, ValueRange(), ValueRange(), ValueRange(), static_offsets,
-                static_size, static_stride);
-
-            auto shapeAttr = rewriter.getI64TensorAttr(reshape_shape);
-            auto shapeConst =
-                rewriter.create<arith::ConstantOp>(loc, shapeAttr);
-
-            // {1,1,..shape[axis],shape[axis+1],..shape[rank]} ->
-            // {shape[axis],shape[axis+1],..shape[rank]}
-            return rewriter.create<tensor::ReshapeOp>(
-                loc,
-                RankedTensorType::get(reshape_shape,
-                                      inputType.getElementType()),
-                extract_tensor, shapeConst);
-          });
-
-      auto resElems = (this->*handle)(subInputs, op, rewriter);
-      for (size_t i = 0; i < res.size(); ++i) {
-
-        auto targetType =
-            RankedTensorType::get(extract_shape, inputType.getElementType());
-
-        auto shapeAttr = rewriter.getI64TensorAttr(extract_shape);
-        auto shapeConst = rewriter.create<arith::ConstantOp>(loc, shapeAttr);
-
-        // {shape[axis],shape[axis+1],..shape[rank]} ->
         // {1,1,..shape[axis],shape[axis+1],..shape[rank]}
-        auto reshaped = rewriter.create<tensor::ReshapeOp>(
-            loc, targetType, resElems[i], shapeConst);
+        SmallVector<int64_t> extract_shape = static_size;
 
-        res[i] = rewriter.create<tensor::InsertSliceOp>(
-            loc, res[i].getType(), reshaped, res[i], ValueRange(), ValueRange(),
-            ValueRange(), static_offsets, static_size, static_stride);
+        // {shape[axis],shape[axis+1],..shape[rank]}
+        SmallVector<int64_t> reshape_shape(shape.begin() + axis, shape.end());
+
+        SmallVector<Value> subInputs(inputs.size());
+        std::transform(
+            inputs.begin(), inputs.end(), subInputs.begin(), [&](auto val) {
+              auto extract_tensor = rewriter.create<tensor::ExtractSliceOp>(
+                  loc,
+                  RankedTensorType::get(extract_shape,
+                                        inputType.getElementType()),
+                  val, dynamicIndices, /*sizes*/ ValueRange(),
+                  /*strides*/ ValueRange(),
+                  SmallVector<int64_t>(shape.size(), ShapedType::kDynamic),
+                  static_size, static_stride);
+
+              auto shapeAttr = rewriter.getI64TensorAttr(reshape_shape);
+              auto shapeConst =
+                  rewriter.create<arith::ConstantOp>(loc, shapeAttr);
+
+              // {1,1,..shape[axis],shape[axis+1],..shape[rank]} ->
+              // {shape[axis],shape[axis+1],..shape[rank]}
+              return rewriter.create<tensor::ReshapeOp>(
+                  loc,
+                  RankedTensorType::get(reshape_shape,
+                                        inputType.getElementType()),
+                  extract_tensor, shapeConst);
+            });
+
+        auto resElems = (this->*handle)(subInputs, op, rewriter);
+        for (size_t i = 0; i < res.size(); ++i) {
+
+          auto targetType =
+              RankedTensorType::get(extract_shape, inputType.getElementType());
+
+          auto shapeAttr = rewriter.getI64TensorAttr(extract_shape);
+          auto shapeConst = rewriter.create<arith::ConstantOp>(loc, shapeAttr);
+
+          // {shape[axis],shape[axis+1],..shape[rank]} ->
+          // {1,1,..shape[axis],shape[axis+1],..shape[rank]}
+          auto reshaped = rewriter.create<tensor::ReshapeOp>(
+              loc, targetType, resElems[i], shapeConst);
+
+          curRes[i] = rewriter.create<tensor::InsertSliceOp>(
+              loc, reshaped, curRes[i], dynamicIndices,
+              /*sizes*/ ValueRange(),
+              /*strides*/ ValueRange(),
+              SmallVector<int64_t>(shape.size(), ShapedType::kDynamic),
+              static_size, static_stride);
+
+          rewriter.create<scf::YieldOp>(loc, curRes);
+        }
+        return;
       }
+      buildLoops(d + 1);
+      // Terminate the loop body.
+      rewriter.setInsertionPointToEnd(loop.getBody());
+      SmallVector<Value> yieldValues =
+          loops[d + 1].getResults().take_front(res.size());
+      rewriter.create<scf::YieldOp>(loc, yieldValues);
+      rewriter.setInsertionPointAfter(loop);
+    };
+
+    buildLoops(0);
+
+    // Extract result tensors from forOp;
+    SmallVector<Value> results;
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      results.push_back(loops.front().getResult(i));
     }
-    return res;
+    return results;
   }
 
   // To handle the trailing dimension case, we extract all input vectors
@@ -2279,6 +2506,8 @@ private:
       return success();
     }
 
+    // TODO: Optimization: The last two dimensions' data can be read with column
+    // stride and computed in parallel.
     uint32_t axis = op.getAxis();
     assert(axis == (inputType.getRank() - 1) &&
            "Expected reduction axis is the last one");
@@ -2316,8 +2545,7 @@ private:
   // Accumulate inputs and existing accumulators into a new accumulators
   // applying operations from the combine region.
   SmallVector<Value> accumulate(ValueRange inputs, ValueRange acc,
-                                Region &combineOp,
-                                ConversionPatternRewriter &rewriter) const {
+                                Region &combineOp, OpBuilder &rewriter) const {
     if (acc.empty())
       return inputs;
 
@@ -2371,8 +2599,7 @@ private:
   }
 
   Value lookupMappedValue(IRMapping &localMap, Value val,
-                          ArrayRef<int64_t> shape,
-                          ConversionPatternRewriter &rewriter) const {
+                          ArrayRef<int64_t> shape, OpBuilder &rewriter) const {
 
     Value res = localMap.lookupOrNull(val);
     if (!res) {
@@ -2407,30 +2634,83 @@ private:
                                               inputType.getElementType());
     });
 
-    SmallVector<Value> acc;
-    int64_t start = reverse ? shape[0] - 1 : 0;
-    int64_t end = reverse ? -1 : shape[0];
-    int64_t step = reverse ? -1 : 1;
-    for (int64_t idx = start; idx != end; idx += step) {
-      SmallVector<Value> inputsElem(inputs.size());
+    SmallVector<Value> acc(inputs.size());
+    std::transform(inputs.begin(), inputs.end(), acc.begin(), [&](auto val) {
+      return rewriter.create<arith::ConstantOp>(
+          loc, rewriter.getZeroAttr(inputType.getElementType()));
+    });
 
-      SmallVector<Value> idxIndex(
-          {rewriter.create<arith::ConstantIndexOp>(loc, idx)});
+    // scf.for loop bounds and step
+    // NOTE: Scf only support positive step, so we need to handle reverse
+    Value lowerBound = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value upperBound = rewriter.create<arith::ConstantIndexOp>(loc, shape[0]);
+    Value step = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    // Use tuple to pass acc and res as loop-carried variables
+    SmallVector<Value> initVals;
+    for (auto v : res)
+      initVals.push_back(v);
+    for (auto v : acc)
+      initVals.push_back(v);
 
-      std::transform(
-          inputs.begin(), inputs.end(), inputsElem.begin(), [&](auto val) {
-            return rewriter.create<tensor::ExtractOp>(loc, val, idxIndex);
-          });
+    auto forOp = rewriter.create<scf::ForOp>(
+        loc, lowerBound, upperBound, step, initVals,
+        [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
+          // iterArgs: [res..., acc...]
+          SmallVector<Value> curRes(iterArgs.begin(),
+                                    iterArgs.begin() + inputs.size());
+          SmallVector<Value> currAcc(iterArgs.begin() + inputs.size(),
+                                     iterArgs.end());
 
-      acc = accumulate(inputsElem, acc, combineOp, rewriter);
-      assert(acc.size() == inputs.size() &&
-             "accumulate should return the same number of results as inputs");
-      for (int i = 0; i < acc.size(); ++i) {
-        res[i] =
-            rewriter.create<tensor::InsertOp>(loc, acc[i], res[i], idxIndex);
-      }
+          SmallVector<Value> idxIndex;
+          if (reverse) {
+            auto actualIdx = b.create<arith::SubIOp>(loc, upperBound, iv);
+            actualIdx = b.create<arith::SubIOp>(loc, actualIdx, step);
+            idxIndex.push_back(actualIdx);
+          } else {
+            idxIndex.push_back(iv);
+          }
+          SmallVector<Value> inputsElem(inputs.size());
+          std::transform(
+              inputs.begin(), inputs.end(), inputsElem.begin(), [&](auto val) {
+                return rewriter.create<tensor::ExtractOp>(loc, val, idxIndex);
+              });
+
+          // Check if this is the first iteration
+          Value isFirstValue = b.create<arith::CmpIOp>(
+              loc, arith::CmpIPredicate::eq, iv, lowerBound);
+          scf::IfOp ifOp = b.create<scf::IfOp>(
+              loc, isFirstValue,
+              [&](OpBuilder &b, Location loc) {
+                b.create<scf::YieldOp>(loc, inputsElem);
+              },
+              [&](OpBuilder &b, Location loc) {
+                b.create<scf::YieldOp>(
+                    loc, accumulate(inputsElem, currAcc, combineOp, b));
+              });
+          currAcc = ifOp.getResults();
+
+          assert(acc.size() == inputs.size() &&
+                 "accumulate should return the same number of results as "
+                 "inputs");
+          for (int i = 0; i < res.size(); ++i) {
+            curRes[i] = rewriter.create<tensor::InsertOp>(loc, currAcc[i],
+                                                          curRes[i], idxIndex);
+          }
+
+          SmallVector<Value> yieldVals;
+          for (auto v : curRes)
+            yieldVals.push_back(v);
+          for (auto v : currAcc)
+            yieldVals.push_back(v);
+
+          b.create<scf::YieldOp>(loc, yieldVals);
+        });
+    // Extract result tensors from forOp
+    SmallVector<Value> results;
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      results.push_back(forOp.getResult(i));
     }
-    return res;
+    return results;
   }
 
   SmallVector<Value>
@@ -2449,45 +2729,117 @@ private:
           shape, cast<RankedTensorType>(resTy).getElementType()));
     }
 
+    // Initialize result tensors
     SmallVector<Value> res(inputs.size());
     std::transform(inputs.begin(), inputs.end(), res.begin(), [&](auto val) {
       return rewriter.create<tensor::EmptyOp>(loc, shape,
                                               inputType.getElementType());
     });
 
-    SmallVector<Value> acc;
-    int64_t start = reverse ? shape[0] - 1 : 0;
-    int64_t end = reverse ? -1 : shape[0];
-    int64_t step = reverse ? -1 : 1;
-    for (int64_t idx = start; idx != end; idx += step) {
-      SmallVector<Value> subInputs(inputs.size());
+    // Initialize accumulators as empty tensors of shape [1, ...]
+    SmallVector<int64_t> accShape({1});
+    accShape.insert(accShape.end(), shape.begin() + 1, shape.end());
 
-      SmallVector<int64_t> idxVal(shape.size(), 0);
-      idxVal.front() = idx;
-      SmallVector<int64_t> sizeVal({1});
-      sizeVal.insert(sizeVal.end(), shape.begin() + 1, shape.end());
-      SmallVector<int64_t> strides(shape.size(), 1);
+    SmallVector<Value> acc(inputs.size());
+    std::transform(inputs.begin(), inputs.end(), acc.begin(), [&](auto val) {
+      return rewriter.create<tensor::EmptyOp>(loc, accShape,
+                                              inputType.getElementType());
+    });
 
-      std::transform(
-          inputs.begin(), inputs.end(), subInputs.begin(), [&](auto val) {
-            return rewriter.create<tensor::ExtractSliceOp>(
-                loc,
-                RankedTensorType::get(
-                    sizeVal,
-                    cast<RankedTensorType>(resTypes[0]).getElementType()),
-                val, ValueRange(), ValueRange(), ValueRange(), idxVal, sizeVal,
-                strides);
-          });
+    // scf.for loop bounds and step
+    // NOTE: Scf only support positive step, so we need to handle reverse
+    Value lowerBound = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value upperBound = rewriter.create<arith::ConstantIndexOp>(loc, shape[0]);
+    Value step = rewriter.create<arith::ConstantIndexOp>(loc, 1);
 
-      acc = accumulate(subInputs, acc, combineOp, rewriter);
+    // Use tuple to pass acc and res as loop-carried variables
+    SmallVector<Value> initVals;
+    for (auto v : res)
+      initVals.push_back(v);
+    for (auto v : acc)
+      initVals.push_back(v);
 
-      for (size_t i = 0; i < res.size(); ++i) {
-        res[i] = rewriter.create<tensor::InsertSliceOp>(
-            loc, resTypes[i], acc[i], res[i], ValueRange(), ValueRange(),
-            ValueRange(), idxVal, sizeVal, strides);
-      }
+    auto forOp = rewriter.create<scf::ForOp>(
+        loc, lowerBound, upperBound, step, initVals,
+        [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
+          // iterArgs: [res..., acc...]
+          SmallVector<Value> curRes(iterArgs.begin(),
+                                    iterArgs.begin() + inputs.size());
+          SmallVector<Value> currAcc(iterArgs.begin() + inputs.size(),
+                                     iterArgs.end());
+
+          // Build offsets, sizes, and strides for ExtractSlice
+          SmallVector<Value> dynOffsets;
+          if (reverse) {
+            auto actualIdx = b.create<arith::SubIOp>(loc, upperBound, iv);
+            actualIdx = b.create<arith::SubIOp>(loc, actualIdx, step);
+            dynOffsets.push_back(actualIdx);
+          } else {
+            dynOffsets.push_back(iv);
+          }
+
+          for (size_t j = 1; j < shape.size(); ++j) {
+            dynOffsets.push_back(b.create<arith::ConstantIndexOp>(loc, 0));
+          }
+          SmallVector<int64_t> sizeVal({1});
+          sizeVal.insert(sizeVal.end(), shape.begin() + 1, shape.end());
+          SmallVector<int64_t> strides(shape.size(), 1);
+
+          // iv is a Value, so build dynamic offsets for ExtractSlice
+          SmallVector<Value> subInputs(inputs.size());
+          std::transform(
+              inputs.begin(), inputs.end(), subInputs.begin(), [&](auto val) {
+                return b.create<tensor::ExtractSliceOp>(
+                    loc,
+                    RankedTensorType::get(
+                        sizeVal,
+                        cast<RankedTensorType>(resTypes[0]).getElementType()),
+                    val, dynOffsets, /*sizes*/ ValueRange(),
+                    /*strides*/ ValueRange(),
+                    /*static_offsets*/
+                    SmallVector<int64_t>(shape.size(), ShapedType::kDynamic),
+                    sizeVal, strides);
+              });
+
+          // Check if this is the first iteration
+          Value isFirstValue = b.create<arith::CmpIOp>(
+              loc, arith::CmpIPredicate::eq, iv, lowerBound);
+          scf::IfOp ifOp = b.create<scf::IfOp>(
+              loc, isFirstValue,
+              [&](OpBuilder &b, Location loc) {
+                b.create<scf::YieldOp>(loc, subInputs);
+              },
+              [&](OpBuilder &b, Location loc) {
+                b.create<scf::YieldOp>(
+                    loc, accumulate(subInputs, currAcc, combineOp, b));
+              });
+          currAcc = ifOp.getResults();
+
+          // Insert current accumulator into result tensor
+          for (size_t i = 0; i < res.size(); ++i) {
+            curRes[i] = b.create<tensor::InsertSliceOp>(
+                loc, resTypes[i], currAcc[i], curRes[i], dynOffsets,
+                /*sizes*/ ValueRange(), /*strides*/ ValueRange(),
+                /*static_offsets*/
+                SmallVector<int64_t>(shape.size(), ShapedType::kDynamic),
+                sizeVal, strides);
+          }
+
+          SmallVector<Value> yieldVals;
+          for (auto v : curRes)
+            yieldVals.push_back(v);
+          for (auto v : currAcc)
+            yieldVals.push_back(v);
+
+          b.create<scf::YieldOp>(loc, yieldVals);
+        });
+
+    // Extract result tensors from forOp
+    SmallVector<Value> results;
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      results.push_back(forOp.getResult(i));
     }
-    return res;
+    return results;
   }
 
 public:
@@ -2495,7 +2847,9 @@ public:
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto rank = cast<RankedTensorType>(op.getOperand(0).getType()).getRank();
-    if (op.getAxis() == (rank - 1))
+    auto axis = op.getAxis();
+    assert(axis < rank && "Expected axis is within the input rank");
+    if (axis == (rank - 1))
       return lowerTrailingDimension(op, rewriter);
 
     return lowerNonTrailingDimension(op, rewriter);

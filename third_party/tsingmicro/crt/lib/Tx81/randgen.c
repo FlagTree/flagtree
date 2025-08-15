@@ -1,7 +1,5 @@
 //===------------------------ randgen.c -----------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,7 +12,7 @@
 void __RandGen(uint64_t *src0, uint64_t *src1, uint64_t *dst0, uint64_t *dst1,
                uint64_t *dst2, uint32_t src_elem_num, uint16_t fmt) {
   // Create command buffer.
-  TsmPeripheral *cmd = TsmNewPeripheral();
+  TsmPeripheral *cmd = g_intrinsic()->peripheral_pointer;
   TsmPeripheralInstr inst = {I_CGRA,
                              {
                                  0,
@@ -31,5 +29,4 @@ void __RandGen(uint64_t *src0, uint64_t *src1, uint64_t *dst0, uint64_t *dst1,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeletePeripheral(cmd);
 }

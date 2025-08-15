@@ -1,7 +1,5 @@
 //===------------------------ satrelu.c -----------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,7 +12,7 @@
 void __Satrelu(uint64_t *src, uint64_t *dst, uint32_t elem_count,
                uint16_t fmt) {
   // Create command buffer.
-  TsmActivation *cmd = TsmNewActivation();
+  TsmActivation *cmd = g_intrinsic()->activation_pointer;
   TsmActivationInstr inst = {I_CGRA,
                              {
                                  0,
@@ -30,5 +28,4 @@ void __Satrelu(uint64_t *src, uint64_t *dst, uint32_t elem_count,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteActivation(cmd);
 }

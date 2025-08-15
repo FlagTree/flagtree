@@ -56,9 +56,21 @@ static LogicalResult matchTieBreakResult(Value currValue, Value currIndex,
   //   tie = value1 == value2 and index1 < index2
 
   // matching: %11 = arith.cmpf oeq, %arg9, %arg11 : f32
-  auto eqCmpOp = dyn_cast<arith::CmpFOp>(*it++);
-  if (!eqCmpOp || eqCmpOp.getPredicate() != arith::CmpFPredicate::OEQ ||
-      currValue != eqCmpOp.getLhs() || reduceValue != eqCmpOp.getRhs()) {
+  auto &cmpOp = *it++;
+  Value eqCmpOp;
+  if (auto eqCmpFOp = dyn_cast<arith::CmpFOp>(cmpOp)) {
+    if (eqCmpFOp.getPredicate() != arith::CmpFPredicate::OEQ ||
+        currValue != eqCmpFOp.getLhs() || reduceValue != eqCmpFOp.getRhs()) {
+      return failure();
+    }
+    eqCmpOp = eqCmpFOp;
+  } else if (auto eqCmpIOp = dyn_cast<arith::CmpIOp>(cmpOp)) {
+    if (eqCmpIOp.getPredicate() != arith::CmpIPredicate::eq ||
+        currValue != eqCmpIOp.getLhs() || reduceValue != eqCmpIOp.getRhs()) {
+      return failure();
+    }
+    eqCmpOp = eqCmpIOp;
+  } else {
     return failure();
   }
 
@@ -85,19 +97,27 @@ static LogicalResult matchComparisonResult(Value currValue, Value currIndex,
                                            Value &comparisonResult,
                                            bool isArgMin) {
   // %14 = arith.cmpf olt(ogt), %arg9, %arg11 : f32
-  auto cmpOp = dyn_cast<arith::CmpFOp>(*it++);
-  if (!cmpOp) {
+  auto &cmpOp = *it++;
+  if (auto eqCmpFOp = dyn_cast<arith::CmpFOp>(cmpOp)) {
+    auto predicate =
+        isArgMin ? arith::CmpFPredicate::OLT : arith::CmpFPredicate::OGT;
+    if (eqCmpFOp.getPredicate() != predicate ||
+        currValue != eqCmpFOp.getLhs() || reduceValue != eqCmpFOp.getRhs()) {
+      return failure();
+    }
+    comparisonResult = eqCmpFOp;
+  } else if (auto eqCmpIOp = dyn_cast<arith::CmpIOp>(cmpOp)) {
+    auto predicate =
+        isArgMin ? arith::CmpIPredicate::slt : arith::CmpIPredicate::sgt;
+    if (eqCmpIOp.getPredicate() != predicate ||
+        currValue != eqCmpIOp.getLhs() || reduceValue != eqCmpIOp.getRhs()) {
+      return failure();
+    }
+    comparisonResult = eqCmpIOp;
+  } else {
     return failure();
   }
 
-  auto predicate =
-      isArgMin ? arith::CmpFPredicate::OLT : arith::CmpFPredicate::OGT;
-  if (cmpOp.getPredicate() != predicate || currValue != cmpOp.getLhs() ||
-      reduceValue != cmpOp.getRhs()) {
-    return failure();
-  }
-
-  comparisonResult = cmpOp;
   return success();
 }
 

@@ -29,6 +29,14 @@ fi
 
 BUILD_TYPE=Release
 
+build_wheel=OFF
+arg1=$1
+
+if [ "$arg1" = "wheel" ]; then
+    build_wheel=ON
+    echo "build wheel"
+fi
+
 build_triton() {
     if [ "x$BUILD_TYPE" == "xDebug" ]; then
         export DEBUG=ON
@@ -47,7 +55,12 @@ build_triton() {
     echo "export TRITON_BUILD_PROTON=$TRITON_BUILD_PROTON"
 
     cd $project_dir/python
-    python3 -m pip install . --no-build-isolation -v --verbose
+    build_opt=install
+
+    if [ "x$build_wheel" == "xON" ]; then
+        build_opt=wheel
+    fi
+    python3 -m pip $build_opt . --no-build-isolation -v --verbose
 }
 
 if [ -f $project_dir/.venv/bin/activate ]; then

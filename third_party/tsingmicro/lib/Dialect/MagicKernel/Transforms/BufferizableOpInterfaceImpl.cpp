@@ -118,6 +118,7 @@ void mlir::mk::registerBufferizableOpInterfaceExternalModels(
       +[](MLIRContext *ctx, mlir::mk::MagicKernelDialect *dialect) {
         // TODO: Register all mk ops.
         MKOpInterfaceHelper<mk::DotOp>::registerOpInterface(ctx);
+        MKOpInterfaceHelper<mk::DotScaledOp>::registerOpInterface(ctx);
         MKOpInterfaceHelper<mk::SigmoidOp>::registerOpInterface(ctx);
         MKOpInterfaceHelper<mk::GatherOp>::registerOpInterface(ctx);
         MKOpInterfaceHelper<mk::PrintOp>::registerOpInterface(ctx);

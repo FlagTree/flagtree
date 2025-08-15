@@ -1,7 +1,5 @@
 //===------------------------ nchw2nhwc.c ---------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,7 +12,7 @@
 void __Nchw2nhwc(uint64_t *src, uint64_t *dst, int32_t *src_shape,
                  int32_t *dst_shape, uint16_t fmt) {
   // Create command buffer.
-  TsmDataMove *cmd = TsmNewDataMove();
+  TsmDataMove *cmd = g_intrinsic()->datamove_pointer;
   TsmDataMoveInstr inst = {I_CGRA,
                            {
                                0,
@@ -32,5 +30,4 @@ void __Nchw2nhwc(uint64_t *src, uint64_t *dst, int32_t *src_shape,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeleteDataMove(cmd);
 }

@@ -6,6 +6,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "triton-shared/Conversion/StructuredToMemref/StructuredToMemref.h"
+#include "Address/Dialect/IR/AddressDialect.h"
+#include "magic-kernel/Dialect/IR/MagicKernelDialect.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
@@ -23,7 +26,6 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR//MemRef.h"
@@ -377,28 +379,9 @@ private:
         op, staticTargetOffset.value_or(ShapedType::kDynamic), staticStrides,
         resultShape);
 
-    // The base ptr, which is from one of the args, would have already been
-    // converted to memref<*> at this point, so get the base from adaptor.
-    //
-    // For block pointers, the base could come from a sequence of `tt.addptr`,
-    // which at this point has already been lowered to a sequence of
-    // `memref.reinterpret_cast` ops. The offset in such cases are dynamic.
-    // (see test/Conversion/StructuredToMemref/block_ptr_complex_offset.mlir)
-    //
-    // For non-block pointer cases, the base is the reinterpret_cast of a
-    // function argument. Assert that the offset is a constant 0 in such cases.
-    auto ptr = adaptor.getBase();
-    if (auto reinterpretCast = ptr.getDefiningOp<memref::ReinterpretCastOp>()) {
-      auto offset = reinterpretCast.getMixedOffsets()[0];
-      auto intAttr = getIntAttr(offset);
-      assert(isBlockPtr || (intAttr.has_value() && intAttr.value() == 0));
-      targetOffset = addOFRs(targetOffset, reinterpretCast.getMixedOffsets()[0],
-                             op->getLoc(), rewriter);
-    }
-
     auto castOp = rewriter.create<memref::ReinterpretCastOp>(
-        op.getLoc(), resultType, ptr, targetOffset, op.getMixedSizes(),
-        mixedStrides);
+        op.getLoc(), resultType, adaptor.getBase(), targetOffset,
+        op.getMixedSizes(), mixedStrides);
 
     rewriter.replaceOp(op, castOp);
 
@@ -425,15 +408,15 @@ private:
   }
 
 public:
+  MakeTensorPtrConverter(const TypeConverter &typeConverter,
+                         MLIRContext *context)
+      : OpConversionPattern<tts::MakeTensorPtrOp>(typeConverter, context) {}
+
   LogicalResult
   matchAndRewrite(tts::MakeTensorPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!llvm::is_sorted(op.getOrder(), std::greater<>())) {
-      emitError(op.getLoc()) << "non-decreasing dimension order on tensor "
-                                "pointers are not yet supported";
-      return failure();
-    }
-
+    // TODO: Order is a compiler hint. We can optimize data load/store according
+    // the order attribute.
     if (op.isBlockPtr()) {
       return rewriteBlockPtr(op, adaptor, rewriter);
     }
@@ -637,36 +620,43 @@ private:
     SmallVector<OpFoldResult> mixedDims = op.getMixedMaskDims();
 
     // Fill load destination with other value
-    if (op.getOther()) {
-      // For each dimension check if dims[i] < shape[i], or-accumulate
-      // the result
-      auto shape = tensorType.getShape();
-      auto accBase =
-          rewriter.create<arith::ConstantOp>(loc, rewriter.getBoolAttr(false))
-              .getResult();
-      for (size_t i = 0; i < shape.size(); i++) {
-        auto shapei = rewriter.create<arith::ConstantOp>(
-            loc, rewriter.getIndexAttr(shape[i]));
+    auto other = op.getOther();
+    if (!other) {
 
-        Value dimi = dyn_cast<Value>(mixedDims[i]);
-        if (!dimi) {
-          dimi = rewriter.create<arith::ConstantOp>(
-              loc, rewriter.getIndexAttr(op.getStaticMaskDims()[i]));
-        }
+      op->emitRemark(
+          "Masked load without other value, using zero padding instead\n");
+      // FIXME: Different reduction op need different reduce base value
+      other = rewriter.create<arith::ConstantOp>(
+          loc, elemType, rewriter.getZeroAttr(elemType));
+    }
 
-        Value cmp = rewriter.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::slt, dimi, shapei);
-        accBase = rewriter.create<arith::OrIOp>(loc, accBase, cmp);
+    // For each dimension check if dims[i] < shape[i], or-accumulate
+    // the result
+    auto shape = tensorType.getShape();
+    auto accBase =
+        rewriter.create<arith::ConstantOp>(loc, rewriter.getBoolAttr(false))
+            .getResult();
+    for (size_t i = 0; i < shape.size(); i++) {
+      auto shapei = rewriter.create<arith::ConstantOp>(
+          loc, rewriter.getIndexAttr(shape[i]));
+
+      Value dimi = dyn_cast<Value>(mixedDims[i]);
+      if (!dimi) {
+        dimi = rewriter.create<arith::ConstantOp>(
+            loc, rewriter.getIndexAttr(op.getStaticMaskDims()[i]));
       }
 
-      // condition the memset on the or-accumulation
-      // initialize with padding prior to CopyOp
-      rewriter.create<scf::IfOp>(loc, accBase, [&](OpBuilder &b, Location loc) {
-        b.create<linalg::FillOp>(loc, ValueRange{op.getOther()},
-                                 ValueRange{alloc});
-        b.create<scf::YieldOp>(loc);
-      });
+      Value cmp = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                 dimi, shapei);
+      accBase = rewriter.create<arith::OrIOp>(loc, accBase, cmp);
     }
+
+    // condition the memset on the or-accumulation
+    // initialize with padding prior to CopyOp
+    rewriter.create<scf::IfOp>(loc, accBase, [&](OpBuilder &b, Location loc) {
+      b.create<linalg::FillOp>(loc, ValueRange{other}, ValueRange{alloc});
+      b.create<scf::YieldOp>(loc);
+    });
 
     if (auto unrealizedCast = ptr.getDefiningOp<UnrealizedConversionCastOp>()) {
 
@@ -763,101 +753,10 @@ public:
   }
 };
 
-struct ScalarLoadConverter : public OpConversionPattern<triton::LoadOp> {
-  using OpConversionPattern<triton::LoadOp>::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (!op.getType().isIntOrIndexOrFloat()) {
-      return failure();
-    }
-
-    auto loc = op->getLoc();
-    auto memrefPtr = adaptor.getPtr();
-    auto zeroMap = AffineMap::getConstantMap(0, rewriter.getContext());
-    auto loadOp = rewriter.create<affine::AffineLoadOp>(loc, memrefPtr, zeroMap,
-                                                        std::nullopt);
-    rewriter.replaceOp(op, loadOp.getResult());
-
-    return success();
-  }
-};
-
-struct ScalarStoreConverter : public OpConversionPattern<triton::StoreOp> {
-private:
-  using OpConversionPattern<triton::StoreOp>::OpConversionPattern;
-
-public:
-  LogicalResult
-  matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-
-    if (!op.getValue().getType().isIntOrIndexOrFloat()) {
-      return failure();
-    }
-
-    auto loc = op->getLoc();
-    auto memrefPtr = adaptor.getPtr();
-    auto val = op.getValue();
-    auto zeroMap = AffineMap::getConstantMap(0, rewriter.getContext());
-
-    rewriter.create<affine::AffineStoreOp>(loc, val, memrefPtr, zeroMap,
-                                           std::nullopt);
-    rewriter.eraseOp(op);
-
-    return success();
-  }
-};
-
-struct UnrealizedCastConverter
-    : public OpConversionPattern<UnrealizedConversionCastOp> {
-private:
-  using OpConversionPattern<UnrealizedConversionCastOp>::OpConversionPattern;
-
-public:
-  UnrealizedCastConverter(TypeConverter &typeConverter, MLIRContext *context)
-      : OpConversionPattern<UnrealizedConversionCastOp>(typeConverter,
-                                                        context) {}
-
-  LogicalResult
-  matchAndRewrite(UnrealizedConversionCastOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto resType = op->getResultTypes()[0];
-    auto input = op.getInputs()[0];
-    auto inputType = input.getType();
-
-    if (!isa<triton::PointerType>(resType) ||
-        !isa<MemRefType, UnrankedMemRefType>(inputType)) {
-      return failure();
-    }
-
-    if (auto reinterpretCast =
-            input.getDefiningOp<memref::ReinterpretCastOp>()) {
-      rewriter.replaceOp(op, reinterpretCast);
-    } else {
-      auto ptrType = cast<triton::PointerType>(resType);
-      auto memrefType =
-          cast<MemRefType>(getTypeConverter()->convertType(ptrType));
-
-      auto cast = rewriter.create<memref::ReinterpretCastOp>(
-          op->getLoc(), memrefType, op.getInputs()[0], 0 /*offset*/,
-          SmallVector<int64_t>{1} /*sizes*/,
-          SmallVector<int64_t>{1} /*strides*/);
-
-      rewriter.replaceOp(op, cast);
-    }
-
-    return success();
-  }
-};
-
 } // namespace
 
 void mlir::triton::populateStructuredToMemrefConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &typeConverter) {
-  patterns.add<UnrealizedCastConverter>(typeConverter, patterns.getContext());
-  patterns.add<MakeTensorPtrConverter, LoadConverter, StoreConverter,
-               ScalarLoadConverter, ScalarStoreConverter>(
-      patterns.getContext());
+  patterns.add<MakeTensorPtrConverter>(typeConverter, patterns.getContext());
+  patterns.add<LoadConverter, StoreConverter>(patterns.getContext());
 }

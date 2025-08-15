@@ -1,7 +1,5 @@
 //===------------------------ lut16.c -------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,7 +12,7 @@
 void __Lut16(uint64_t *src, uint64_t *dst, uint64_t *lut16,
              uint32_t src_elem_count, uint32_t lut_elem_count) {
   // Create command buffer.
-  TsmPeripheral *cmd = TsmNewPeripheral();
+  TsmPeripheral *cmd = g_intrinsic()->peripheral_pointer;
   TsmPeripheralInstr inst = {I_CGRA,
                              {
                                  0,
@@ -31,5 +29,4 @@ void __Lut16(uint64_t *src, uint64_t *dst, uint64_t *lut16,
   TsmExecute(&inst);
 
   // Destroy the command buffer.
-  TsmDeletePeripheral(cmd);
 }

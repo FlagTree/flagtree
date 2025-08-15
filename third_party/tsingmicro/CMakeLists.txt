@@ -6,6 +6,14 @@ if(NOT DEFINED TX8_DEPS_ROOT)
   endif()
 endif()
 
+if(NOT DEFINED USE_PROFILE)
+  if(DEFINED ENV{USE_PROFILE})
+    set(USE_PROFILE $ENV{TX8_DEPS_ROOT})
+  endif()
+endif()
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(XUANTIE_NAME Xuantie-900-gcc-elf-newlib-x86_64-V2.10.2)
 set(INSTALL_TSINGMICRO_DIR ${CMAKE_INSTALL_PREFIX}/triton/backends/tsingmicro/)
 install(CODE "file(MAKE_DIRECTORY \"${INSTALL_TSINGMICRO_DIR}\")")

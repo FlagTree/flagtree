@@ -1,7 +1,5 @@
 //===------------------------ rdma.c --------------------------------------===//
 //
-// Copyright (C) 2020-2025 Terapines Technology (Wuhan) Co., Ltd
-// All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -12,21 +10,11 @@
 #include "tx81.h"
 #include <stdio.h>
 
-// The arguments list is aligned with TsmConv in Tx81Ops.td
-void __Rdma(uint64_t *src, uint64_t *dst, int *src_shape, int *src_stride,
-            int *dst_shape, int *dst_stride, uint32_t elem_bytes,
-            uint32_t fmt) {
-  // Dynamic shape, kernel implementation will cause shape equal to 0
-  if (src_shape[0] == 0 || src_shape[1] == 0 || src_shape[2] == 0 ||
-      src_shape[3] == 0)
-    return;
-
-  // Inner dim must be contiguous,last stride is always 1.
-  assert(src_stride[3] == 1);
-  assert(dst_stride[3] == 1);
-
-  // Create gemm command buffer.
-  TsmRdma *rdma = TsmNewRdma();
+// Only support rank = 4.
+void __Rdma4d(uint64_t *src, uint64_t *dst, int *src_shape, int *src_stride,
+              int *dst_shape, int *dst_stride, int rank, uint32_t elem_bytes,
+              uint32_t fmt) {
+  TsmRdma *rdma = g_intrinsic()->rdma_pointer;
   TsmRdmaInstr inst = {I_RDMA,
                        {
                            0,
@@ -35,36 +23,97 @@ void __Rdma(uint64_t *src, uint64_t *dst, int *src_shape, int *src_stride,
                            0,
                        }};
 
-  if (is_contiguous(dst_shape, dst_stride, elem_bytes)) {
-    rdma->AddSrcDst(&inst, (uint64_t)src, (uint64_t)dst, (Data_Format)fmt);
+  rdma->AddSrcDst(&inst, (uint64_t)src, (uint64_t)dst, (Data_Format)fmt);
+  rdma->ConfigStrideIteration(&inst, src_shape[3], src_stride[2], src_shape[2],
+                              src_stride[1], src_shape[1], src_stride[0],
+                              src_shape[0]);
+  TsmExecute(&inst);
+  TsmWaitfinish();
+}
 
-    rdma->ConfigStrideIteration(&inst, src_shape[3], src_stride[2],
-                                src_shape[2], src_stride[1], src_shape[1],
-                                src_stride[0], src_shape[0]);
-    TsmExecute(&inst);
-    TsmDeleteRdma(rdma);
-    return;
+// Rdma line by line.
+void __RdmaVectorize(char *srcPtr, char *dstPtr, int *src_shape,
+                     int *src_stride, int *dst_shape, int *dst_stride, int rank,
+                     uint32_t elem_bytes, uint32_t fmt, int innermost_rank,
+                     int inner_elem_count) {
+  TsmRdma *rdma = g_intrinsic()->rdma_pointer;
+  TsmRdmaInstr inst = {I_RDMA,
+                       {
+                           0,
+                       },
+                       {
+                           0,
+                       }};
+
+  int64_t readIndex = 0;
+  int64_t writeIndex = 0;
+  int64_t indices[rank], srcStrides[rank], dstStrides[rank];
+
+  // Initialize index and scale strides.
+  for (int rankp = 0; rankp < rank; ++rankp) {
+    indices[rankp] = 0;
+    srcStrides[rankp] = src_stride[rankp] * elem_bytes;
+    dstStrides[rankp] = dst_stride[rankp] * elem_bytes;
   }
 
-  for (int64_t i = 0; i < src_shape[0]; ++i) {
-    uint64_t src_ptr0 = (uint64_t)src + i * src_stride[0] * elem_bytes;
-    uint64_t dst_ptr0 = (uint64_t)dst + i * dst_stride[0] * elem_bytes;
+  for (;;) {
+    // Copy inner dim, line by line.
+    rdma->Rdma1d(&inst, (uint64_t)(srcPtr + readIndex),
+                 (uint64_t)(dstPtr + writeIndex), inner_elem_count,
+                 (Data_Format)fmt);
+    TsmExecute(&inst);
+    TsmWaitfinish();
 
-    for (int64_t j = 0; j < src_shape[1]; ++j) {
-      uint64_t src_ptr1 = src_ptr0 + j * src_stride[1] * elem_bytes;
-      uint64_t dst_ptr1 = dst_ptr0 + j * dst_stride[1] * elem_bytes;
+    // Advance index and read position.
+    // Start from the second-to-last dimension, copy one line at a time
+    for (int64_t axis = innermost_rank; axis >= 0; --axis) {
+      // Advance at current axis.
+      int64_t newIndex = ++indices[axis];
+      readIndex += srcStrides[axis];
+      writeIndex += dstStrides[axis];
+      // If this is a valid index, we have our next index, so continue copying.
+      if (src_shape[axis] != newIndex)
+        break;
+      // We reached the end of this axis. If this is axis 0, we are done.
+      if (axis == 0)
+        return;
+      // Else, reset to 0 and undo the advancement of the linear index that
+      // this axis had. Then continue with the axis one outer.
+      indices[axis] = 0;
+      readIndex -= src_shape[axis] * srcStrides[axis];
+      writeIndex -= dst_shape[axis] * dstStrides[axis];
+    }
+  }
+}
 
-      for (int64_t k = 0; k < src_shape[2]; ++k) {
-        uint64_t src_ptr2 = src_ptr1 + k * src_stride[2] * elem_bytes;
-        uint64_t dst_ptr2 = dst_ptr1 + k * dst_stride[2] * elem_bytes;
-        rdma->Rdma1d(&inst, (uint64_t)src_ptr2, (uint64_t)dst_ptr2,
-                     src_shape[3], (Data_Format)fmt);
-        TsmExecute(&inst);
-        TsmWaitfinish();
-      }
+void __Rdma(uint64_t *src, uint64_t *dst, int *src_shape, int *src_stride,
+            int *dst_shape, int *dst_stride, int rank, uint32_t elem_bytes,
+            uint32_t fmt) {
+
+  // Dynamic shape, kernel implementation will cause shape equal to 0
+  for (int i = 0; i < rank; i++) {
+    if (src_shape[i] == 0) {
+      return;
     }
   }
 
-  // Destroy the command buffer.
-  TsmDeleteRdma(rdma);
+  // If inner dim stride is 1, use scalar rdma.
+  if (src_stride[rank - 1] != 1 || dst_stride[rank - 1] != 1) {
+    __RdmaVectorize((char *)src, (char *)dst, src_shape, src_stride, dst_shape,
+                    dst_stride, rank, elem_bytes, Fmt_INT8, rank - 1,
+                    elem_bytes);
+    return;
+  }
+  legalizeMemoryOpAttribute(src_shape, src_stride, dst_shape, dst_stride, rank,
+                            &elem_bytes, &fmt);
+
+  if (rank == 4 && is_contiguous(dst_shape, dst_stride, elem_bytes)) {
+    __Rdma4d(src, dst, src_shape, src_stride, dst_shape, dst_stride, rank,
+             elem_bytes, fmt);
+    return;
+  }
+
+  __RdmaVectorize((char *)src, (char *)dst, src_shape, src_stride, dst_shape,
+                  dst_stride, rank, elem_bytes, fmt, rank - 2,
+                  src_shape[rank - 1]);
 }
