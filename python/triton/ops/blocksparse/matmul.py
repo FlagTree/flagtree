@@ -22,16 +22,6 @@ def num_warps(n):
     return 16
 
 
-def get_paddle_strides(tensor):
-    """计算 PaddlePaddle 张量的 stride"""
-    shape = tensor.shape
-    if len(shape) == 0:
-        return []
-    
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = strides[i + 1] * shape[i + 1]
-    return strides
 
 
 # ********************************************************
@@ -147,8 +137,8 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
     else:
         # PaddlePaddle 实现
         # 检查是否需要 contiguous
-        a_strides = get_paddle_strides(a)
-        b_strides = get_paddle_strides(b)
+        a_strides = a.strides
+        b_strides = b.strides
         if a_strides[2] != 1 and a_strides[3] != 1:
             a = a.contiguous()
         if b_strides[2] != 1 and b_strides[3] != 1:
@@ -171,9 +161,9 @@ def sdd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, widths, out=
             c = out
         
         # 重新计算 stride（因为可能已经 contiguous）
-        a_strides = get_paddle_strides(a)
-        b_strides = get_paddle_strides(b)
-        c_strides = get_paddle_strides(c)
+        a_strides = a.strides
+        b_strides = b.strides
+        c_strides = c.strides
         
         grid = [c.shape[1], 1, c.shape[0]]
         _sdd_kernel[grid](
@@ -320,8 +310,8 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
     else:
         # PaddlePaddle 实现
         # 检查是否需要 contiguous
-        a_strides = get_paddle_strides(a)
-        b_strides = get_paddle_strides(b)
+        a_strides = a.strides
+        b_strides = b.strides
         if a_strides[2] != 1 and a_strides[3] != 1:
             a = a.contiguous()
         if b_strides[2] != 1 and b_strides[3] != 1:
@@ -348,9 +338,9 @@ def dsd_matmul(a, b, trans_a, trans_b, trans_c, spdims, block, lut, width, out=N
         grid = lambda meta: [cdiv(BS3, meta['TILE_N']), width, BS0]
         
         # 重新计算 stride（因为可能已经 contiguous）
-        a_strides = get_paddle_strides(a)
-        b_strides = get_paddle_strides(b)
-        c_strides = get_paddle_strides(c)
+        a_strides = a.strides
+        b_strides = b.strides
+        c_strides = c.strides
         
         _dsd_kernel[grid](
             a, b, c,  #

@@ -11,7 +11,6 @@ from ... import jit
 from ... import language as tl
 from ... import next_power_of_2
 
-
 def num_warps(n):
     if n <= 128:
         return 1
@@ -249,11 +248,11 @@ else:
             M = a.shape[0]
             grid = [spdims[0], spdims[1] * block, M]
             rel_shape = (1, 1, 1, 1) if rel_logits is None else rel_logits.shape
-            rel_strides = (1, 1, 1, 1) if rel_logits is None else rel_logits.stride()
+            rel_strides = (1, 1, 1, 1) if rel_logits is None else rel_logits.strides
             # enqueue kernel
             out = paddle.empty_like(a)
             _blocksparse_softmax_fwd[grid](
-                out, a, a.stride(0), lut,  #
+                out, a, a.strides[0], lut,  #
                 rel_logits, rel_shape[-1], rel_strides[0], rel_strides[1],  # relative attn#
                 scale,  #
                 is_causal,  #
@@ -288,9 +287,9 @@ else:
             grid = (ctx.spdims[0], ctx.spdims[1] * ctx.block, M)
             da = paddle.empty_like(dout)
             _blocksparse_softmax_bwd[grid](
-                da, da.stride(0),  #
-                dout, dout.stride(0),  #
-                out, out.stride(0),  #
+                da, da.strides[0],  #
+                dout, dout.strides[0],  #
+                out, out.strides[0],  #
                 ctx.scale,  #
                 lut,  #
                 dr, ctx.rel_shape[-1], ctx.rel_strides[0], ctx.rel_strides[1], ctx.rel_strides[2],  #
@@ -300,7 +299,7 @@ else:
                 IS_DENSE=ctx.is_dense,  #
                 num_warps=num_warps(ctx.maxlut)  #
             )
-            return (da, None, None, dr, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
+            return da, None
 
 
 class softmax:

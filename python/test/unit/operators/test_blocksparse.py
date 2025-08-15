@@ -399,7 +399,7 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, device, Z=3, H=2, M=512, N
     
     op = triton.ops.blocksparse.matmul(layout, BLOCK, MODE, trans_a=TRANS_A, trans_b=TRANS_B, device=device)
     c_tri = op(a_tri, b_tri)
-    c_tri.backward(dc_tri, retain_graph=True)
+    c_tri.backward(dc_tri)
     da_tri = a_tri.grad
     db_tri = b_tri.grad
 
@@ -421,9 +421,9 @@ def test_matmul(MODE, TRANS_A, TRANS_B, BLOCK, DTYPE, device, Z=3, H=2, M=512, N
 
 
 configs = [
+    (64, 1871),
     (16, 256),
     (32, 576),
-    (64, 1871),
     (128, 2511),
 ]
 
@@ -505,13 +505,12 @@ def test_softmax(BLOCK, WIDTH, is_dense, device, Z=2, H=2, is_causal=True, scale
         torch.testing.assert_close(out_tri, out_ref, equal_nan=True)
         torch.testing.assert_close(da_tri, da_ref, equal_nan=True)
     else:
-        import numpy as np
-        np.testing.assert_allclose(out_tri.numpy(), out_ref.numpy(), equal_nan=True)
-        np.testing.assert_allclose(da_tri.numpy(), da_ref.numpy(), equal_nan=True)
+        paddle.allclose(out_tri, out_ref, equal_nan=True)
+        paddle.allclose(da_tri, da_ref, equal_nan=True)
 
 
-@pytest.mark.parametrize("block", [16, 32, 64])
-@pytest.mark.parametrize("dtype", [torch.float16 if HAS_TORCH else 'float16', torch.float32 if HAS_TORCH else 'float32'])
+@pytest.mark.parametrize("block", [64, 16, 32])
+@pytest.mark.parametrize("dtype", [torch.float16 if HAS_TORCH else 'float32', torch.float32 if HAS_TORCH else 'float16'])
 def test_attention_fwd_bwd(
     block,
     dtype,
@@ -542,10 +541,11 @@ def test_attention_fwd_bwd(
             torch.nn.Parameter(input_scale * torch.randn(qkv_shape), requires_grad=True).to(dtype).cuda() for _ in range(3)
         ]
     else:
-        qkvs = [
-            paddle.create_parameter(input_scale * paddle.randn(qkv_shape), dtype=dtype) for _ in range(3)
-        ]
-
+        def make_leaf(shape, dtype, scale=1.0):
+            t = (scale * paddle.randn(shape)).astype(dtype)
+            t.stop_gradient = False
+            return t
+        qkvs = [make_leaf(qkv_shape, dtype, input_scale) for _ in range(3)]        
     # Triton:
     n_blocks = n_ctx // block
     if HAS_TORCH:
@@ -556,10 +556,14 @@ def test_attention_fwd_bwd(
         value.retain_grad()
     else:
         layout = paddle.tril(paddle.ones([n_heads, n_blocks, n_blocks], dtype='int64'))
-        query, key, value = [x.clone() for x in qkvs]
+        query, key, value = [x.clone().detach() for x in qkvs]
         query.stop_gradient = False
         key.stop_gradient = False
         value.stop_gradient = False
+        
+        query.clear_gradient()
+        key.clear_gradient()
+        value.clear_gradient()
     
     attn_out = triton_attention(layout, block, query=query, key=key, value=value, scale=scale)
     # ad hoc loss
@@ -570,6 +574,7 @@ def test_attention_fwd_bwd(
     else:
         loss = (attn_out**2).mean()
         loss.backward()
+        assert query.is_leaf is True # query.is_leaf is True have gard
         grads = [query.grad, key.grad, value.grad]
 
     # Torch/Paddle version:
@@ -590,13 +595,17 @@ def test_attention_fwd_bwd(
         torch_loss.backward()
         torch_grads = [torch_q.grad, torch_k.grad, torch_v.grad]
     else:
-        paddle_q, paddle_k, paddle_v = [x.clone() for x in qkvs]
+        paddle_q, paddle_k, paddle_v = [x.clone().detach() for x in qkvs]
         attn_mask = paddle.ones([n_ctx, n_ctx], dtype=dtype)
         attn_mask = paddle.tril(attn_mask, diagonal=0)
         attn_mask = 1e6 * (-1 + (attn_mask.reshape([1, 1, n_ctx, n_ctx])))
         paddle_q.stop_gradient = False
         paddle_k.stop_gradient = False
         paddle_v.stop_gradient = False
+        
+        query.clear_gradient()
+        key.clear_gradient()
+        value.clear_gradient()
         scores = scale * paddle.einsum("bhsd,bhtd->bhst", paddle_q, paddle_k)
         scores = scores + attn_mask
         probs = paddle.nn.functional.softmax(scores, axis=-1)
@@ -618,14 +627,12 @@ def test_attention_fwd_bwd(
         for g1, g2 in zip(grads, torch_grads):
             torch.testing.assert_close(g1, g2, **tol)
     else:
-        # print(f"Triton loss {loss} and paddle loss {paddle_loss}.  Also checking grads...")
-        import numpy as np
-        np.testing.assert_allclose(loss.numpy(), paddle_loss.numpy(), atol=1e-3, rtol=0)
+        paddle.allclose(loss, paddle_loss, atol=1e-3, rtol=0.)
         
         # Bigger tolerance for AMD MI200 devices.
         tol = {'atol': 1e-3, 'rtol': 0} if is_hip_mi200() else {}
         for g1, g2 in zip(grads, paddle_grads):
-            np.testing.assert_allclose(g1.numpy(), g2.numpy(), **tol)
+            paddle.allclose(g1, g2, **tol)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])
