@@ -1,4 +1,12 @@
-import torch
+HAS_TORCH = False
+HAS_PADDLE = False
+try:
+    import torch
+    HAS_TORCH = True
+except Exception:
+    import paddle
+    HAS_PADDLE = True
+    
 
 from .. import heuristics, jit
 from .. import language as tl
@@ -58,39 +66,59 @@ def _backward(PROBS, IDX, DPROBS, N, BLOCK: tl.constexpr):
     tl.store(PROBS, din.to(PROBS.dtype.element_ty), mask=cols < N)
 
 
-class _cross_entropy(torch.autograd.Function):
+# ---- 框架封装：优先 Paddle，无 Paddle 用 Torch ----
 
-    @classmethod
-    def forward(cls, ctx, logits, indices):
-        # make sure we can use triton
-        assert (indices.dtype == torch.int64), "Indices are expected to be of type long."
-        # make kernel
-        device, dtype = logits.device, logits.dtype
-        n_cols = logits.shape[-1]
-        # run the kernel
-        result = torch.empty_like(indices, dtype=dtype, device=device)
-        neg_logprobs = torch.empty_like(logits, dtype=dtype, device=device)
-        grid = lambda opt: (logits.numel() // n_cols, )
-        _forward[grid](logits, neg_logprobs, indices, result, n_cols)
-        # save for backward
-        ctx.save_for_backward(neg_logprobs, indices)
-        return result
+if HAS_TORCH:
+        # Torch 版（保持原逻辑）
+    class _cross_entropy(torch.autograd.Function):
 
-    @classmethod
-    def backward(cls, ctx, dneg_logprobs):
-        """We know d(-log(p[i])/dlogit[k] = -id_mat[i,k] + p[k]
-        so we initialize the gradient as neg_logprobs, so we can just exponentiate
-        to get p[k], which is most of what we need...  neg_logprobs will be
-        modified in place to become the gradient we want
-        """
-        # load saved tensors
-        neg_logprobs, indices = ctx.saved_tensors
-        # run the kernel
-        # neg_logprobs will be modified in place to become our gradient:
-        n_cols = neg_logprobs.shape[-1]
-        grid = lambda opt: (neg_logprobs.numel() // n_cols, )
-        _backward[grid](neg_logprobs, indices, dneg_logprobs, n_cols)
-        return neg_logprobs, None
+        @classmethod
+        def forward(cls, ctx, logits, indices):
+            assert (indices.dtype == torch.int64), "Indices are expected to be of type long."
+            device, dtype = logits.device, logits.dtype
+            n_cols = logits.shape[-1]
+            result = torch.empty_like(indices, dtype=dtype, device=device)
+            neg_logprobs = torch.empty_like(logits, dtype=dtype, device=device)
+            grid = lambda opt: (logits.numel() // n_cols, )
+            _forward[grid](logits, neg_logprobs, indices, result, n_cols)
+            ctx.save_for_backward(neg_logprobs, indices)
+            return result
+
+        @classmethod
+        def backward(cls, ctx, grad_out):
+            neg_logprobs, indices = ctx.saved_tensors
+            n_cols = neg_logprobs.shape[-1]
+            grid = lambda opt: (neg_logprobs.numel() // n_cols, )
+            _backward[grid](neg_logprobs, indices, grad_out, n_cols)
+            return neg_logprobs, None
+    # Paddle 版自定义反向
+else:
+    class _cross_entropy(paddle.autograd.PyLayer):
+        @staticmethod
+        def forward(ctx, logits, indices):
+            # indices 必须 int64
+            assert indices.dtype == paddle.int64, "Indices are expected to be int64."
+            n_cols = logits.shape[-1]
+            # 用 like 保持 dtype/device
+            result = paddle.empty_like(indices, dtype=logits.dtype)
+            neg_logprobs = paddle.empty_like(logits, dtype=logits.dtype)
+            grid = lambda opt: (logits.numel() // n_cols, )
+            _forward[grid](logits, neg_logprobs, indices, result, n_cols)
+            ctx.save_for_backward(neg_logprobs, indices)
+            return result
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            neg_logprobs, indices = ctx.saved_tensor()
+            n_cols = neg_logprobs.shape[-1]
+            grid = lambda opt: (neg_logprobs.numel() // n_cols, )
+            _backward[grid](neg_logprobs, indices, grad_out, n_cols)
+            # 对应 forward(logits, indices)：返回 dlogits, None
+            return neg_logprobs, None
+
+    def cross_entropy(logits, indices):
+        return _cross_entropy_paddle.apply(logits, indices)
+
 
 
 cross_entropy = _cross_entropy.apply

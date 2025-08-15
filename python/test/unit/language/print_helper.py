@@ -1,8 +1,17 @@
 import sys
 import uuid
 
-import torch
-from torch.testing import assert_close
+HAS_TORCH = False
+HAS_PADDLE = False
+try:
+    import torch
+    from torch.testing import assert_close
+    HAS_TORCH = True
+    
+except :
+    import paddle
+    HAS_PADDLE = True
+    assert_close = paddle.allclose
 
 import triton
 import triton.language as tl
@@ -89,9 +98,12 @@ def test_print(func: str, data_type: str):
     # threads printing duplicated messages due to broadcasting. Improve print op lowering logic
     # to filter out duplicated data range.
     num_warps = N // get_current_target_warp_size()
-
-    x = torch.arange(0, N, dtype=torch.int32, device='cuda').to(getattr(torch, data_type))
-    y = torch.zeros((N, ), dtype=x.dtype, device="cuda")
+    if HAS_TORCH:
+        x = torch.arange(0, N, dtype=torch.int32).to(getattr(torch, data_type))
+        y = torch.zeros((N, ), dtype=x.dtype)
+    else:
+        x = paddle.arange(0, N, dtype=paddle.int32).astype(getattr(paddle, data_type))
+        y = paddle.zeros((N, ), dtype=x.dtype)
     if func == "device_print":
         kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "print":

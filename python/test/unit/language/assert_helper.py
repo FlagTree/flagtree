@@ -1,7 +1,17 @@
 import sys
 
-import torch
-from torch.testing import assert_close
+HAS_TORCH = False
+HAS_PADDLE = False
+try:
+    import torch
+    from torch.testing import assert_close
+    HAS_TORCH = True
+    
+except :
+    import paddle
+    HAS_PADDLE = True
+    assert_close = paddle.allclose
+
 
 import triton
 import triton.language as tl
@@ -50,9 +60,12 @@ def kernel_static_assert(X, Y, BLOCK: tl.constexpr):
 def test_assert(func: str):
     N = 128  # This value should match with test_print in test_subprocess.py.
     num_warps = N // get_current_target_warp_size()
-
-    x = torch.arange(0, N, dtype=torch.int32, device='cuda')
-    y = torch.zeros((N, ), dtype=x.dtype, device="cuda")
+    if HAS_TORCH:
+        x = torch.arange(0, N, dtype=torch.int32, device='cuda')
+        y = torch.zeros((N, ), dtype=x.dtype, device="cuda")
+    else:
+        x = paddle.arange(0, N, dtype=paddle.int32)
+        y = paddle.zeros((N, ), dtype=x.dtype)
     if func == "device_assert":
         kernel_device_assert[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     if func == "device_assert_passes":
@@ -135,9 +148,12 @@ def kernel_device_assert_nested_false(X, Y, BLOCK: tl.constexpr, jit_debug: tl.c
 def test_assert_nested(caller: str, callee: str):
     N = 128  # This value should match with test_print in test_subprocess.py.
     num_warps = N // get_current_target_warp_size()
-
-    x = torch.arange(0, N, dtype=torch.int32, device='cuda')
-    y = torch.zeros((N, ), dtype=x.dtype, device="cuda")
+    if HAS_TORCH:
+        x = torch.arange(0, N, dtype=torch.int32, device='cuda')
+        y = torch.zeros((N, ), dtype=x.dtype, device="cuda")
+    else:
+        x = paddle.arange(0, N, dtype=paddle.int32)
+        y = paddle.zeros((N, ), dtype=x.dtype)
     if caller == "none":
         kernel_device_assert_nested[(1, )](x, y, num_warps=num_warps, BLOCK=N, jit_debug=callee)
     elif caller == "true":

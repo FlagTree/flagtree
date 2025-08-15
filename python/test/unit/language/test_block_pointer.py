@@ -1,9 +1,15 @@
 import pytest
-import torch
-
 import triton
 import triton.language as tl
 
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except :
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 @triton.jit
 def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option: tl.constexpr):
@@ -25,26 +31,56 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, padding_option:
     for padding in ("zero", "nan")  #
 ])
 def test_block_copy(dtypes_str, n, padding_option, device):
+    print(f"Testing {dtypes_str} with padding option {padding_option},{n}")
     src_dtype_str = dtypes_str[0]
     dst_dtype_str = dtypes_str[0]
-    src_dtype = getattr(torch, src_dtype_str)
-    dst_dtype = getattr(torch, dst_dtype_str)
-    if src_dtype_str in ("bool", "int16"):
-        if padding_option == "nan":
-            pytest.skip("Padding with NaN is not supported for integer types")
-        a = torch.randint(0, 2, (n, ), device=device, dtype=src_dtype)
-    else:
-        a = torch.randn((n, ), device=device, dtype=src_dtype)
-    b = torch.zeros((n, ), device=device, dtype=dst_dtype)
+    if HAS_TORCH:
+        src_dtype = getattr(torch, src_dtype_str)
+        dst_dtype = getattr(torch, dst_dtype_str)
+        if src_dtype_str in ("bool", "int16"):
+            if padding_option == "nan":
+                pytest.skip("Padding with NaN is not supported for integer types")
+            a = torch.randint(0, 2, (n, ), device=device, dtype=src_dtype)
+        else:
+            a = torch.randn((n, ), device=device, dtype=src_dtype)
+        b = torch.zeros((n, ), device=device, dtype=dst_dtype)
 
-    grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]), )
-    block_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64, padding_option=padding_option)
-    a.to(dst_dtype)
-    assert torch.all(a[0:n // 2] == b[0:n // 2])
-    if padding_option == "zero":
-        assert torch.all(b[n // 2:n] == 0)
-    else:
-        assert torch.all(torch.isnan(b[n // 2:n]))
+        grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]), )
+        block_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64, padding_option=padding_option)
+        a.to(dst_dtype)
+        assert torch.all(a[0:n // 2] == b[0:n // 2])
+        if padding_option == "zero":
+            assert torch.all(b[n // 2:n] == 0)
+        else:
+            assert torch.all(torch.isnan(b[n // 2:n]))
+
+    elif HAS_PADDLE:
+        src_dtype = getattr(paddle, src_dtype_str)
+        dst_dtype = getattr(paddle, dst_dtype_str)
+
+        if src_dtype_str in ("bool", "int16"):
+            if padding_option == "nan":
+                pytest.skip("Padding with NaN is not supported for integer types")
+            if src_dtype_str == "bool":
+                a = paddle.randint(low=0, high=2, shape=[n]).astype('bool')
+            else:  # int16
+                a = paddle.randint(low=0, high=2, shape=[n]).astype('int16')
+        else:
+            a = paddle.randn(shape=[n], dtype=src_dtype)
+        b = paddle.zeros(shape=[n], dtype=dst_dtype)
+
+        grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]), )
+        block_copy_kernel[grid](a_ptr=a, b_ptr=b, N=n, BLOCK_SIZE=64, padding_option=padding_option)
+        
+        a = paddle.cast(a, dtype=dst_dtype)
+        
+        # 断言部分
+        assert paddle.all(a[0:n // 2] == b[0:n // 2]), "The first half does not match."
+        if padding_option == "zero":
+            assert paddle.all(b[n // 2:n] == 0), "Padding with zeros failed."
+        else:
+            isnan_values = paddle.isnan(b[n // 2:n])
+            assert paddle.all(isnan_values), "Not all values are NaN after padding."
 
 
 @triton.jit
@@ -83,18 +119,42 @@ def matmul_no_scf_with_advance_kernel(  #
 ])
 def test_block_ptr_matmul_no_scf(shape, num_warps, device):
     m, n, k = shape
-    a = torch.randn((m, k), device=device, dtype=torch.float16)
-    b = torch.randn((k, n), device=device, dtype=torch.float16)
-    c = torch.empty((m, n), device=device, dtype=torch.float32)
+    if HAS_TORCH:
+        a = torch.randn((m, k), device=device, dtype=torch.float16)
+        b = torch.randn((k, n), device=device, dtype=torch.float16)
+        c = torch.empty((m, n), device=device, dtype=torch.float32)
+        grid = lambda META: (1, )
+        matmul_no_scf_with_advance_kernel[grid](
+            a_ptr=a, b_ptr=b, c_ptr=c,  #
+            M=m, N=n, K=k,  #
+            stride_am=a.stride(0), stride_ak=a.stride(1),  #
+            stride_bk=b.stride(0), stride_bn=b.stride(1),  #
+            stride_cm=c.stride(0), stride_cn=c.stride(1),  #
+            BLOCK_M=m, BLOCK_N=n, BLOCK_K=k,  #
+            num_warps=num_warps
+        )
+        golden = torch.matmul(a, b)
+        torch.testing.assert_close(c, golden, check_dtype=False)
 
-    grid = lambda META: (1, )
-    matmul_no_scf_with_advance_kernel[grid](
-        a_ptr=a, b_ptr=b, c_ptr=c,  #
-        M=m, N=n, K=k,  #
-        stride_am=a.stride(0), stride_ak=a.stride(1),  #
-        stride_bk=b.stride(0), stride_bn=b.stride(1),  #
-        stride_cm=c.stride(0), stride_cn=c.stride(1),  #
-        BLOCK_M=m, BLOCK_N=n, BLOCK_K=k,  #
-        num_warps=num_warps)
-    golden = torch.matmul(a, b)
-    torch.testing.assert_close(c, golden, check_dtype=False)
+    elif HAS_PADDLE:
+        a = paddle.randn((m, k), dtype=paddle.float16)
+        b = paddle.randn((k, n), dtype=paddle.float16)
+        c = paddle.empty((m, n), dtype=paddle.float32)
+
+        grid = lambda META: (1, )
+        matmul_no_scf_with_advance_kernel[grid](
+            a_ptr=a, b_ptr=b, c_ptr=c,  #
+            M=m, N=n, K=k,  #
+            stride_am=a.strides[0], stride_ak=a.strides[1],  #
+            stride_bk=b.strides[0], stride_bn=b.strides[1],  #
+            stride_cm=c.strides[0], stride_cn=c.strides[1],  #
+            BLOCK_M=m, BLOCK_N=n, BLOCK_K=k,  #
+            num_warps=num_warps
+        )
+        golden = paddle.matmul(a, b)
+        assert paddle.allclose(c, golden.astype(c.dtype), rtol=1e-2, atol=1e-3)
+
+if __name__ == "__main__":
+    # test_block_copy(dtypes_str = ("float16", "float16"), n = 64, padding_option = "zero", device = None)
+
+    test_block_ptr_matmul_no_scf(shape = [64, 64, 16], num_warps = 4, device = 'cuda')
