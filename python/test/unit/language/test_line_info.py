@@ -2,7 +2,14 @@ import subprocess
 import tempfile
 
 import pytest
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except :
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 import triton
 import triton.language as tl
@@ -138,34 +145,46 @@ def test_line_info(func: str):
 
     shape = (128, )
     kernel_info = {}
-    if func == "single":
-        kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
-    elif func == "call":
-        kernel_info = kernel_call.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
-    elif func == "call_noinline":
-        kernel_info = kernel_call_noinline.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
-    elif func == "autotune":
-        kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1,))[0]
-    elif func == "dot_combine":
-        kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
+    if HAS_TORCH:
+        if func == "single":
+            kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        elif func == "call":
+            kernel_info = kernel_call.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        elif func == "call_noinline":
+            kernel_info = kernel_call_noinline.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        elif func == "autotune":
+            kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1,))[0]
+        elif func == "dot_combine":
+            kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
+    else:
+        if func == "single":
+            kernel_info = kernel_single.warmup(paddle.float32, paddle.float32, BLOCK=shape[0], grid=(1,))
+        elif func == "call":
+            kernel_info = kernel_call.warmup(paddle.float32, paddle.float32, BLOCK=shape[0], grid=(1,))
+        elif func == "call_noinline":
+            kernel_info = kernel_call_noinline.warmup(paddle.float32, paddle.float32, BLOCK=shape[0], grid=(1,))
+        elif func == "autotune":
+            kernel_info = kernel_autotune.warmup(paddle.float32, paddle.float32, SIZE=shape[0], grid=(1,))[0]
+        elif func == "dot_combine":
+            kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 15))
-        assert (check_file_lines(file_lines, "test_line_info.py", 16))
+        assert (check_file_lines(file_lines, "test_line_info.py", 22))
+        assert (check_file_lines(file_lines, "test_line_info.py", 23))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 28))
-        assert (check_file_lines(file_lines, "test_line_info.py", 21))
-        assert (check_file_lines(file_lines, "test_line_info.py", 30))
-    elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 42))
         assert (check_file_lines(file_lines, "test_line_info.py", 35))
-        assert (check_file_lines(file_lines, "test_line_info.py", 36))
+        assert (check_file_lines(file_lines, "test_line_info.py", 28))
         assert (check_file_lines(file_lines, "test_line_info.py", 37))
+    elif func == "call_noinline":
+        assert (check_file_lines(file_lines, "test_line_info.py", 49))
+        assert (check_file_lines(file_lines, "test_line_info.py", 42))
+        assert (check_file_lines(file_lines, "test_line_info.py", 43))
+        assert (check_file_lines(file_lines, "test_line_info.py", 44))
     elif func == "autotune":
-        assert (check_file_lines(file_lines, "test_line_info.py", 53))
-        assert (check_file_lines(file_lines, "test_line_info.py", 54))
-        assert (check_file_lines(file_lines, "test_line_info.py", 55))
+        assert (check_file_lines(file_lines, "test_line_info.py", 60))
+        assert (check_file_lines(file_lines, "test_line_info.py", 61))
+        assert (check_file_lines(file_lines, "test_line_info.py", 62))
     elif func == "dot_combine":
-        assert (check_file_lines(file_lines, "test_line_info.py", 65))
-        assert (check_file_lines(file_lines, "test_line_info.py", 66, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", 72))
+        assert (check_file_lines(file_lines, "test_line_info.py", 73, should_contain=False))

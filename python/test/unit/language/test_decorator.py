@@ -1,4 +1,11 @@
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except :
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 import triton
 import triton.language as tl
@@ -30,8 +37,12 @@ def test_decorator_with_def(device):
 
 def test_triton_heuristic(device):
     N = 1023
-    src = torch.empty(N, device=device)
-    dst = torch.zeros(N, device=device)
+    if HAS_TORCH:
+        src = torch.empty(N, device=device)
+        dst = torch.zeros(N, device=device)
+    else:
+        src = paddle.empty([N])
+        dst = paddle.zeros([N])
 
     @triton.autotune(configs=[triton.Config(kwargs={'BLOCK_SIZE': 32})], key=['N'], warmup=1, rep=1)
     @triton.heuristics({'EVEN_N': lambda nargs: nargs['N'] % 2 == 0})  # test kwargs
