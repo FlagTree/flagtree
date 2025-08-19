@@ -203,7 +203,14 @@ def open_url(url):
 
 # ---- package data ---
 
-
+offline_handler = helper.utils.OfflineBuildManager()
+if offline_handler.is_offline:
+    print("[INFO] Offline Build: Use offline build for triton origin toolkits")
+    offline_handler.handle_triton_origin_toolkits()
+    offline_build = True
+else:
+    print('[INFO] Offline Build: No offline build for triton origin toolkits')
+    offline_build = False
 def get_triton_cache_path():
     user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
     if not user_home:
@@ -221,7 +228,8 @@ def get_thirdparty_packages(packages: list):
             package_dir = os.environ[p.syspath_var_name]
         version_file_path = os.path.join(package_dir, "version.txt")
         if p.syspath_var_name not in os.environ and\
-           (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url):
+           (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url) and\
+           not offline_build:
             with contextlib.suppress(Exception):
                 shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
@@ -263,7 +271,7 @@ def download_and_copy(name, src_path, variable, version, url_func):
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = download or curr_version != version
-    if download:
+    if download and not offline_build:
         print(f'downloading and extracting {url} ...')
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
         file.extractall(path=tmp_path)
@@ -374,6 +382,11 @@ class CMakeBuild(build_ext):
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
+        if offline_build:
+            googletest_offline_path = os.path.join(offline_handler.offline_build_dir,
+                                                   "googletest-release-1.12.1")
+            print(f'[INFO] Offline Build: Using offline googletest from {googletest_offline_path}')
+            cmake_args += ["-DGOOGLETEST_DIR=" + googletest_offline_path]
         helper.get_backend_cmake_args(build_ext=self)
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
