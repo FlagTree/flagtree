@@ -97,15 +97,22 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
         ref_out = paddle.matmul(p, v)
         ref_out.backward(dout)
         ref_dv = v.grad.clone()
-        v.clear_gradient()
 
         ref_dk = k.grad.clone()
-        k.clear_gradient()
 
         ref_dq = q.grad.clone()
-        q.clear_gradient()
+        
+        
+        
+        q = q.clone().detach()
+        k = k.clone().detach()
+        v = v.clone().detach()
+        q.stop_gradient = False
+        k.stop_gradient = False
+        v.stop_gradient = False
+        
         tri_out = triton.ops.attention(q, k, v, causal, sm_scale, seq_par)
-        tri_out.backward(dout) 
+        tri_out.backward(dout)
 
         tri_dv = v.grad.clone()
         v.clear_gradient()
@@ -239,4 +246,4 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, casual, seq_par, provid
 # bench_flash_attention.run(save_path='.', print_data=True)
 
 if __name__ == '__main__':
-    test_op(Z = 2, H = 4, N_CTX = 512, D_HEAD = 16, dtype = 'float16', causal = True, seq_par = True, device = 'cuda')
+    test_op(Z = 2, H = 4, N_CTX = 512, D_HEAD = 16, dtype = 'float32', causal = True, seq_par = True, device = 'cuda')

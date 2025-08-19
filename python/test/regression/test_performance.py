@@ -1,12 +1,152 @@
-import pytest
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except Exception:
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
+import pytest
 import triton
 import triton.language as tl
 import triton.ops
 from triton.testing import get_dram_gbps, get_max_tensorcore_tflops, nvsmi
 
-DEVICE_NAME = {7: 'v100', 8: 'a100'}[torch.cuda.get_device_capability()[0]]
+
+# ---- helpers: framework-agnostic wrappers ----
+
+def device_capability_major():
+    if HAS_TORCH:
+        return torch.cuda.get_device_capability()[0]
+    else:
+        return paddle.device.cuda.get_device_capability()[0]
+
+def set_stream_default():
+    if HAS_TORCH:
+        stream = torch.cuda.Stream()
+        torch.cuda.set_stream(stream)
+    else:
+        # Paddle: ensure we're on GPU; stream control is optional for tests
+        paddle.device.set_device('gpu')
+
+def manual_seed(seed: int):
+    if HAS_TORCH:
+        torch.manual_seed(seed)
+    else:
+        paddle.seed(seed)
+
+def dtype_from_str(dtype_str: str):
+    if HAS_TORCH:
+        mapping = {
+            'float16': torch.float16,
+            'bfloat16': torch.bfloat16,
+            'float32': torch.float32,
+            'float64': torch.float64,
+            'int8': torch.int8,
+            'int16': torch.int16,
+            'int32': torch.int32,
+            'int64': torch.int64,
+        }
+    else:
+        # Paddle supported dtypes (no int8/bfloat16 in some versions)
+        mapping = {
+            'float16': paddle.float16,
+            'float32': paddle.float32,
+            'float64': paddle.float64,
+            'bool': paddle.bool,
+            'int16': paddle.int16,
+            'int32': paddle.int32,
+            'int64': paddle.int64,
+        }
+        # optional bfloat16 support
+        if hasattr(paddle, "bfloat16"):
+            mapping['bfloat16'] = paddle.bfloat16
+    return mapping[dtype_str]
+
+def empty(shape, dtype):
+    if HAS_TORCH:
+        return torch.empty(shape, dtype=dtype, device='cuda')
+    else:
+        return paddle.empty(shape, dtype=dtype)
+
+def randn(shape, dtype):
+    if HAS_TORCH:
+        return torch.randn(shape, dtype=dtype, device='cuda')
+    else:
+        # ensure deterministic behavior matches seed
+        return paddle.randn(shape, dtype=dtype)
+
+def randn_like(x):
+    if HAS_TORCH:
+        return torch.randn_like(x)
+    else:
+        return paddle.randn(x.shape, dtype=x.dtype)
+
+def randint(low, high, shape, dtype):
+    if HAS_TORCH:
+        return torch.randint(low, high, shape, dtype=dtype, device='cuda')
+    else:
+        # Paddle 只支持 int32 和 int64
+        if dtype in ["int8", "uint8", "int16", paddle.int8, paddle.int16]:
+            # 用 int32 生成，再 cast 回去
+            x = paddle.randint(low=low, high=high, shape=shape, dtype="int32")
+            return paddle.cast(x, dtype)
+        elif dtype in ["int32", "int64", paddle.int32, paddle.int64]:
+            return paddle.randint(low=low, high=high, shape=shape, dtype=dtype)
+        else:
+            raise ValueError(f"Paddle randint does not support dtype {dtype}")
+
+def transpose_2d(b):
+    if HAS_TORCH:
+        return b.t()
+    else:
+        return paddle.transpose(b, [1, 0])
+
+def requires_grad_(x, flag=True):
+    if HAS_TORCH:
+        return x.requires_grad_(flag)
+    else:
+        x.stop_gradient = not flag
+        return x
+
+def numel(x):
+    if HAS_TORCH:
+        return x.numel()
+    else:
+        return int(paddle.numel(x))
+
+def element_size_of_dtype(dtype):
+    # bytes per element
+    if HAS_TORCH:
+        return torch.tensor([], dtype=dtype).element_size()
+    else:
+        # map sizes manually; extend if needed
+        import numpy as np
+        mapping = {
+            getattr(paddle, "float16"): 2,
+            getattr(paddle, "bfloat16", object()): 2,  # if present
+            paddle.float32: 4,
+            paddle.float64: 8,
+            paddle.int16: 2,
+            paddle.int32: 4,
+            paddle.int64: 8,
+            paddle.bool: 1,
+        }
+        return mapping[dtype]
+
+def bench(fn):
+    # prefer cudagraph bench when torch is available
+    if hasattr(triton.testing, "do_bench_cudagraph") and HAS_TORCH:
+        return triton.testing.do_bench_cudagraph(fn)
+    else:
+        return triton.testing.do_bench(fn)
+
+
+# ---- device name ----
+
+DEVICE_NAME = {7: 'v100', 8: 'a100'}[device_capability_major()]
+
 
 #######################
 # Utilities
@@ -52,26 +192,25 @@ matmul_data = {
                                                 for M, N, K in matmul_data[DEVICE_NAME].keys()
                                                 for dtype_str in ['float16']])
 def test_matmul(M, N, K, dtype_str):
-    stream = torch.cuda.Stream()
-    torch.cuda.set_stream(stream)
+    set_stream_default()
     if dtype_str in ['float32', 'int8'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test float32 & int8 on a100')
     if (M, N, K) in [(64, 4096, 4096), (64, 8192, 8192), (8192, 64, 8192)] and dtype_str == 'float32':
         pytest.skip('Out of shared memory in float32')
-    dtype = {'float16': torch.float16, 'float32': torch.float32, 'int8': torch.int8}[dtype_str]
-    torch.manual_seed(0)
+    dtype = dtype_from_str(dtype_str)
+    manual_seed(0)
     ref_gpu_util = matmul_data[DEVICE_NAME][(M, N, K)][dtype_str]
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
-    if dtype == torch.int8:
-        a = torch.randint(-128, 127, (M, K), dtype=dtype, device='cuda')
-        b = torch.randint(-128, 127, (N, K), dtype=dtype, device='cuda')
-        b = b.t()  # only test row-col layout
+    if dtype_str == 'int8':
+        a = randint(-128, 127, (M, K), dtype=dtype)
+        b = randint(-128, 127, (N, K), dtype=dtype)
+        b = transpose_2d(b)  # only test row-col layout
     else:
-        a = torch.randn((M, K), dtype=dtype, device='cuda')
-        b = torch.randn((K, N), dtype=dtype, device='cuda')
+        a = randn((M, K), dtype=dtype)
+        b = randn((K, N), dtype=dtype)
     fn = lambda: triton.ops.matmul(a, b)
-    ms = triton.testing.do_bench_cudagraph(fn)
+    ms = bench(fn)
     cur_gpu_perf = 2. * M * N * K / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
@@ -113,22 +252,24 @@ elementwise_data = {
 @pytest.mark.parametrize('N', elementwise_data[DEVICE_NAME].keys())
 @pytest.mark.parametrize("dtype_str", ['float16', 'bfloat16', 'float32'])
 def test_elementwise(N, dtype_str):
-    stream = torch.cuda.Stream()
-    torch.cuda.set_stream(stream)
-    torch.manual_seed(0)
+    set_stream_default()
+    manual_seed(0)
     if dtype_str in ['bfloat16'] and DEVICE_NAME != 'a100':
         pytest.skip('Only test bfloat16 on a100')
-    dtype = {'float16': torch.float16, 'bfloat16': torch.bfloat16, 'float32': torch.float32}[dtype_str]
+    if HAS_PADDLE and (dtype_str == 'bfloat16') and not hasattr(paddle, "bfloat16"):
+        pytest.skip('Paddle bfloat16 not supported in this build')
+    dtype = dtype_from_str(dtype_str)
     ref_dtype_str = 'float16' if dtype_str == 'bfloat16' else dtype_str
     ref_gpu_util = elementwise_data[DEVICE_NAME][N][ref_dtype_str]
     max_gpu_perf = get_dram_gbps()
-    z = torch.empty((N, ), dtype=dtype, device='cuda')
-    x = torch.randn_like(z)
-    y = torch.randn_like(z)
+    z = empty((N, ), dtype=dtype)
+    x = randn_like(z)
+    y = randn_like(z)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _add[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.do_bench_cudagraph(fn)
-    cur_gpu_perf = 3. * N * z.element_size() / ms * 1e-6
+    ms = bench(fn)
+    elem_size = element_size_of_dtype(dtype)
+    cur_gpu_perf = 3. * N * elem_size / ms * 1e-6
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
     triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.02, rtol=0.01)
@@ -174,29 +315,46 @@ flash_attention_data = {
 @pytest.mark.parametrize("seq_par", [True, False])
 @pytest.mark.parametrize("Z, H, N_CTX, D_HEAD", [[4, 48, 4096, 64]])
 def test_flash_attention(Z, H, N_CTX, D_HEAD, seq_par, causal, mode, dtype_str):
-    stream = torch.cuda.Stream()
-    torch.cuda.set_stream(stream)
+    set_stream_default()
     is_backward = mode == 'backward'
-    capability = torch.cuda.get_device_capability()
-    if capability[0] < 8:
+    capability = device_capability_major()
+    if capability < 8:
         pytest.skip("Flash attention only supported for compute capability < 80")
-    torch.manual_seed(20)
-    dtype = {'float16': torch.float16, 'bfloat16': torch.bfloat16, 'float32': torch.float32}[dtype_str]
+    manual_seed(20)
+    if HAS_PADDLE and dtype_str == 'bfloat16' and not hasattr(paddle, "bfloat16"):
+        pytest.skip('Paddle bfloat16 not supported in this build')
+    dtype = dtype_from_str(dtype_str)
     # init data
     if dtype_str == 'float32':
         N_CTX = 1024
         D_HEAD = 16
-    q = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.1, std=0.2).requires_grad_()
-    k = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.4, std=0.2).requires_grad_()
-    v = torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device="cuda").normal_(mean=0.3, std=0.2).requires_grad_()
+    q = empty((Z, H, N_CTX, D_HEAD), dtype=dtype)
+    k = empty((Z, H, N_CTX, D_HEAD), dtype=dtype)
+    v = empty((Z, H, N_CTX, D_HEAD), dtype=dtype)
+    if HAS_TORCH:
+        q = q.normal_(mean=0.1, std=0.2)
+        k = k.normal_(mean=0.4, std=0.2)
+        v = v.normal_(mean=0.3, std=0.2)
+    else:
+        q = q + randn(q.shape, dtype=dtype) * 0.2 + 0.1
+        k = k + randn(k.shape, dtype=dtype) * 0.2 + 0.4
+        v = v + randn(v.shape, dtype=dtype) * 0.2 + 0.3
+    q = requires_grad_(q, True)
+    k = requires_grad_(k, True)
+    v = requires_grad_(v, True)
     sm_scale = 0.2
     # benchmark
     fn = lambda: triton.ops.attention(q, k, v, causal, sm_scale, seq_par)
     if is_backward:
         o = fn()
-        do = torch.randn_like(o)
-        fn = lambda: o.backward(do, retain_graph=True)
-    ms = triton.testing.do_bench_cudagraph(fn)
+        do = randn_like(o)
+        if HAS_TORCH:
+            fn = lambda: o.backward(do, retain_graph=True)
+        else:
+            def _backward():
+                o.backward(gradient=do, retain_graph=True)
+            fn = _backward
+    ms = bench(fn)
     # compute flops
     flops_per_matmul = 2. * Z * H * N_CTX * N_CTX * D_HEAD * 0.5
     total_flops = 2 * flops_per_matmul
@@ -243,25 +401,35 @@ reduction_data = {
 @pytest.mark.parametrize('N', reduction_data[DEVICE_NAME].keys())
 @pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'int16', 'int32'])
 def test_reductions(N, dtype_str):
-    stream = torch.cuda.Stream()
-    torch.cuda.set_stream(stream)
-    torch.manual_seed(0)
-    dtype = {'float16': torch.float16, 'float32': torch.float32, 'int16': torch.int16, 'int32': torch.int32}[dtype_str]
+    set_stream_default()
+    manual_seed(0)
+    dtype = dtype_from_str(dtype_str)
     ref_gpu_util = reduction_data[DEVICE_NAME][N][dtype_str]
     cur_sm_clock = nvsmi(['clocks.current.sm'])[0]
     max_gpu_perf = get_max_tensorcore_tflops(dtype, clock_rate=cur_sm_clock * 1e3)
-    z = torch.empty((N, ), dtype=dtype, device='cuda')
-    if dtype == torch.float16 or dtype == torch.float32:
-        x = torch.randn_like(z)
-        y = torch.randn_like(z)
+    z = empty((N, ), dtype=dtype)
+    if dtype_str in ['float16', 'float32']:
+        x = randn_like(z)
+        y = randn_like(z)
     else:
-        info = torch.iinfo(dtype)
-        x = torch.randint(info.min, info.max, (N, ), dtype=dtype, device='cuda')
-        y = torch.randint(info.min, info.max, (N, ), dtype=dtype, device='cuda')
+        # int16/int32 range
+        if HAS_TORCH:
+            info = torch.iinfo(dtype)
+            low, high = info.min, info.max
+        else:
+            if dtype_str == 'int16':
+                low, high = -32768, 32767
+            else:
+                low, high = -2147483648, 2147483647
+        x = randint(low, high, (N, ), dtype=dtype)
+        y = randint(low, high, (N, ), dtype=dtype)
     grid = lambda args: (triton.cdiv(N, args['BLOCK_SIZE']), )
     fn = lambda: _sum[grid](x, y, z, N, BLOCK_SIZE=1024)
-    ms = triton.testing.do_bench_cudagraph(fn)
+    ms = bench(fn)
     cur_gpu_perf = 100. * 2. * N / ms * 1e-9
     cur_gpu_util = cur_gpu_perf / max_gpu_perf
     print_perf(ms, cur_gpu_util, ref_gpu_util)
     triton.testing.assert_close(cur_gpu_util, ref_gpu_util, atol=0.02, rtol=0.01)
+
+if __name__ == '__main__':
+    test_matmul(M = 512, N = 512, K = 512, dtype_str = 'float16')

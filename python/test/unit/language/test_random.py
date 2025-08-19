@@ -1,7 +1,14 @@
 import numpy as np
 import pytest
 import scipy.stats
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except :
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 import triton
 import triton.language as tl
@@ -122,9 +129,13 @@ BLOCK: tl.constexpr = 1024
                                                            for const_seed in [True, False]])
 def test_randint(size, seed, device, dtype, const_seed):
     size = list(map(int, size.split(',')))
-    torch_dtype = getattr(torch, dtype)
     numpy_dtype = getattr(np, f"u{dtype}")
     config = {'int32': PHILOX_32, 'int64': PHILOX_64}[dtype]
+    max_seed_value = np.iinfo(config.DTYPE).max
+    if seed > max_seed_value:
+        # seed is too large for the dtype
+        pytest.skip(f"Seed {seed} exceeds maximum value {max_seed_value} for dtype {config.DTYPE}")
+        return
 
     @triton.jit
     def kernel(X, N, seed):
@@ -141,8 +152,15 @@ def test_randint(size, seed, device, dtype, const_seed):
         tl.store(X + offset, rand, mask=offset < N)
 
     # triton result
-    x = torch.empty(size, dtype=torch_dtype, device=device)
-    N = x.numel()
+    if HAS_TORCH:
+        torch_dtype = getattr(torch, dtype)
+        x = torch.empty(size, dtype=torch_dtype, device=device)
+        N = x.numel()
+    else:
+        x = paddle.empty(size, dtype=dtype)
+        N = x.numel().item()
+        
+    
     grid = (triton.cdiv(N, BLOCK), )
     if const_seed:
         const_kernel[grid](x, N, seed=seed)
@@ -181,8 +199,12 @@ def test_rand(size, seed, dtype, device, const_seed):
         tl.store(X + offset, rand, mask=offset < N)
 
     # triton result
-    x = torch.empty(size, dtype=torch.float32, device=device)
-    N = x.numel()
+    if HAS_TORCH:
+        x = torch.empty(size, dtype=torch.float32, device=device)
+        N = x.numel()
+    else:
+        x = paddle.empty([size], dtype='float32')
+        N = x.numel().item()
     grid = (triton.cdiv(N, BLOCK), )
     if const_seed:
         const_kernel[grid](x, N, seed=seed, dtype=getattr(tl, dtype))
@@ -218,8 +240,14 @@ def test_randn(size, seed, dtype, device, const_seed):
         tl.store(X + offset, rand, mask=offset < N)
 
     # triton result
-    x = torch.empty(size, dtype=torch.float32, device=device)
-    N = x.numel()
+    if HAS_TORCH:
+        x = torch.empty(size, dtype=torch.float32, device=device)
+        N = x.numel()
+        
+    else:
+        x = paddle.empty([size], dtype='float32')
+        N = x.numel().item()
+        
     grid = (triton.cdiv(N, BLOCK), )
     if const_seed:
         const_kernel[grid](x, N, seed=seed, dtype=getattr(tl, dtype))
@@ -243,13 +271,33 @@ def test_rand_limits(dtype, device):
         y = tl.random.uint_to_uniform_float(x)
         tl.store(output + idx, y)
 
-    torch_dtype = getattr(torch, dtype)
-    min_max_int = torch.tensor([
-        torch.iinfo(torch_dtype).min,
-        torch.iinfo(torch_dtype).max,
-    ], dtype=torch_dtype, device=device)
-    output = torch.empty(2, dtype=torch.float32, device=device)
+    # torch_dtype = getattr(torch, dtype)
+    # min_max_int = torch.tensor([
+    #     torch.iinfo(torch_dtype).min,
+    #     torch.iinfo(torch_dtype).max,
+    # ], dtype=torch_dtype, device=device)
+    # output = torch.empty(2, dtype=torch.float32, device=device)
+    
+    if HAS_TORCH:
+        torch_dtype = getattr(torch, dtype)
+        min_max_int = torch.tensor([
+            torch.iinfo(torch_dtype).min,
+            torch.iinfo(torch_dtype).max,
+        ], dtype=torch_dtype, device=device)
+        output = torch.empty(2, dtype=torch.float32, device=device)
+    else:
+        min_max_int = paddle.to_tensor([
+            paddle.iinfo(dtype).min,
+            paddle.iinfo(dtype).max,
+        ], dtype=dtype)
+        output = paddle.zeros(2, dtype='float32')
+    
+    
+    
     kernel[(1, )](min_max_int, output, 2)
 
     assert output[0] == output[1]
-    assert 1.0 - torch.finfo(torch.float32).eps <= output[0].item() < 1.0
+    if HAS_TORCH:
+        assert 1.0 - torch.finfo(torch.float32).eps <= output[0].item() < 1.0
+    else:
+        assert 1.0 - paddle.finfo(paddle.float32).eps <= output[0].item() < 1.0

@@ -6,9 +6,18 @@ import time
 import inspect
 from typing import Dict
 
-from ..testing import do_bench, do_bench_cudagraph, do_bench_paddle
+from ..testing import do_bench, do_bench_cudagraph
 from .jit import KernelInterface
 from .errors import OutOfResources
+
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except :
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 
 class Autotuner(KernelInterface):
@@ -94,12 +103,12 @@ class Autotuner(KernelInterface):
             self.base_fn = self.base_fn.fn
         self.num_warmups = warmup
         self.num_reps = rep
-        try:
-            import paddle
-            self.use_cuda_graph = use_cuda_graph and paddle.is_compiled_with_cuda()
-        except :
-            import torch
+        if HAS_TORCH:
             self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
+        else:
+            self.use_cuda_graph = use_cuda_graph and paddle.is_compiled_with_cuda()
+        
+            
 
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
@@ -134,13 +143,11 @@ class Autotuner(KernelInterface):
 
         try:
             if self.use_cuda_graph:
-                try:
-                    import paddle
-                    bench_res = do_bench_paddle(kernel_call, rep=self.num_reps, return_mode="median")
-                except:
-                    import torch
+                if HAS_TORCH:
                     with torch.cuda.stream(torch.cuda.Stream()):
                         bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
+                else:
+                    bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
                 return bench_res
             return do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except (OutOfResources, CompileTimeAssertionFailure):

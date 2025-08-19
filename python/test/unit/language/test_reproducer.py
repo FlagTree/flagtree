@@ -2,8 +2,16 @@ import os
 import shutil
 
 import pytest
-
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+    HAS_CUDA = torch.cuda.is_available()
+except :
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
+    HAS_CUDA = paddle.is_compiled_with_cuda()
 import triton
 import re
 
@@ -13,7 +21,8 @@ def triton_():
     return
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
+# @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
+@pytest.mark.skipif(not HAS_CUDA, reason="requires cuda")
 def test_reproducer():
     tmpdir = ".tmp"
     reproducer = 'triton-reproducer.mlir'

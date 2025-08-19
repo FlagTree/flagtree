@@ -1,7 +1,8 @@
 import itertools
 import pytest
-try: import paddle; HAS_PADDLE = True
-except: HAS_PADDLE = False; import torch; HAS_TORCH = True
+try: 
+    import torch; HAS_PADDLE = False; HAS_TORCH = True
+except: import paddle; HAS_TORCH = False; HAS_PADDLE = True
 
 import triton
 import triton.language as tl

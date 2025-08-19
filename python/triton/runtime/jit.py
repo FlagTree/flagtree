@@ -325,7 +325,10 @@ def mangle_type(arg, is_const=False):
         return "fp32"
     else:
         # dtypes are hashable so we can memoize this mapping:
-        dsk = (arg.dtype, is_const)
+        try:
+            dsk = (arg.dtype, is_const)
+        except:
+            dsk = (arg, is_const)
         res = dtype2str.get(dsk, None)
         if res is None:
             res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
@@ -898,7 +901,7 @@ class MockTensor:
 
     @staticmethod
     def wrap_dtype(arg):
-        if arg.__class__.__name__ == "dtype" and arg.__module__ == "torch":
+        if (arg.__class__.__name__ == "dtype" and arg.__module__ == "torch") or (arg.__class__.__name__ == "DataType" and arg.__module__ == "paddle"):
             return MockTensor(arg)
         return arg
 
@@ -916,7 +919,11 @@ class TensorWrapper:
         self.dtype = dtype
         self.base = base
         self.data = base.data
-        self.device = base.device
+        try:
+            self.device = base.device
+        except:
+            self.device = base.place
+            self.strides = self.base.strides
         self.shape = self.base.shape
 
     def data_ptr(self):

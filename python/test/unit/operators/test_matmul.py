@@ -1,7 +1,16 @@
 import itertools
 
 import pytest
-import torch
+
+# Prefer torch; fallback to paddle
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except Exception:
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 import triton
 import triton.language as tl
@@ -10,6 +19,51 @@ import triton.ops
 
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+# ---- helpers ----
+
+def get_device_capability():
+    if HAS_TORCH:
+        return torch.cuda.get_device_capability()
+    else:
+        return paddle.device.cuda.get_device_capability()
+
+def manual_seed(seed):
+    if HAS_TORCH:
+        torch.manual_seed(seed)
+    else:
+        paddle.seed(seed)
+
+def randint(low, high, size, device=None, dtype=None):
+    if HAS_TORCH:
+        kwargs = {}
+        if device is not None:
+            kwargs['device'] = device
+        if dtype is not None:
+            kwargs['dtype'] = dtype
+        return torch.randint(low, high, size, **kwargs)
+    else:
+        if dtype is not None:
+            # 兼容 paddle 不支持 int8/uint8 的情况
+                out = paddle.randint(low=low, high=high, shape=size, dtype="int64")
+                return paddle.cast(out, dtype=dtype)
+        return paddle.randint(low=low, high=high, shape=size)
+
+def empty_strided(shape, stride, dtype, device):
+    if HAS_TORCH:
+        return torch.empty_strided(shape, stride, dtype=dtype, device=device)
+    else:
+        # Paddle doesn't have empty_strided, use empty as fallback
+        return paddle.empty(shape, dtype=dtype)
+
+def assert_close(x, y):
+    if HAS_TORCH:
+        torch.testing.assert_close(x, y)
+    else:
+        # Use triton's cross-framework assert_close
+        from triton.testing import assert_close as tt_assert_close
+        tt_assert_close(x, y)
 
 
 @pytest.mark.parametrize(
@@ -114,7 +168,7 @@ def is_hip():
 )
 def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, ADTYPE, BDTYPE, INPUT_PRECISION,
             F8_FASTACCUM, ACC_DTYPE, OUTPUT_DTYPE):
-    capability = torch.cuda.get_device_capability()
+    capability = get_device_capability()
     if capability[0] < 7:
         pytest.skip("Only test tl.dot() on devices with sm >= 70")
     if capability[0] < 8 and (ADTYPE == "bfloat16" or BDTYPE == "bfloat16"):
@@ -123,7 +177,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
         pytest.skip("Only test float8e4nv on devices with sm >= 90")
     if (ADTYPE == "bfloat16" or BDTYPE == "bfloat16") and SPLIT_K != 1:
         pytest.skip("bfloat16 matmuls don't allow split_k for now")
-    torch.manual_seed(0)
+    manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
     kwargs = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
     pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs['C'].zero_()
@@ -149,11 +203,15 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
             mask = offs < N
             x = tl.load(X + offs, mask=mask)
             tl.store(Y + offs, x, mask=mask)
-
-        ret = torch.empty_strided(x.shape, x.stride(), dtype=torch.float16, device=x.device)
+        x_stride = x.stride() if HAS_TORCH else x.strides
+        ret = empty_strided(x.shape, x_stride, getattr(torch if HAS_TORCH else paddle, "float16"), "cuda")
         grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
         dtype = getattr(tl, dtype)
-        kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
+        if HAS_TORCH:
+            N = x.numel()
+        else:
+            N = x.numel().item()
+        kernel[grid](ret, triton.reinterpret(x, dtype), N, BLOCK_SIZE=1024)
         return ret
 
     def upcast_if_fp8(x, dtype):
@@ -164,15 +222,19 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     def init_input(m, n, dtype, acc_dtype):
         if 'float8' in dtype:
             ewidth = {'float8e4b15': 4, 'float8e4nv': 4, 'float8e5': 5}[dtype]
-            sign = torch.randint(2, size=(m, n), device="cuda", dtype=torch.int8) * 128
-            val = torch.randint(2**3 - 1, size=(m, n), device="cuda", dtype=torch.int8) << 7 - ewidth
+            sign = randint(0, 2, size=(m, n), device="cuda", dtype=getattr(torch if HAS_TORCH else paddle, "int8")) * 128
+            val = randint(0, 2**3 - 1, size=(m, n), device="cuda", dtype=getattr(torch if HAS_TORCH else paddle, "int8")) << 7 - ewidth
             return sign | val
         if dtype == "int8":
-            return torch.randint(-128, 127, (m, n), device="cuda", dtype=torch.int8)
+            return randint(-128, 127, (m, n), "cuda", getattr(torch if HAS_TORCH else paddle, "int8"))
         # Use small range of values to prevent numerical issues.
         min_exp = -4 if acc_dtype == "float16" else -10
-        exponents = torch.randint(min_exp, 0, size=(m, n))
-        ret = (2.**exponents).to(getattr(torch, dtype)).to("cuda")
+        exponents = randint(min_exp, 0, size=(m, n))
+        ret = (2.**exponents).to(getattr(torch if HAS_TORCH else paddle, dtype))
+        if HAS_TORCH:
+            ret = ret.to("cuda")
+        else:
+            ret = ret.to("gpu")
         return ret
 
     if is_hip():
@@ -187,15 +249,19 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     th_a = upcast_if_fp8(a, ADTYPE)
     th_b = upcast_if_fp8(b, BDTYPE)
     ab_dtype = triton.ops.get_higher_dtype(th_a.dtype, th_b.dtype)
-    acc_dtype = getattr(torch, ACC_DTYPE) if ACC_DTYPE else ab_dtype
-    output_dtype = getattr(torch, OUTPUT_DTYPE) if OUTPUT_DTYPE else ab_dtype
-    th_c = torch.matmul(th_a.to(output_dtype), th_b.to(output_dtype))
+    acc_dtype = getattr(torch if HAS_TORCH else paddle, ACC_DTYPE) if ACC_DTYPE else ab_dtype
+    output_dtype = getattr(torch if HAS_TORCH else paddle, OUTPUT_DTYPE) if OUTPUT_DTYPE else ab_dtype
+    th_c = (torch if HAS_TORCH else paddle).matmul(th_a.to(output_dtype), th_b.to(output_dtype))
     try:
         if is_fp8(ADTYPE):
             a = triton.reinterpret(a, getattr(tl, ADTYPE))
         if is_fp8(BDTYPE):
             b = triton.reinterpret(b, getattr(tl, BDTYPE))
         tt_c = triton.ops.matmul(a, b, acc_dtype if ACC_DTYPE else None, INPUT_PRECISION, F8_FASTACCUM, output_dtype)
-        torch.testing.assert_close(th_c, tt_c)
+        assert_close(th_c, tt_c)
     except triton.OutOfResources as e:
         pytest.skip(str(e))
+
+if __name__ == "__main__":
+    test_op(BLOCK_M = 32, BLOCK_N = 32, BLOCK_K = 32, SPLIT_K = 1, NWARP = 1, NSTAGE = 2, M = None, N = None, K = None, AT = False, BT = False, ADTYPE = 'float16', BDTYPE = 'int8',
+            INPUT_PRECISION = None, F8_FASTACCUM = True, ACC_DTYPE = None, OUTPUT_DTYPE = None)

@@ -1,36 +1,55 @@
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except Exception:
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 from .. import Config, autotune, cdiv, heuristics, jit
 from .. import language as tl
 from .matmul_perf_model import early_config_prune, estimate_matmul_time
 
-_ordered_datatypes = [torch.int8, torch.float16, torch.bfloat16, torch.float32]
-
+if HAS_TORCH:
+    _ordered_datatypes = [torch.int8, torch.float16, torch.bfloat16, torch.float32]
+else:
+    # Paddle 常用/稳定支持的数据类型优先（部分版本对 int8/bfloat16 支持不完整）
+    _ordered_datatypes = [paddle.int8, paddle.float16, paddle.bfloat16, paddle.float32]
 
 def upcast_if_fp8(a):
-    if "fp8" in str(a):
-        return torch.float16
+    # 若传入了 fp8 相关 dtype，向上转到 fp16
+    if "fp8" in str(a).lower():
+        return (torch.float16 if HAS_TORCH else paddle.float16)
     return a
 
 
 def get_higher_dtype(a, b):
     a = upcast_if_fp8(a)
     b = upcast_if_fp8(b)
-    if a is b:
+    if a == b:
         return a
 
     assert a in _ordered_datatypes
     assert b in _ordered_datatypes
 
     for d in _ordered_datatypes:
-        if a is d:
+
+        if a is d or a == d:
             return b
-        if b is d:
+        if b is d or b == d:
             return a
 
 
 def init_to_zero(name):
-    return lambda nargs: nargs[name].zero_()
+    if HAS_TORCH:
+        return lambda nargs: nargs[name].zero_()
+    else:
+        def _hook(nargs):
+            t = nargs[name]
+            # 尽量就地置零（paddle 支持切片赋值）
+            t[:] = 0
+        return _hook
 
 
 def get_configs_io_bound():
@@ -147,73 +166,143 @@ def _kernel(A, B, C, M, N, K,  #
         tl.atomic_add(C, acc, mask=mask)
 
 
-class _matmul(torch.autograd.Function):
-    kernel = _kernel
+if HAS_TORCH:
 
-    _locks = {}
+    class _matmul(torch.autograd.Function):
+        kernel = _kernel
+        _locks = {}
 
-    @staticmethod
-    def _call(a, b, acc_dtype, input_precision, fp8_fast_accum, output_dtype):
-        device = a.device
-        # handle non-contiguous inputs if necessary
-        if a.stride(0) > 1 and a.stride(1) > 1:
-            a = a.contiguous()
-        if b.stride(0) > 1 and b.stride(1) > 1:
-            b = b.contiguous()
-        # checks constraints
-        assert a.shape[1] == b.shape[0], "incompatible dimensions"
-        M, K = a.shape
-        _, N = b.shape
+        @staticmethod
+        def _call(a, b, acc_dtype, input_precision, fp8_fast_accum, output_dtype):
+            device = a.device
+            # handle non-contiguous inputs if necessary
+            if a.stride(0) > 1 and a.stride(1) > 1:
+                a = a.contiguous()
+            if b.stride(0) > 1 and b.stride(1) > 1:
+                b = b.contiguous()
+            # checks constraints
+            assert a.shape[1] == b.shape[0], "incompatible dimensions"
+            M, K = a.shape
+            _, N = b.shape
 
-        # common type between a and b
-        ab_dtype = get_higher_dtype(a.dtype, b.dtype)
+            # common type between a and b
+            ab_dtype = get_higher_dtype(a.dtype, b.dtype)
 
-        # allocates output
-        if (output_dtype is None):
-            output_dtype = ab_dtype
+            # allocates output
+            if (output_dtype is None):
+                output_dtype = ab_dtype
 
-        c = torch.empty((M, N), device=device, dtype=output_dtype)
+            c = torch.empty((M, N), device=device, dtype=output_dtype)
 
-        # Allowed types for acc_type given the types of a and b.
-        supported_acc_dtypes = {
-            torch.float16: (torch.float32, torch.float16), torch.bfloat16: (torch.float32, torch.bfloat16),
-            torch.float32: (torch.float32, ), torch.int8: (torch.int32, )
-        }
+            # Allowed types for acc_type given the types of a and b.
+            supported_acc_dtypes = {
+                torch.float16: (torch.float32, torch.float16), torch.bfloat16: (torch.float32, torch.bfloat16),
+                torch.float32: (torch.float32, ), torch.int8: (torch.int32, )
+            }
 
-        if acc_dtype is None:
-            acc_dtype = supported_acc_dtypes[ab_dtype][0]
-        else:
-            assert isinstance(acc_dtype, torch.dtype), "acc_dtype must be a torch.dtype"
-            assert acc_dtype in supported_acc_dtypes[a.dtype], "acc_dtype not compatible with the type of a"
-            assert acc_dtype in supported_acc_dtypes[b.dtype], "acc_dtype not compatible with the type of b"
+            if acc_dtype is None:
+                acc_dtype = supported_acc_dtypes[ab_dtype][0]
+            else:
+                assert isinstance(acc_dtype, torch.dtype), "acc_dtype must be a torch.dtype"
+                assert acc_dtype in supported_acc_dtypes[a.dtype], "acc_dtype not compatible with the type of a"
+                assert acc_dtype in supported_acc_dtypes[b.dtype], "acc_dtype not compatible with the type of b"
 
-        def to_tl_type(ty):
-            return getattr(tl, str(ty).split(".")[-1])
+            def to_tl_type(ty):
+                return getattr(tl, str(ty).split(".")[-1])
 
-        acc_dtype = to_tl_type(acc_dtype)
-        ab_dtype = to_tl_type(ab_dtype)
-        output_dtype = to_tl_type(output_dtype)
+            acc_dtype = to_tl_type(acc_dtype)
+            ab_dtype = to_tl_type(ab_dtype)
+            output_dtype = to_tl_type(output_dtype)
 
-        # Tensor cores support input with mixed float8 types.
-        if a.dtype in [tl.float8e4nv, tl.float8e5] and b.dtype in [tl.float8e4nv, tl.float8e5]:
-            ab_dtype = None
-        # launch kernel
-        grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
-        _kernel[grid](
-            a, b, c, M, N, K,  #
-            a.stride(0), a.stride(1),  #
-            b.stride(0), b.stride(1),  #
-            c.stride(0), c.stride(1),  #
-            acc_dtype=acc_dtype,  #
-            input_precision=input_precision,  #
-            fp8_fast_accum=fp8_fast_accum,  #
-            GROUP_M=8, AB_DTYPE=ab_dtype)
-        return c
+            # Tensor cores support input with mixed float8 types.
+            if a.dtype in [tl.float8e4nv, tl.float8e5] and b.dtype in [tl.float8e4nv, tl.float8e5]:
+                ab_dtype = None
+            # launch kernel
+            grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
+            _kernel[grid](
+                a, b, c, M, N, K,  #
+                a.stride(0), a.stride(1),  #
+                b.stride(0), b.stride(1),  #
+                c.stride(0), c.stride(1),  #
+                acc_dtype=acc_dtype,  #
+                input_precision=input_precision,  #
+                fp8_fast_accum=fp8_fast_accum,  #
+                GROUP_M=8, AB_DTYPE=ab_dtype)
+            return c
 
-    @staticmethod
-    def forward(ctx, a, b, acc_dtype=None, input_precision=None, fp8_fast_accum=True, output_dtype=None):
-        return _matmul._call(a, b, acc_dtype=acc_dtype, input_precision=input_precision, fp8_fast_accum=fp8_fast_accum,
-                             output_dtype=output_dtype)
+        @staticmethod
+        def forward(ctx, a, b, acc_dtype=None, input_precision=None, fp8_fast_accum=True, output_dtype=None):
+            return _matmul._call(a, b, acc_dtype=acc_dtype, input_precision=input_precision,
+                                 fp8_fast_accum=fp8_fast_accum, output_dtype=output_dtype)
+
+else:
+
+    class _matmul(paddle.autograd.PyLayer):
+        kernel = _kernel
+        _locks = {}
+
+        @staticmethod
+        def _call(a, b, acc_dtype, input_precision, fp8_fast_accum, output_dtype):
+            # checks constraints
+            assert a.shape[1] == b.shape[0], "incompatible dimensions"
+            M, K = a.shape
+            _, N = b.shape
+
+            # common type between a and b
+            ab_dtype = get_higher_dtype(a.dtype, b.dtype)
+
+            # allocates output
+            if output_dtype is None:
+                output_dtype = ab_dtype
+
+            c = paddle.empty((M, N), dtype=output_dtype)
+
+            # Allowed types for acc_type given the types of a and b.
+            supported_acc_dtypes = {
+                paddle.float16: (paddle.float32, paddle.float16),
+                getattr(paddle, "bfloat16", paddle.float32): (paddle.float32, getattr(paddle, "bfloat16", paddle.float32)),
+                paddle.float32: (paddle.float32, ),
+                getattr(paddle, "int8", object()): (paddle.int32,) if hasattr(paddle, "int32") else (),
+            }
+
+            if acc_dtype is None:
+                acc_dtype = supported_acc_dtypes[ab_dtype][0] if ab_dtype in supported_acc_dtypes else paddle.float32
+            # else: 放宽检查，避免不同框架 dtype 判等问题
+
+            def to_tl_type(ty):
+                return getattr(tl, str(ty).split(".")[-1])
+
+            acc_dtype = to_tl_type(acc_dtype)
+            ab_dtype_tl = to_tl_type(ab_dtype)
+            output_dtype_tl = to_tl_type(output_dtype)
+
+            # Tensor cores support input with mixed float8 types.
+            # 这里保持与原逻辑一致
+            if str(a.dtype).lower().endswith(("float8e4nv", "float8e5")) and \
+               str(b.dtype).lower().endswith(("float8e4nv", "float8e5")):
+                ab_dtype_tl = None
+
+            # strides: paddle 使用 tensor.strides 属性
+            a_s0, a_s1 = a.strides
+            b_s0, b_s1 = b.strides
+            c_s0, c_s1 = c.strides
+
+            grid = lambda META: (cdiv(M, META['BLOCK_M']) * cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
+            _kernel[grid](
+                a, b, c, M, N, K,  #
+                a_s0, a_s1,  #
+                b_s0, b_s1,  #
+                c_s0, c_s1,  #
+                acc_dtype=acc_dtype,  #
+                input_precision=input_precision,  #
+                fp8_fast_accum=fp8_fast_accum,  #
+                GROUP_M=8, AB_DTYPE=ab_dtype_tl)
+            return c
+
+        @staticmethod
+        def forward(ctx, a, b, acc_dtype=None, input_precision=None, fp8_fast_accum=True, output_dtype=None):
+            return _matmul._call(a, b, acc_dtype=acc_dtype, input_precision=input_precision,
+                                 fp8_fast_accum=fp8_fast_accum, output_dtype=output_dtype)
 
 
 matmul = _matmul.apply

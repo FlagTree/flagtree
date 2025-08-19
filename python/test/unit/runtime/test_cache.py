@@ -5,8 +5,14 @@ import shutil
 import tempfile
 
 import pytest
-try: import paddle; HAS_PADDLE = True
-except: HAS_PADDLE = False; import torch; HAS_TORCH = True
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except :
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 import triton
 import triton.language as tl
@@ -82,6 +88,27 @@ def test_nested1_change():
     updated = apply_src_change(function_1, 'i + 1', 'i + 2')
     assert baseline != updated
 
+from typing import Union
+
+def _dtype(dtype: str) -> Union["torch.dtype", "paddle.dtype"]:
+    """
+    Convert a string dtype (e.g., 'float32', 'int64') 
+    to the corresponding torch.dtype or paddle.dtype.
+
+    Args:
+        dtype (str): must be a string like 'float32', 'int64', etc.
+
+    Returns:
+        torch.dtype or paddle.dtype
+    """
+    if HAS_TORCH:
+        if not hasattr(torch, dtype):
+            raise ValueError(f"torch does not support dtype '{dtype}'")
+        return getattr(torch, dtype)
+    else:
+        if not hasattr(paddle, dtype):
+            raise ValueError(f"paddle does not support dtype '{dtype}'")
+        return getattr(paddle, dtype)
 
 def test_combine_fn_change():
     # Test that tl.reduce and associative_scan calls include
@@ -421,10 +448,7 @@ def test_jit_warmup_cache() -> None:
     device = triton.runtime.driver.active.get_current_device()
 
     assert len(kernel_add.cache[device]) == 0
-    kernel_add.warmup(args[0] if HAS_PADDLE else torch.float32,#这里有问题待定
-                    args[0] if HAS_PADDLE else torch.float32,
-                    args[0] if HAS_PADDLE else torch.float32,
-                    32, grid=(1, ))
+    kernel_add.warmup(_dtype('float32'),  _dtype('float32'),_dtype('float32'), 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
 
     kernel_add.warmup(*args, grid=(1, ))
@@ -432,20 +456,7 @@ def test_jit_warmup_cache() -> None:
 
     kernel_add.warmup(*args, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
-    # args = [
-    #     torch.randn(32, dtype=torch.float32, device="cuda"),
-    #     torch.randn(32, dtype=torch.float32, device="cuda"),
-    #     torch.randn(32, dtype=torch.float32, device="cuda"),
-    #     32,
-    # ]
-    # device = triton.runtime.driver.active.get_current_device()
-    # assert len(kernel_add.cache[device]) == 0
-    # kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
-    # assert len(kernel_add.cache[device]) == 1
-    # kernel_add.warmup(*args, grid=(1, ))
-    # assert len(kernel_add.cache[device]) == 1
-    # kernel_add.warmup(*args, grid=(1, ))
-    # assert len(kernel_add.cache[device]) == 1
+  
 
 
 def test_jit_debug() -> None:
@@ -458,13 +469,13 @@ def test_jit_debug() -> None:
 
     device = triton.runtime.driver.active.get_current_device()
     assert len(kernel_add.cache[device]) == 0
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    kernel_add.warmup(_dtype('float32'), _dtype('float32'), _dtype('float32'), 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 1
     kernel_add.debug = False
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    kernel_add.warmup(_dtype('float32'), _dtype('float32'), _dtype('float32'), 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 2
     kernel_add.debug = True
-    kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    kernel_add.warmup(_dtype('float32'), _dtype('float32'), _dtype('float32'), 32, grid=(1, ))
     assert len(kernel_add.cache[device]) == 3
     bins = list(kernel_add.cache[device].values())
     assert bins[2].asm['ttir'] != bins[1].asm['ttir']
@@ -484,7 +495,7 @@ def test_jit_noinline() -> None:
 
     device = triton.runtime.driver.active.get_current_device()
     assert len(kernel_add_device.cache[device]) == 0
-    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    kernel_add_device.warmup(_dtype('float32'), _dtype('float32'), _dtype('float32'), 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1
     bins = list(kernel_add_device.cache[device].values())
     inline_ttir = bins[0].asm['ttir']
@@ -492,7 +503,7 @@ def test_jit_noinline() -> None:
     add_fn.hash = None
     kernel_add_device.hash = None
     kernel_add_device.cache[device].clear()
-    kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
+    kernel_add_device.warmup(_dtype('float32'), _dtype('float32'), _dtype('float32'), 32, grid=(1, ))
     assert len(kernel_add_device.cache[device]) == 1
     bins = list(kernel_add_device.cache[device].values())
     noinline_ttir = bins[0].asm['ttir']
@@ -536,7 +547,7 @@ def test_preload() -> None:
         specialization_data = kwargs["compile"]["specialization_data"]
 
     JITFunction.cache_hook = cache_hook
-    pre_compile = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
+    pre_compile = kernel_add.warmup(_dtype('float32'), _dtype('float32'), _dtype('float32'), 32, tl.float32, grid=(1, ))
     hash = pre_compile.hash
     assert specialization_data is not None
 
@@ -557,7 +568,7 @@ def test_preload() -> None:
         counter += 1
 
     JITFunction.cache_hook = inc_counter
-    final_kernel = kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
+    final_kernel = kernel_add.warmup(_dtype('float32'), _dtype('float32'), _dtype('float32'), 32, tl.float32, grid=(1, ))
     JITFunction.cache_hook = None
     assert counter == 0
     assert len(kernel_add.cache[device]) == 1
@@ -566,3 +577,7 @@ def test_preload() -> None:
     # test that we can't preload a mismatched kernel
     with pytest.raises(RuntimeError, match="Specialization data is for"):
         kernel_sub.preload(specialization_data)
+
+
+if __name__ == "__main__":
+    test_jit_warmup_cache()

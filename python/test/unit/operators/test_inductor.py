@@ -1,8 +1,91 @@
 import pytest
-import torch
+
+# Prefer torch; fallback to paddle
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except Exception:
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 import triton
 import triton.language as tl
+
+
+# ---- helpers ----
+
+def manual_seed(seed):
+    if HAS_TORCH:
+        torch.manual_seed(seed)
+    else:
+        paddle.seed(seed)
+
+def rand(shape, device):
+    if HAS_TORCH:
+        return torch.rand(shape, device=device)
+    else:
+        return paddle.rand(shape)
+
+def randn(shape, device):
+    if HAS_TORCH:
+        return torch.randn(shape, device=device)
+    else:
+        return paddle.randn(shape)
+
+def ones(shape, device, dtype=None):
+    if HAS_TORCH:
+        return torch.ones(shape, device=device, dtype=dtype)
+    else:
+        return paddle.ones(shape, dtype=dtype)
+
+def ones_like(x):
+    if HAS_TORCH:
+        return torch.ones_like(x)
+    else:
+        return paddle.ones_like(x)
+
+def empty(shape, device, dtype=None):
+    if HAS_TORCH:
+        return torch.empty(shape, device=device, dtype=dtype)
+    else:
+        # Paddle requires shape to be a tuple/list, not a single integer
+        if isinstance(shape, int):
+            shape = (shape,)
+        return paddle.empty(shape, dtype=dtype)
+
+def randint(low, high, shape, device, dtype=None):
+    if HAS_TORCH:
+        return torch.randint(low, high, shape, device=device, dtype=dtype)
+    else:
+        return paddle.randint(low=low, high=high, shape=shape, dtype=dtype)
+
+def arange(n, device, dtype=None):
+    if HAS_TORCH:
+        return torch.arange(n, device=device, dtype=dtype)
+    else:
+        return paddle.arange(n, dtype=dtype)
+
+def assert_close(x, y, **kwargs):
+    if HAS_TORCH:
+        torch.testing.assert_close(x, y, **kwargs)
+    else:
+        # Use triton's cross-framework assert_close
+        from triton.testing import assert_close as tt_assert_close
+        tt_assert_close(x, y, **kwargs)
+
+def dtype_from_str(dtype_str):
+    if HAS_TORCH:
+        return getattr(torch, dtype_str)
+    else:
+        return getattr(paddle, dtype_str)
+
+def numel(x):
+    if HAS_TORCH:
+        return x.numel()
+    else:
+        return int(paddle.numel(x))
 
 
 def test_normalization_with_remat(device):
@@ -45,16 +128,16 @@ def test_normalization_with_remat(device):
         tmp19 = tmp17 / tmp18
         tl.store(in_out_ptr1 + (x3 + tl.zeros([XBLOCK, 1], tl.int32)), tmp19, xmask)
 
-    torch.manual_seed(123)
+    manual_seed(123)
 
-    buf14 = torch.rand(8, 64, 64, 64, device=device)
-    buf16 = torch.rand(8, 1, 64, device=device)
-    arg114_1 = torch.rand(64, device=device)
-    arg115_1 = torch.rand(64, device=device)
-    arg8_1 = torch.rand(64, device=device)
-    arg9_1 = torch.rand(64, device=device)
+    buf14 = rand((8, 64, 64, 64), device)
+    buf16 = rand((8, 1, 64), device)
+    arg114_1 = rand((64,), device)
+    arg115_1 = rand((64,), device)
+    arg8_1 = rand((64,), device)
+    arg9_1 = rand((64,), device)
     triton_[(512, )](buf14, buf16, arg114_1, arg115_1, arg8_1, arg9_1, 512, 4096, 1, 2048)
-    torch.testing.assert_close(buf16.mean().item(), buf14.mean().item(), atol=1e-7, rtol=0)
+    assert_close(buf16.mean().item(), buf14.mean().item(), atol=1e-7, rtol=0)
 
 
 def test_avg_pool_bw(device):
@@ -146,15 +229,15 @@ def test_avg_pool_bw(device):
         tmp76 = tl.where(tmp74, tmp75, tmp71)
         tl.store(out_ptr0 + (x5 + tl.zeros([XBLOCK], tl.int32)), tmp76, None)
 
-    inp = torch.ones(8, 2048, 8, 8, device=device, dtype=torch.half)
-    out = torch.ones_like(inp) * 3
-    numel = inp.numel()
-    triton_[(numel // 1024, )](inp, out, 1024)
-    out_ref = torch.ones_like(inp)
+    inp = ones((8, 2048, 8, 8), device, dtype=dtype_from_str('float16'))
+    out = ones_like(inp) * 3
+    numel_val = numel(inp)
+    triton_[(numel_val // 1024, )](inp, out, 1024)
+    out_ref = ones_like(inp)
     out_ref[:, :, 1:7, 0::7] = 2 / 3
     out_ref[:, :, 0::7, 1:7] = 2 / 3
     out_ref[:, :, 0::7, 0::7] = 4 / 9
-    torch.testing.assert_close(out, out_ref)
+    assert_close(out, out_ref)
 
 
 @pytest.mark.parametrize("RBLOCK", [1, 16, 32, 64, 128])
@@ -172,11 +255,18 @@ def test_scan2d_broadcast(RBLOCK, num_warps, device):
         tl.store(out_ptr + xindex * RBLOCK + rindex, scan)
 
     XBLOCK = 4
-    input = torch.randint(0, 10, (1, RBLOCK), dtype=torch.int64, device=device)
-    output = torch.empty((XBLOCK, RBLOCK), dtype=torch.int64, device=device)
+    input = randint(0, 10, (1, RBLOCK), device, dtype=dtype_from_str('int64'))
+    output = empty((XBLOCK, RBLOCK), device, dtype=dtype_from_str('int64'))
     fn[(1, )](input, output, XBLOCK, RBLOCK, num_warps=num_warps)
-    ref = input.cumsum(1).broadcast_to((XBLOCK, RBLOCK))
-    torch.testing.assert_close(output, ref)
+    
+    if HAS_TORCH:
+        ref = input.cumsum(1).broadcast_to((XBLOCK, RBLOCK))
+    else:
+        # paddle equivalent
+        ref = paddle.cumsum(input, axis=1)
+        ref = paddle.expand(ref, [XBLOCK, RBLOCK])
+    
+    assert_close(output, ref)
 
 
 def test_scan2d_for(device):
@@ -192,7 +282,7 @@ def test_scan2d_for(device):
             tl.store(out_ptr0 + rindex, tmp6, rmask)
 
     RBLOCK = 8
-    out0 = torch.empty(RBLOCK, device=device, dtype=torch.int64)
+    out0 = empty(RBLOCK, device, dtype=dtype_from_str('int64'))
     fn[(1, )](out0, RBLOCK, RBLOCK)
-    ref = torch.arange(RBLOCK, device=device, dtype=torch.int64) + 1
-    torch.testing.assert_close(out0, ref)
+    ref = arange(RBLOCK, device, dtype=dtype_from_str('int64')) + 1
+    assert_close(out0, ref)
