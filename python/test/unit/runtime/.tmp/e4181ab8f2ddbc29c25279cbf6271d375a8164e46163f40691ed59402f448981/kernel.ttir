@@ -1,0 +1,7 @@
+module {
+  tt.func public @kernel() attributes {noinline = false} {
+    tt.return loc(#loc1)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":371:0)
+#loc1 = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":372:4)

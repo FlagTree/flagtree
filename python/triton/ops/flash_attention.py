@@ -546,7 +546,7 @@ else:
                 dq, dk, dv,  #
                 L,  #
                 delta,  #
-                o.numel(),q.strides[0], q.strides[1], q.strides[2], q.strides[3],
+                o.numel().item(),q.strides[0], q.strides[1], q.strides[2], q.strides[3],
                 k.strides[0], k.strides[1], k.strides[2], k.strides[3],
                 v.strides[0], v.strides[1], v.strides[2], v.strides[3],
                 q.shape[0], q.shape[1], q.shape[2],
@@ -562,7 +562,7 @@ else:
             )
             if len(dq.shape) == 5:
                 dq = dq.sum(axis=0)
-            return dq, dk, dv, None, None, None
+            return dq, dk, dv
 
 
 attention = _attention.apply

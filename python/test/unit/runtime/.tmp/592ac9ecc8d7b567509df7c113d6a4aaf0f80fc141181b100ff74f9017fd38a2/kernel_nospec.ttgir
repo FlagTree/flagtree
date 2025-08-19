@@ -1,0 +1,18 @@
+#loc = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":50:0)
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "cuda:80", "triton_gpu.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel_nospec(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32} loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":50:0), %arg1: i32 loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":50:0)) attributes {noinline = false} {
+    %c3_i32 = arith.constant 3 : i32 loc(#loc9)
+    %0 = arith.addi %arg1, %c3_i32 : i32 loc(#loc9)
+    tt.store %arg0, %0 : !tt.ptr<i32> loc(#loc5)
+    tt.return loc(#loc6)
+  } loc(#loc)
+} loc(#loc)
+#loc1 = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":33:12)
+#loc2 = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":27:19)
+#loc3 = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":52:19)
+#loc4 = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":51:12)
+#loc5 = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":53:16)
+#loc6 = loc("/home/fanxiangyu/flagtree/python/test/unit/runtime/test_cache.py":53:4)
+#loc7 = loc(callsite(#loc1 at #loc2))
+#loc8 = loc(callsite(#loc7 at #loc3))
+#loc9 = loc(fused[#loc8, #loc4])

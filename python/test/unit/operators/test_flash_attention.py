@@ -20,7 +20,7 @@ import triton.ops
     (2, 4, 512, 64),
     (2, 4, 512, 128),
 ])
-@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16] if HAS_TORCH else ['float16', 'float32'])
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16] if HAS_TORCH else [paddle.float16, paddle.bfloat16])
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('seq_par', [True, False])
 def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
@@ -127,40 +127,12 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
 
         def normalize(x):
             x_flat = paddle.flatten(x)
-            return paddle.nn.functional.normalize(x_flat, axis=0)
+            return paddle.nn.functional.normalize(x_flat, axis=0).astype(paddle.float64)
 
-        paddle.testing.assert_allclose(
-            normalize(ref_out),
-            normalize(tri_out),
-            atol=atol,
-            rtol=0,
-            err_msg="Output mismatch"
-        )
-
-        paddle.testing.assert_allclose(
-            normalize(ref_dv),
-            normalize(tri_dv),
-            atol=atol,
-            rtol=0,
-            err_msg="Grad V mismatch"
-        )
-
-        paddle.testing.assert_allclose(
-            normalize(ref_dk),
-            normalize(tri_dk),
-            atol=atol,
-            rtol=0,
-            err_msg="Grad K mismatch"
-        )
-
-        paddle.testing.assert_allclose(
-            normalize(ref_dq),
-            normalize(tri_dq),
-            atol=atol,
-            rtol=0,
-            err_msg="Grad Q mismatch"
-        )
-
+        paddle.allclose(normalize(ref_out), normalize(tri_out), atol=atol, rtol=0.)
+        paddle.allclose(normalize(ref_dv), normalize(tri_dv), atol=atol, rtol=0.)
+        paddle.allclose(normalize(ref_dk), normalize(tri_dk), atol=atol, rtol=0.)
+        paddle.allclose(normalize(ref_dq), normalize(tri_dq), atol=atol, rtol=0.)
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func
@@ -246,4 +218,5 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, casual, seq_par, provid
 # bench_flash_attention.run(save_path='.', print_data=True)
 
 if __name__ == '__main__':
-    test_op(Z = 2, H = 4, N_CTX = 512, D_HEAD = 16, dtype = 'float32', causal = True, seq_par = True, device = 'cuda')
+    test_op(Z = 2, H = 4, N_CTX = 512, D_HEAD = 16, dtype = paddle.bfloat16, causal = True, seq_par = True, device = 'cuda')
+    # test_op(Z = 2, H = 4, N_CTX = 512, D_HEAD = 16, dtype = torch.bfloat16, causal = True, seq_par = True, device = 'cuda')

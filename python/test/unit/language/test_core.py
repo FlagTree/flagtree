@@ -8,7 +8,14 @@ import tempfile
 
 import numpy as np
 import pytest
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except :
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 import os
 import inspect
 from numpy.random import RandomState
@@ -88,7 +95,7 @@ def numpy_random(shape, dtype_str, rs: Optional[RandomState] = None, low=None, h
         raise RuntimeError(f'Unknown dtype {dtype_str}')
 
 
-def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torch.Tensor]:
+def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, object]:
     '''
     Note: We need dst_type because the type of x can be different from dst_type.
           For example: x is of type `float32`, dst_type is `bfloat16`.
@@ -98,32 +105,56 @@ def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torc
     if t in uint_dtypes:
         signed_type_name = t.lstrip('u')  # e.g. "uint16" -> "int16"
         x_signed = x.astype(getattr(np, signed_type_name))
-        return reinterpret(torch.tensor(x_signed, device=device), getattr(tl, t))
+        if HAS_TORCH:
+            return reinterpret(torch.tensor(x_signed, device=device), getattr(tl, t))
+        else:
+            return reinterpret(paddle.to_tensor(x_signed), getattr(tl, t))
     else:
         if dst_type and 'float8' in dst_type:
-            return reinterpret(torch.tensor(x, device=device), getattr(tl, dst_type))
+            if HAS_TORCH:
+                return reinterpret(torch.tensor(x, device=device), getattr(tl, dst_type))
+            else:
+                return reinterpret(paddle.to_tensor(x), getattr(tl, dst_type))
         if t == 'float32' and dst_type == 'bfloat16':
-            return torch.tensor(x, device=device).bfloat16()
-        return torch.tensor(x, device=device)
+            if HAS_TORCH:
+                return torch.tensor(x, device=device).bfloat16()
+            else:
+                ten = paddle.to_tensor(x)
+                # best-effort cast for paddle
+                try:
+                    return paddle.cast(ten, 'bfloat16')
+                except Exception:
+                    return ten
+        if HAS_TORCH:
+            return torch.tensor(x, device=device)
+        else:
+            return paddle.to_tensor(x, place=pd_place)
 
 
 def torch_dtype_name(dtype) -> str:
     if isinstance(dtype, triton.language.dtype):
         return dtype.name
-    elif isinstance(dtype, torch.dtype):
-        # 'torch.int64' -> 'int64'
+    if HAS_TORCH and isinstance(dtype, torch.dtype):
         m = re.match(r'^torch\.(\w+)$', str(dtype))
         return m.group(1)
-    else:
-        raise TypeError(f'not a triton or torch dtype: {type(dtype)}')
+    if HAS_PADDLE :
+        for name in ['bool', 'int8', 'int16', 'int32', 'int64', 'uint8', 'float16', 'float32', 'float64', 'bfloat16']:
+            if hasattr(paddle, name) and dtype == getattr(paddle, name):
+                return name
+    raise TypeError(f'not a triton/torch/paddle dtype: {type(dtype)}')
 
 
 def to_numpy(x):
     if isinstance(x, TensorWrapper):
         return x.base.cpu().numpy().astype(getattr(np, torch_dtype_name(x.dtype)))
-    elif isinstance(x, torch.Tensor):
+    elif HAS_TORCH and isinstance(x, torch.Tensor):
         if x.dtype is torch.bfloat16:
             return x.cpu().float().numpy()
+        return x.cpu().numpy()
+    elif HAS_PADDLE and 'paddle' in globals() and isinstance(x, paddle.Tensor):
+        bf16 = getattr(paddle, 'bfloat16', None)
+        if bf16 is not None and x.dtype == bf16:
+            return x.astype('float32').cpu().numpy()
         return x.cpu().numpy()
     else:
         raise ValueError(f"Not a triton-compatible tensor: {x}")

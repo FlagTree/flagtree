@@ -19,8 +19,10 @@ from triton.testing import get_dram_gbps, get_max_tensorcore_tflops, nvsmi
 def device_capability_major():
     if HAS_TORCH:
         return torch.cuda.get_device_capability()[0]
-    else:
+    elif HAS_PADDLE:
         return paddle.device.cuda.get_device_capability()[0]
+    else:
+        raise RuntimeError("No frame(Paddle/Torch) detected.")
 
 def set_stream_default():
     if HAS_TORCH:
