@@ -135,7 +135,7 @@ class OfflineBuildManager:
             kargs['post_hock'](self.src)
 
     def handle_triton_origin_toolkits(self):
-        triton_origin_toolkits = ["ptxas", "nvdisasm", "cuobjdump", "cudacrt", " cudart", "pybind11", "json"]
+        triton_origin_toolkits = ["nvidia/ptxas", "nvidia/nvdisasm", "nvidia/cuobjdump", "nvidia/cudacrt", "nvidia/cudart", "nvidia/cupti", "pybind11", "json"]
         for toolkit in triton_origin_toolkits:
             toolkit_cache_path = os.path.join(self.triton_cache_path, toolkit)
             if os.path.exists(toolkit_cache_path):
