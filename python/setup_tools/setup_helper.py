@@ -95,9 +95,10 @@ def dir_rollback(deep, base_path):
 def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
         submoduel = utils.flagtree_submoduels[name]
-        utils.download_module(submoduel, required)
-        if callable(hock):
-            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel)
+        succ = utils.download_module(submoduel, required)
+        if succ:
+            if callable(hock):
+                hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel)
 
 
 def configure_cambricon_packages_and_data(packages, package_dir, package_data):

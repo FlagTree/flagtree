@@ -82,7 +82,7 @@ def clone_module(module):
 
 def download_module(module, required=False):
     if module is None:
-        return
+        return False
     if not os.path.exists(module.dst_path):
         succ = clone_module(module)
     else:
