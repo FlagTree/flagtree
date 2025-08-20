@@ -58,10 +58,6 @@ def estimate_matmul_time(
     dtype = A.dtype
     dtsize = A.element_size()
 
-    # flagtree backend specialization
-    from triton.runtime.driver import flagtree_backend_specialization
-    if flagtree_backend_specialization("K_isnot_divisible", K, BLOCK_K, SPLIT_K):
-        return float('inf')
     num_cta_m = cdiv(M, BLOCK_M)
     num_cta_n = cdiv(N, BLOCK_N)
     num_cta_k = SPLIT_K
@@ -106,9 +102,6 @@ def estimate_matmul_time(
         store_ms += zero_ms
 
     total_time_ms = max(compute_ms, load_ms) + store_ms
-    # flagtree backend specialization
-    from triton.runtime.driver import flagtree_backend_specialization
-    total_time_ms = flagtree_backend_specialization("get_total_time_ms", compute_ms, load_ms, store_ms) or total_time_ms
     if debug:
         print(f'Total time: {total_time_ms}ms, compute time: {compute_ms}ms, '
               f'loading time: {load_ms}ms, store time: {store_ms}ms, '
@@ -156,10 +149,7 @@ def early_config_prune(configs, named_args, **kwargs):
     pruned_configs = []
     for k, v in configs_map.items():
         BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, num_warps = k
-        # flagtree backend specialization
-        from triton.runtime.driver import flagtree_backend_specialization
-        hasattr_corex = flagtree_backend_specialization("is_hasattr_corex") or False
-        if capability[0] >= 8 and not hasattr_corex:
+        if capability[0] >= 8:
             # compute cycles (only works for ampere GPUs)
             mmas = BLOCK_M * BLOCK_N * BLOCK_K / (16 * 8 * 16)
             mma_cycles = mmas / min(4, num_warps) * 8
@@ -178,7 +168,4 @@ def early_config_prune(configs, named_args, **kwargs):
             random_config = v[0][0]
             random_config.num_stages = 2
             pruned_configs.append(random_config)
-            # flagtree backend specialization
-            from triton.runtime.driver import flagtree_backend_specialization
-            pruned_configs = flagtree_backend_specialization("pruned_configs_corex", v, capability, BLOCK_M, BLOCK_N, BLOCK_K) or pruned_configs
     return pruned_configs

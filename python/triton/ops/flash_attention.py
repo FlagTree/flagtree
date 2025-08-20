@@ -222,9 +222,6 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
             else:
                 # not work with mma v3, because M % 64 != 0
                 dq = tl.trans(tl.dot(tl.trans(k), tl.trans(ds)))
-            # flagtree backend specialization
-            from triton.runtime.driver import flagtree_backend_specialization
-            dq = flagtree_backend_specialization("sequence_parallel_mma_v3_dq", ds, k) or dq
             tl.store(DQ_block_ptr, dq.to(Q.dtype.element_ty))
 
         # increment pointers
@@ -374,10 +371,10 @@ class _attention(torch.autograd.Function):
     def forward(ctx, q, k, v, causal, sm_scale, sequence_parallel=False):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
-        BLOCK_M, BLOCK_N, num_stages = 128, 64, 1
-        # flagtree backend specialization
-        from triton.runtime.driver import flagtree_backend_specialization
-        BLOCK_M, BLOCK_N, num_stages = flagtree_backend_specialization("hardware_config", capability) or (BLOCK_M, BLOCK_N, num_stages)
+        if capability[0] < 8:
+            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
+        BLOCK_M = 128
+        BLOCK_N = 64
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
@@ -399,7 +396,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,  #
             IS_CAUSAL=causal,  #
             num_warps=num_warps,  #
-            num_stages=flagtree_backend_specialization("get_num_stages", num_stages) or 4  #
+            num_stages=4  #
         )
 
         ctx.save_for_backward(q, k, v, o, L)
@@ -415,10 +412,6 @@ class _attention(torch.autograd.Function):
         capability = torch.cuda.get_device_capability()
         MMA_V3 = capability[0] >= 9
         BLOCK = 128
-        num_warps = 8
-        # flagtree backend specialization
-        from triton.runtime.driver import flagtree_backend_specialization
-        BLOCK, num_warps = flagtree_backend_specialization("get_block_and_warps", ctx) or (BLOCK, num_warps)
 
         if is_hip():
             # Bwd pass runs out of shared memory on HIP with larger block size.
@@ -461,7 +454,7 @@ class _attention(torch.autograd.Function):
             SEQUENCE_PARALLEL=sequence_parallel,  #
             CAUSAL=ctx.causal,  #
             MMA_V3=MMA_V3,  #
-            num_warps=flagtree_backend_specialization("get_num_warps", num_warps) or 8,  #
+            num_warps=8,  #
             num_stages=1  #
         )
 
