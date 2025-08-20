@@ -1,6 +1,7 @@
 try:
     import torch
     HAS_TORCH = True
+    HAS_PADDLE = False
 except Exception:
     HAS_TORCH = False
     import paddle

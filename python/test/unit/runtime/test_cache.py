@@ -210,8 +210,6 @@ def test_annotation():
         tl.store(X, i)
 
     x = paddle.empty([1], dtype='int32').cuda() if HAS_PADDLE else torch.empty(1, dtype=torch.int32, device='cuda')
-
-    # device = int(paddle.device.get_device().split(':')[-1]) if HAS_PADDLE else torch.cuda.current_device()
     device = triton.runtime.driver.active.get_current_device()
     print(device)
     kernel[(1, )](x, 1)
@@ -233,7 +231,6 @@ def test_kernel_default_arg():
 
     x = paddle.empty([1], dtype='int32').cuda() if HAS_PADDLE else torch.empty(1, dtype=torch.int32, device='cuda')
     kernel[(1, )](x)
-    # assert x == torch.ones_like(x)
     if HAS_PADDLE:
         assert x == paddle.ones_like(x)
     else:
@@ -243,7 +240,6 @@ def test_kernel_default_arg():
     # `kernel`.  That value gets set at the time the function is declared.
     GLOBAL_DEFAULT_ARG = 2
     kernel[(1, )](x)
-    # assert x == torch.ones_like(x)
     if HAS_PADDLE:
         assert x == paddle.ones_like(x)
     else:

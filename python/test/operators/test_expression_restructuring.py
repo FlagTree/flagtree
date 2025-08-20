@@ -1,7 +1,13 @@
 import triton
 import triton.language as tl
-try: import paddle; HAS_PADDLE = True
-except: HAS_PADDLE = False; import torch; HAS_TORCH = True
+HAS_TORCH = False
+HAS_PADDLE = False
+try:
+    import torch
+    HAS_TORCH = True
+except Exception:
+    import paddle
+    HAS_PADDLE = True
 
 import pytest
 
@@ -11,15 +17,8 @@ VEC_SHAPES = [[64, 640], [32, 128], [128, 256]]
 import numpy as np
 
 def custom_rand_strided(shape, strides, dtype='float32', device='cuda', seed=0):
-    """
-    生成带指定 shape 和 strides 的随机张量，兼容 Paddle 和 PyTorch。
-    dtype: 'float32', 'float64', 'int32', 'int64' 等字符串
-    device: 'cuda' 或 'cpu'
-    """
     if HAS_PADDLE:
         paddle.seed(seed)
-        paddle.set_device('gpu:0' if device == 'cuda' else 'cpu')
-        # 计算底层存储大小
         total_size = sum((s - 1) * st for s, st in zip(shape, strides)) + 1
         storage = paddle.randn([total_size], dtype=dtype)  
         return paddle.as_strided(storage, shape=shape, stride=strides)

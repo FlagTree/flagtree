@@ -7,8 +7,14 @@ fused type convert and matmul, base on triton matmul, the different with matmul:
 """
 import pytest
 
-try: import paddle; HAS_PADDLE = True
-except: HAS_PADDLE = False; import torch; HAS_TORCH = True
+HAS_TORCH = False
+HAS_PADDLE = False
+try:
+    import torch
+    HAS_TORCH = True
+except Exception:
+    import paddle
+    HAS_PADDLE = True
 
 import triton.language as tl
 from triton import cdiv, jit

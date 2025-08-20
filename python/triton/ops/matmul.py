@@ -14,11 +14,9 @@ from .matmul_perf_model import early_config_prune, estimate_matmul_time
 if HAS_TORCH:
     _ordered_datatypes = [torch.int8, torch.float16, torch.bfloat16, torch.float32]
 else:
-    # Paddle 常用/稳定支持的数据类型优先（部分版本对 int8/bfloat16 支持不完整）
     _ordered_datatypes = [paddle.int8, paddle.float16, paddle.bfloat16, paddle.float32]
 
 def upcast_if_fp8(a):
-    # 若传入了 fp8 相关 dtype，向上转到 fp16
     if "fp8" in str(a).lower():
         return (torch.float16 if HAS_TORCH else paddle.float16)
     return a
@@ -47,7 +45,6 @@ def init_to_zero(name):
     else:
         def _hook(nargs):
             t = nargs[name]
-            # 尽量就地置零（paddle 支持切片赋值）
             t[:] = 0
         return _hook
 
@@ -267,7 +264,6 @@ else:
 
             if acc_dtype is None:
                 acc_dtype = supported_acc_dtypes[ab_dtype][0] if ab_dtype in supported_acc_dtypes else paddle.float32
-            # else: 放宽检查，避免不同框架 dtype 判等问题
 
             def to_tl_type(ty):
                 return getattr(tl, str(ty).split(".")[-1])
@@ -277,12 +273,10 @@ else:
             output_dtype_tl = to_tl_type(output_dtype)
 
             # Tensor cores support input with mixed float8 types.
-            # 这里保持与原逻辑一致
             if str(a.dtype).lower().endswith(("float8e4nv", "float8e5")) and \
                str(b.dtype).lower().endswith(("float8e4nv", "float8e5")):
                 ab_dtype_tl = None
 
-            # strides: paddle 使用 tensor.strides 属性
             a_s0, a_s1 = a.strides
             b_s0, b_s1 = b.strides
             c_s0, c_s1 = c.strides

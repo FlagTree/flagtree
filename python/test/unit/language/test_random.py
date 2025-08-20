@@ -270,14 +270,7 @@ def test_rand_limits(dtype, device):
         x = tl.load(input + idx)
         y = tl.random.uint_to_uniform_float(x)
         tl.store(output + idx, y)
-
-    # torch_dtype = getattr(torch, dtype)
-    # min_max_int = torch.tensor([
-    #     torch.iinfo(torch_dtype).min,
-    #     torch.iinfo(torch_dtype).max,
-    # ], dtype=torch_dtype, device=device)
-    # output = torch.empty(2, dtype=torch.float32, device=device)
-    
+ 
     if HAS_TORCH:
         torch_dtype = getattr(torch, dtype)
         min_max_int = torch.tensor([
@@ -291,8 +284,6 @@ def test_rand_limits(dtype, device):
             paddle.iinfo(dtype).max,
         ], dtype=dtype)
         output = paddle.zeros(2, dtype='float32')
-    
-    
     
     kernel[(1, )](min_max_int, output, 2)
 

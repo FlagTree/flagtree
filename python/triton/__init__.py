@@ -24,17 +24,16 @@ from .errors import TritonError
 from . import language
 from . import testing
 from . import tools
-
 try:
     import torch
     HAS_TORCH = True
     HAS_PADDLE = False
-    print("\033[91m🔥 Using Torch\033[0m")  # 红色火焰
+    print("\033[91m🔥 Using Torch\033[0m") 
 except Exception:
     import paddle
     HAS_TORCH = False
     HAS_PADDLE = True
-    print("\033[94m🌊 Using Paddle\033[0m")  # 蓝色水波
+    print("\033[94m🌊 Using Paddle\033[0m")
 
 __all__ = [
     "autotune",

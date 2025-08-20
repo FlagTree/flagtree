@@ -2,8 +2,14 @@ import multiprocessing
 import os
 import shutil
 
-try: import paddle; HAS_PADDLE = True
-except: HAS_PADDLE = False; import torch; HAS_TORCH = True
+HAS_TORCH = False
+HAS_PADDLE = False
+try:
+    import torch
+    HAS_TORCH = True
+except Exception:
+    import paddle
+    HAS_PADDLE = True
 
 import triton
 import triton.language as tl

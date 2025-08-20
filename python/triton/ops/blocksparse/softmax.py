@@ -1,4 +1,3 @@
-# 优先使用 PyTorch，失败则使用 PaddlePaddle
 try:
     import torch
     HAS_TORCH = True
@@ -136,7 +135,6 @@ def _blocksparse_softmax_bwd(DA, stride_zdx,  #
 
 
 if HAS_TORCH:
-    # PyTorch 实现（原逻辑）
     class _softmax(torch.autograd.Function):
 
         @staticmethod
@@ -219,12 +217,10 @@ if HAS_TORCH:
             return (da, None, None, dr, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
 
 else:
-    # PaddlePaddle 实现
     class _softmax(paddle.autograd.PyLayer):
 
         @staticmethod
         def make_lut(layout, block, device):
-            # 创建空张量
             _empty = paddle.to_tensor([], dtype='int64')
             sizes = _empty.clone()
             # sizes along rows
@@ -243,7 +239,6 @@ else:
         @staticmethod
         def forward(ctx, a, scale, rel_logits, is_causal, spdims, block, lut, maxlut, is_dense):
             if scale is not None and hasattr(scale, 'numpy'):
-                # 假设 scale 在 CPU 上
                 scale = scale.item()
             M = a.shape[0]
             grid = [spdims[0], spdims[1] * block, M]
@@ -280,7 +275,6 @@ else:
             out, lut = ctx.saved_tensor()
             # relative logits gradients
             dr = None
-            # PaddlePaddle 没有 needs_input_grad，我们假设总是需要梯度
             dr = paddle.zeros(ctx.rel_shape, dtype=ctx.rel_dtype)
             # run kernel
             M = out.shape[0]
@@ -317,6 +311,3 @@ class softmax:
         a = _softmax.apply(a, scale, rel_logits, is_causal, self.spdims, self.block, self.lut, self.maxlut,
                            self.is_dense)
         return a
-
-if __name__ == "__main__":
-    print("Testing blocksparse softmax")

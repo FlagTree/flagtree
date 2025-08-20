@@ -1,5 +1,12 @@
 from abc import ABCMeta, abstractmethod, abstractclassmethod
-
+try:
+    import torch
+    HAS_TORCH = True
+    HAS_PADDLE = False
+except Exception:
+    import paddle
+    HAS_TORCH = False
+    HAS_PADDLE = True
 
 class DriverBase(metaclass=ABCMeta):
 
@@ -18,14 +25,12 @@ class DriverBase(metaclass=ABCMeta):
 class GPUDriver(DriverBase):
 
     def __init__(self):
-        try:
-            import paddle
+        if HAS_PADDLE:
             self.get_device_capability = paddle.device.cuda.get_device_capability
             self.get_current_stream = lambda idx: paddle.device.current_stream(idx).stream_base.cuda_stream
             self.get_current_device = paddle.device.get_device
             self.set_current_device = paddle.device.set_device
-        except:
-            import torch
+        elif HAS_TORCH:
             self.get_device_capability = torch.cuda.get_device_capability
             try:
                 from torch._C import _cuda_getCurrentRawStream

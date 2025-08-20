@@ -28,11 +28,6 @@ def is_on_mi300():
     return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942')
 
 def matching_int(dtype, frame):
-    """根据 dtype 和框架返回对应整数类型
-
-    dtype: 具有 primitive_bitwidth 属性的对象
-    frame: torch 或 paddle
-    """
     width = dtype.primitive_bitwidth
     if frame.__name__ == "torch":
         if width == 8:
@@ -281,7 +276,6 @@ def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, 
         dst2 = dst2.detach().numpy()
         src = src.detach().numpy()
     if not equal:
-        print('Error!!!')
         print(src[dst != dst2][0])
         print(dst[dst != dst2][0])
         print(dst2[dst != dst2][0])
