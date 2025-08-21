@@ -22,22 +22,37 @@ else
     exit 1
 fi
 
+# handle input
+echo ""
 if [ $# -ge 1 ]; then
     input_dir="$1"
 else
+    echo "Using default input directory: $HOME/.flagtree-offline-download"
     input_dir="$HOME/.flagtree-offline-download"
 fi
 
-echo ""
 if [ ! -d "$input_dir" ]; then
-    echo "Creating default download directory $input_dir"
-    mkdir -p "$input_dir"
+    echo "Error: Cannot find input directory $input_dir"
+    exit 1
 else
-    echo "Default download directory $input_dir already exists"
+    echo "Find input directory: $input_dir"
 fi
 echo ""
 
-output_dir="$PWD"
+# handle output
+if [ $# -ge 2 ]; then
+    output_dir="$2"
+else
+    output_dir="$PWD"
+fi
+
+if [ ! -d "$output_dir" ]; then
+    echo "Creating output directory $output_dir"
+    mkdir -p "$output_dir"
+else
+    echo "Output directory $output_dir already exists"
+fi
+echo ""
 
 nvcc_file="cuda-nvcc-${nv_toolchain_version}-0.tar.bz2"
 cuobjdump_file="cuda-cuobjdump-${nv_toolchain_version}-0.tar.bz2"
@@ -110,18 +125,15 @@ echo "cd ${input_dir}"
 cd "$input_dir"
 
 echo "Compressing..."
-zip "$output_zip" "$nvcc_file" "$cuobjdump_file" "$nvdisam_file" "$cudart_file" "$cupti_file" \
+zip "$output_dir/$output_zip" "$nvcc_file" "$cuobjdump_file" "$nvdisam_file" "$cudart_file" "$cupti_file" \
     "$json_file" "$pybind11_file" "$googletest_file" "$triton_shared_file"
 
 echo "cd -"
 cd -
 
-echo "mv $input_dir/$output_zip ."
-mv $input_dir/$output_zip .
-
 echo ""
 if [ $? -eq 0 ]; then
-    echo "Offline Build dependencies are successfully compressed into $output_zip"
+    echo "Offline Build dependencies are successfully compressed into $output_dir/$output_zip"
     exit 0
 else
     echo "Error: Failed to compress offline build dependencies"
