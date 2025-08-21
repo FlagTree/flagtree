@@ -49,7 +49,7 @@ check_download() {
 if [ $# -ge 1 ]; then
     target_dir="$1"
 else
-    target_dir="~/.flagtree-offline-download"
+    target_dir="$HOME/.flagtree-offline-download"
 fi
 
 echo ""
