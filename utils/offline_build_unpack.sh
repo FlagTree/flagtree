@@ -27,7 +27,7 @@ input_dir="$PWD"
 if [ $# -ge 1 ]; then
     output_dir="$1"
 else
-    output_dir="~/.flagtree-offline-build"
+    output_dir="$HOME/.flagtree-offline-build"
 fi
 
 echo ""
