@@ -22,24 +22,45 @@ else
     exit 1
 fi
 
+zip_file="offline-packed-nv${nv_toolchain_version}-pybind${pybind11_version}.zip"
+
+# handle input
+echo ""
 if [ $# -ge 1 ]; then
     input_dir="$1"
 else
+    echo "Using default input directory: $PWD"
     input_dir="$PWD"
 fi
 
-if [ $# -ge 2 ]; then
-    output_dir="$1"
+if [ ! -d "$input_dir" ]; then
+    echo "Error: Cannot find input directory: $input_dir"
+    exit 1
 else
+    echo "Find input directory: $input_dir"
+fi
+
+if [ ! -f "${input_dir}/${zip_file}" ]; then
+    echo "Error: Cannot find $zip_file in directory: $input_dir"
+    exit 1
+else
+    echo "Find input packed .zip file: ${input_dir}/${zip_file}"
+fi
+echo ""
+
+# handle output
+if [ $# -ge 2 ]; then
+    output_dir="$2"
+else
+    echo "Using default output directory: $HOME/.flagtree-offline-build"
     output_dir="$HOME/.flagtree-offline-build"
 fi
 
-echo ""
 if [ ! -d "$output_dir" ]; then
-    echo "Creating default download directory $output_dir"
+    echo "Creating output directory $output_dir"
     mkdir -p "$output_dir"
 else
-    echo "Default download directory $output_dir already exists"
+    echo "Output directory $output_dir already exists"
 fi
 echo ""
 
@@ -53,16 +74,13 @@ pybind11_file="${output_dir}/pybind11-${pybind11_version}.tar.gz"
 googletest_file="${output_dir}/googletest-release-1.12.1.zip"
 triton_shared_file="${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
-zip_file="offline-packed-nv${nv_toolchain_version}-pybind${pybind11_version}.zip"
+
 
 if [ ! -d "$output_dir" ]; then
     mkdir "$output_dir"
 fi
 
-if [ ! -f "${input_dir}/${zip_file}" ]; then
-    echo "Cannot find $zip_file in directory: $input_dir"
-    exit 1
-fi
+
 
 echo "Unpacking $input_dir/$zip_file into ${output_dir}..."
 unzip "${input_dir}/${zip_file}" -d ${output_dir}
