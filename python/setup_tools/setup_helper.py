@@ -18,7 +18,7 @@ ext_sourcedir = "triton/_C/"
 flagtree_backend = os.getenv("FLAGTREE_BACKEND", "").lower()
 flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend", "cambricon": "mlu"}
-language_extra_backends = ['xpu', 'musa', "cambricon"]
+language_extra_backends = ['xpu', 'mthreads', "cambricon"]
 activated_module = utils.activate(flagtree_backend)
 
 set_llvm_env = lambda path: set_env({
