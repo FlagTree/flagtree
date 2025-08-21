@@ -84,7 +84,20 @@ def download_module(module, required=False):
     if module is None:
         return False
     if not os.path.exists(module.dst_path):
-        succ = clone_module(module)
+        # Try to copy from offline build dir if offline build is enabled.
+        module_offline_handler = OfflineBuildManager()
+        if module_offline_handler.is_offline:
+            src_path = os.path.join(module_offline_handler.offline_build_dir, module.name)
+            succ = os.path.exists(src_path)
+            if succ:
+                print(f"[INFO] Offline Build: Found {module.name} at {src_path}")
+                module_offline_handler.src = os.path.join(module_offline_handler.offline_build_dir, module.name)
+                module_offline_handler.copy_to_flagtree_project(dst_path=module.dst_path)
+            else:
+                print(f"[INFO] Offline Build: {module.name} is not found in offline build directory.")
+        else:
+            # No offline build, clone from online source
+            succ = clone_module(module)
     else:
         print(f'Found third_party {module.name} at {module.dst_path}\n')
         return True
