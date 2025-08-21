@@ -90,6 +90,6 @@ def test_accruacy_kernel(vec_shape):
     expression_restructuring_function_test[grid](arg_0, arg_1, arg_2, arg_3, triton_result, y)
     result = tensor_equivalent(arg_0, arg_1, arg_2, arg_3)
     if HAS_PADDLE:
-        paddle.allclose(triton_result, result)
+        assert paddle.allclose(triton_result, result)
     else:
         torch.testing.assert_close(triton_result, result)

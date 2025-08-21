@@ -198,6 +198,6 @@ def test_iv_dependent_matmul(type, device='cuda'):
         num_stages=num_stages)
     
     if HAS_PADDLE:
-        paddle.allclose(torch_output, triton_output, rtol=1e-2, atol=1e-2)
+        assert paddle.allclose(torch_output, triton_output, rtol=1e-2, atol=1e-2)
     else:
         torch.testing.assert_close(torch_output, triton_output, rtol=1e-2, atol=1e-2)

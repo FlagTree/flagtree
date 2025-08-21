@@ -123,6 +123,6 @@ def test_cast_matmul(M, K, N, w_dtype, x_dtype, out_dtype):
         BLOCK_K=BLOCK_K
     )
     if HAS_PADDLE:
-        paddle.allclose(out_paddle, out_triton, atol=0.3, rtol=0.01)
+        assert paddle.allclose(out_paddle, out_triton, atol=0.3, rtol=0.01)
     else:
         torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)

@@ -505,8 +505,8 @@ def test_softmax(BLOCK, WIDTH, is_dense, device, Z=2, H=2, is_causal=True, scale
         torch.testing.assert_close(out_tri, out_ref, equal_nan=True)
         torch.testing.assert_close(da_tri, da_ref, equal_nan=True)
     else:
-        paddle.allclose(out_tri, out_ref, equal_nan=True)
-        paddle.allclose(da_tri, da_ref, equal_nan=True)
+        assert paddle.allclose(out_tri, out_ref, equal_nan=True)
+        assert paddle.allclose(da_tri, da_ref, equal_nan=True)
 
 
 @pytest.mark.parametrize("block", [64, 16, 32])
@@ -627,12 +627,12 @@ def test_attention_fwd_bwd(
         for g1, g2 in zip(grads, torch_grads):
             torch.testing.assert_close(g1, g2, **tol)
     else:
-        paddle.allclose(loss, paddle_loss, atol=1e-3, rtol=0.)
+        assert paddle.allclose(loss, paddle_loss, atol=1e-3, rtol=0.)
         
         # Bigger tolerance for AMD MI200 devices.
         tol = {'atol': 1e-3, 'rtol': 0} if is_hip_mi200() else {}
         for g1, g2 in zip(grads, paddle_grads):
-            paddle.allclose(g1, g2, **tol)
+            assert paddle.allclose(g1, g2, **tol)
 
 
 @pytest.mark.parametrize("block", [16, 32, 64])

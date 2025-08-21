@@ -129,10 +129,10 @@ def test_op(Z, H, N_CTX, D_HEAD, dtype, causal, seq_par, device):
             x_flat = paddle.flatten(x)
             return paddle.nn.functional.normalize(x_flat, axis=0).astype(paddle.float64)
 
-        paddle.allclose(normalize(ref_out), normalize(tri_out), atol=atol, rtol=0.)
-        paddle.allclose(normalize(ref_dv), normalize(tri_dv), atol=atol, rtol=0.)
-        paddle.allclose(normalize(ref_dk), normalize(tri_dk), atol=atol, rtol=0.)
-        paddle.allclose(normalize(ref_dq), normalize(tri_dq), atol=atol, rtol=0.)
+        assert paddle.allclose(normalize(ref_out), normalize(tri_out), atol=atol, rtol=0.)
+        assert paddle.allclose(normalize(ref_dv), normalize(tri_dv), atol=atol, rtol=0.)
+        assert paddle.allclose(normalize(ref_dk), normalize(tri_dk), atol=atol, rtol=0.)
+        assert paddle.allclose(normalize(ref_dq), normalize(tri_dq), atol=atol, rtol=0.)
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func

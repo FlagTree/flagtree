@@ -133,7 +133,7 @@ def test_print(func: str, data_type: str):
            else:
                 x_fp64 = x.astype('float64')
                 y_fp64 = y.astype('float64')
-                paddle.allclose(y_fp64, x_fp64) #not supported int8, cast all to float64
+                assert paddle.allclose(y_fp64, x_fp64) #not supported int8, cast all to float64
                 del x_fp64, y_fp64, x, y
 
 

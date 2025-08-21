@@ -71,7 +71,7 @@ def test_add(SIZE, BLOCK_SIZE, dtype_str):
         assert_close(output, output_ref, rtol=1e-2, atol=1e-3, check_dtype=False)
     else:
         paddle.set_printoptions()
-        paddle.allclose(output, output_ref, rtol=1e-2, atol=1e-3)
+        assert paddle.allclose(output, output_ref, rtol=1e-2, atol=1e-3)
 
 
 @triton.jit
@@ -113,4 +113,4 @@ def test_load_reduce(BLOCK_M, BLOCK_N, dtype_str):
 
         golden = x.max(axis=1)
         paddle.set_printoptions()
-        paddle.allclose(y, golden, rtol=1e-2, atol=1e-3)
+        assert paddle.allclose(y, golden, rtol=1e-2, atol=1e-3)
