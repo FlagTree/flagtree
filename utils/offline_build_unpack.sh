@@ -22,9 +22,13 @@ else
     exit 1
 fi
 
-input_dir="$PWD"
-
 if [ $# -ge 1 ]; then
+    input_dir="$1"
+else
+    input_dir="$PWD"
+fi
+
+if [ $# -ge 2 ]; then
     output_dir="$1"
 else
     output_dir="$HOME/.flagtree-offline-build"
@@ -60,7 +64,7 @@ if [ ! -f "${input_dir}/${zip_file}" ]; then
     exit 1
 fi
 
-echo "Unpacking $zip_file into ${output_dir}..."
+echo "Unpacking $input_dir/$zip_file into ${output_dir}..."
 unzip "${input_dir}/${zip_file}" -d ${output_dir}
 
 echo "Creating directory ${output_dir}/nvidia..."
@@ -134,7 +138,7 @@ echo "Delete $pybind11_file"
 rm $pybind11_file
 echo "Delete $googletest_file"
 rm $googletest_file
-if [ ! -f "${triton_shared_file}" ]; then
+if [ -f "${triton_shared_file}" ]; then
     echo "Delete $triton_shared_file"
-    rm $$triton_shared_file
+    rm $triton_shared_file
 fi
