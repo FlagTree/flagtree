@@ -96,9 +96,11 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
         submoduel = utils.flagtree_submoduels[name]
         succ = utils.download_module(submoduel, required)
-        if succ:
-            if callable(hock):
-                hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel)
+        if not succ:
+            print('[INFO] Download/Copy triton_shared failed. Skip appending triton_shared as default backend')
+        if callable(hock) and succ:
+            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
+                 default_backends=default_backends)
 
 
 def configure_cambricon_packages_and_data(packages, package_dir, package_data):

@@ -132,9 +132,9 @@ echo "Extracting $googletest_file into ${output_dir}/googletest-release-1.12.1 .
 unzip $googletest_file -d "${output_dir}" > /dev/null
 
 if [ -f "${triton_shared_file}" ]; then
-    echo "Extracting $triton_shared_file into ${output_dir}/triton-shared ..."
-    unzip $triton_shared_file -d "${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33" > /dev/null
-    mv ${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33 ${output_dir}/triton-shared
+    echo "Extracting $triton_shared_file into ${output_dir}/triton_shared ..."
+    unzip $triton_shared_file -d "${output_dir}" > /dev/null
+    mv ${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33 ${output_dir}/triton_shared
 else
     echo "Warning: File $triton_shared_file does not exist. This file is optional, please check if you need it."
 fi
@@ -160,3 +160,5 @@ if [ -f "${triton_shared_file}" ]; then
     echo "Delete $triton_shared_file"
     rm $triton_shared_file
 fi
+echo "Delete useless file: ${output_dir}/nvidia/cudart/lib/libcudart.so"
+rm ${output_dir}/nvidia/cudart/lib/libcudart.so
