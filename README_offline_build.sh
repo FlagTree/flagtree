@@ -36,7 +36,7 @@ case "$arch" in
 esac
 
 echo ""
-echo "This is a guide for building FlagTree in an offline environment."
+echo "This is a guide for building FlagTree with default backend in an offline environment."
 echo ""
 echo ">>>>> First, download the dependencies according to the following methods:"
 echo "You can choose two download methods:"
@@ -62,7 +62,7 @@ echo "      (TRITON_SHARED is optional):"
 echo "      TRITON_SHARED should be downloaded from https://github.com/microsoft/triton-shared/archive/380b87122c88af131530903a702d5318ec59bb33.zip"
 echo "          and stored as: <YOUR_DOWNLOAD_DIR>/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 echo ""
-echo "  2. Use the script to download. The default to store the downloaded files is $HOME/.flagtree-offline-download,"
+echo "  2. Use the script to download."
 echo "     you can specify the directory the store the downloaded files into: (default: $HOME/.flagtree-offline-download)"
 echo "       # Default"
 echo "          $ sh utils/offline_build_download.sh"
