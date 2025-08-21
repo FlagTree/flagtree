@@ -25,7 +25,7 @@ fi
 if [ $# -ge 1 ]; then
     input_dir="$1"
 else
-    input_dir="~/.flagtree-offline-download"
+    input_dir="$HOME/.flagtree-offline-download"
 fi
 
 echo ""
@@ -85,20 +85,25 @@ if [ ! -f "$json_file" ]; then
     echo "Error: File $json_file does not exist, run README_offline_build.sh for more information"
     exit 1
 fi
+echo "Find ${json_file}"
 
 if [ ! -f "$pybind11_file" ]; then
     echo "Error: File $pybind11_file does not exist, run README_offline_build.sh for more information"
     exit 1
 fi
+echo "Find ${pybind11_file}"
 
 if [ ! -f "$googletest_file" ]; then
     echo "Error: File $googletest_file does not exist, run README_offline_build.sh for more information"
     exit 1
 fi
+echo "Find ${googletest_file}"
 
 if [ ! -f "$triton_shared_file" ]; then
     echo "Warning: File $triton_shared_file does not exist. This file is optional, please check if you need it."
     triton_shared_file=""
+else
+    echo "Find ${triton_shared_file}"
 fi
 
 echo "Compressing..."
