@@ -54,10 +54,10 @@ fi
 
 echo ""
 if [ ! -d "$target_dir" ]; then
-    echo "Creating default download directory $target_dir"
+    echo "Creating download output directory $target_dir"
     mkdir -p "$target_dir"
 else
-    echo "Default download directory $target_dir already exists"
+    echo "Download output directory $target_dir already exists"
 fi
 echo ""
 
