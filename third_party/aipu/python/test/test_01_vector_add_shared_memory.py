@@ -2,15 +2,17 @@
 Vector Addition
 ===============
 
-In this tutorial, you will write a simple vector addition using Triton.
+This test case is to test the aipu using shared memory:
 
-In doing so, you will learn about:
+* Through the HINT (# @hint: shared_memory) to use the shared_memory
 
-* The basic programming model of Triton.
+* The size of Shared_memory is 256KB and when the data type is f32, it can store 64KB of data.
+  For this example, there are 2 load operations, and 4 tecs access blockSize * 2 * 4 data in total.
+  When the blockSize is 8192 (8KB), a total of 64KB data is accessed, which is the boundary value.
+  If the blockSize exceeds this value, the dma operation will be out of bounds.
 
-* The `triton.jit` decorator, which is used to define Triton kernels.
-
-* The best practices for validating and benchmarking your custom ops against native reference implementations.
+* When the block size exceeds the boundary value,
+  the aipu backend needs to identify it and report an error.
 
 """
 
@@ -68,10 +70,15 @@ def add(x: torch.Tensor, y: torch.Tensor):
     # In this case, we use a 1D grid where the size is the number of blocks:
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
     # NOTE:
-    #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
-    #  - `triton.jit`'ed functions can be indexed with a launch grid to obtain a callable GPU kernel.
-    #  - Don't forget to pass meta-parameters as keywords arguments.
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=256)
+    # Here are five sets of tests that currently get stuck when blockSize is greater than 8192;
+    # Todo: When the blockSize is greater than 8192, codeGen needs to recognize it and report an error.
+
+    # add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=8192)
+    # add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=16384)
+    # add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=32768)
+    # add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=65536)
+
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output.cpu()
@@ -83,7 +90,8 @@ def add(x: torch.Tensor, y: torch.Tensor):
 
 def test_vector_add():
     torch.manual_seed(0)
-    size = 256
+    # size = 256
+    size = 100000
     x = torch.rand(size, device=DEVICE)
     y = torch.rand(size, device=DEVICE)
     output_torch = x.cpu() + y.cpu()
