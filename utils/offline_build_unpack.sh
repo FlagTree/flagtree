@@ -55,13 +55,13 @@ if [ ! -d "$output_dir" ]; then
     mkdir "$output_dir"
 fi
 
-if [! -f "${input_dir}/${zip_file}" ]; then
+if [ ! -f "${input_dir}/${zip_file}" ]; then
     echo "Cannot find $zip_file in directory: $input_dir"
     exit 1
 fi
 
 echo "Unpacking $zip_file into ${output_dir}..."
-zip "${input_dir}/${zip_file}" -d ${output_dir}
+unzip "${input_dir}/${zip_file}" -d ${output_dir}
 
 echo "Creating directory ${output_dir}/nvidia..."
 mkdir "${output_dir}/nvidia"
@@ -109,7 +109,7 @@ tar -zxf $pybind11_file -C "${output_dir}/pybind11"
 echo "Extracting $googletest_file into ${output_dir}/googletest-release-1.12.1 ..."
 unzip $googletest_file -d "${output_dir}" > /dev/null
 
-if [! -f "${triton_shared_file}" ]; then
+if [ -f "${triton_shared_file}" ]; then
     echo "Extracting $triton_shared_file into ${output_dir}/triton-shared ..."
     unzip $triton_shared_file -d "${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33" > /dev/null
     mv ${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33 ${output_dir}/triton-shared
@@ -117,14 +117,13 @@ else
     echo "Warning: File $triton_shared_file does not exist. This file is optional, please check if you need it."
 fi
 
-
-
+echo ""
 echo "Delete $nvcc_file"
 rm $nvcc_file
 echo "Delete $cuobjdump_file"
 rm $cuobjdump_file
-echo "Delete $nvdisasm_file"
-rm $nvdisasm_file
+echo "Delete $nvdisam_file"
+rm $nvdisam_file
 echo "Delete $cudart_file"
 rm $cudart_file
 echo "Delete $cupti_file"
@@ -135,7 +134,7 @@ echo "Delete $pybind11_file"
 rm $pybind11_file
 echo "Delete $googletest_file"
 rm $googletest_file
-if [! -f "${triton_shared_file}" ]; then
+if [ ! -f "${triton_shared_file}" ]; then
     echo "Delete $triton_shared_file"
     rm $$triton_shared_file
 fi
