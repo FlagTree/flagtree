@@ -101,7 +101,7 @@ def download_module(module, required=False):
             if succ:
                 print(f"[INFO] Offline Build: Found {module.name} at {src_path}")
                 module_offline_handler.src = os.path.join(module_offline_handler.offline_build_dir, module.name)
-                module_offline_handler.copy_to_flagtree_project(dst_path=module.dst_path)
+                module_offline_handler.copy_to_flagtree_project({"dst_path": module.dst_path})
             else:
                 print(f"[INFO] Offline Build: {module.name} is not found in offline build directory.")
         else:
@@ -113,7 +113,10 @@ def download_module(module, required=False):
     if not succ and required:
         raise RuntimeError(
             f"[ERROR]: Failed to download {module.name} from {module.url}, It's most likely the network!")
+    if not succ and not required:
+        return False
     remove_triton_in_modules(module)
+    return True
 
 
 def get_triton_cache_path():
