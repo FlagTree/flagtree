@@ -1,6 +1,7 @@
 import ast
 from triton.runtime.jit import JITFunction
 
+
 def get_disable_sme():
     import torch
     import os
@@ -64,6 +65,7 @@ def is_corex_param(x, enable_sme):
         elif isinstance(x, int):
             return True
     return False
+
 
 def get_corex_param(arg):
     import torch

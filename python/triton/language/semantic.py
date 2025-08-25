@@ -1171,7 +1171,8 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
         raise ValueError("atomic_" + op + " does not support fp16")
     # flagtree backend specialization
     from triton.runtime.driver import flagtree_backend_specialization
-    if element_ty in [tl.int1, tl.int8, tl.int16] + ([] if flagtree_backend_specialization("is_atomic_support_bf16") else [tl.bfloat16]):
+    if element_ty in [tl.int1, tl.int8, tl.int16
+                      ] + ([] if flagtree_backend_specialization("is_atomic_support_bf16") else [tl.bfloat16]):
         raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask is not None:

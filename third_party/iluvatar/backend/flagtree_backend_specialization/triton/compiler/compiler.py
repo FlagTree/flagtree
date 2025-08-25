@@ -3,20 +3,20 @@ def init_AttrsDescriptor_corexLoad(corexLoad):
 
 
 def ext_AttrsDescriptor_to_dict(corexLoad):
-    return {
-            'corexLoad': list(corexLoad.items())
-        }
+    return {'corexLoad': list(corexLoad.items())}
 
 
 def ext_AttrsDescriptor_from_dict(data):
     from triton.compiler.compiler import AttrsDescriptor
     return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
-                            equal_to_1=set(data.get('equal_to_1', [])), corexLoad=dict(data.get('corexLoad', [])))
+                           equal_to_1=set(data.get('equal_to_1', [])), corexLoad=dict(data.get('corexLoad', [])))
 
 
 def ext_AttrsDescriptor_hash_key(attrsDescriptor):
-    key = str(
-        [sorted(x) if isinstance(x, tuple) or isinstance(x, set) else x.values() for x in attrsDescriptor.__dict__.values()])
+    key = str([
+        sorted(x) if isinstance(x, tuple) or isinstance(x, set) else x.values()
+        for x in attrsDescriptor.__dict__.values()
+    ])
     return key
 
 

@@ -393,6 +393,7 @@ class CudaDriver(GPUDriver):
     def __init__(self):
         self._utils = None
         self.launcher_cls = CudaLauncher
+        # flagtree backend specialization
         from triton.backends.iluvatar import flagtree_backend_specialization
         self.flagtree_backend_specialization = flagtree_backend_specialization
         super().__init__()

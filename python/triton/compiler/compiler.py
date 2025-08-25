@@ -260,7 +260,7 @@ def compile(src, target=None, options=None):
     # flagtree backend specialization
     from triton.runtime.driver import flagtree_backend_specialization
     flagtree_backend_specialization("set_src_fn_hash_cache_file", ir_source, src, hash)
-    
+
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
     # core changes to make it easier to track kernels by hash.
@@ -402,7 +402,7 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, *n_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
-        
+
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
         flagtree_backend_specialization("handle_n_threads_in_CompiledKernel_init", self, *n_threads)

@@ -648,7 +648,8 @@ class JITFunction(KernelInterface[T]):
             options = backend.parse_options(kwargs)
             # flagtree backend specialization
             from triton.runtime.driver import flagtree_backend_specialization
-            options = flagtree_backend_specialization("get_JITFunction_options", self, target, backend, options, bound_args) or options
+            options = flagtree_backend_specialization("get_JITFunction_options", self, target, backend, options,
+                                                      bound_args) or options
 
             # deprecated arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"

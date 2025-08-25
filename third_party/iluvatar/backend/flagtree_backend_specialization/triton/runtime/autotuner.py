@@ -123,8 +123,8 @@ def handle_only_save_best_config_cache(autotuner, key, *args, **kwargs):
                 for i in range(len(ck_list)):
                     for tmp_key in check_key[i]:
                         if ck_list[i] != tmp_key:
-                            del_cache_file = os.path.join(
-                                os.environ.get('TRITON_CACHE_DIR', default_cache_dir()), tmp_key)
+                            del_cache_file = os.path.join(os.environ.get('TRITON_CACHE_DIR', default_cache_dir()),
+                                                          tmp_key)
                             import shutil
                             shutil.rmtree(del_cache_file, ignore_errors=True)
             autotuner.cache_fn_map.clear()
