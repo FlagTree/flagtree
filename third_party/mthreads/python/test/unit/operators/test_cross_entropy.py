@@ -12,6 +12,10 @@ import triton.ops
     for dtype in ['float16', 'float32']
     for mode in ['forward', 'backward']
 ])
+@pytest.mark.skip(
+    reason=
+    "Torch_musa currently has a bug with cross_entropy when reduction='none' is used, enable this test case when it's fixed.",
+)
 def test_op(M, N, dtype, mode, device):
     dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16, 'float32': torch.float32}[dtype]
     # create inputs

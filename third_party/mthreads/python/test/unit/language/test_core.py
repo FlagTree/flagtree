@@ -3520,7 +3520,15 @@ def test_dot_mulbroadcasted(in_dtype, device):
 @pytest.mark.parametrize("dtype_str", int_dtypes + uint_dtypes + float_dtypes + ['bfloat16'])
 @pytest.mark.parametrize("shape", [(), (1, ), (128, )])
 def test_full(dtype_str, shape, device):
-    if dtype_str in uint_dtypes and not hasattr(torch, dtype_str):
+
+    def is_type_available(dtype_str):
+        try:
+            tensor = torch.zeros((1, ), dtype=getattr(torch, dtype_str), device=device)
+            return True
+        except:
+            return False
+
+    if dtype_str in uint_dtypes and not is_type_available(dtype_str):
         # PyTorch only has unsigned 8, but not 16, 32, or 64
         dtype = getattr(torch, dtype_str[1:])  # uintx -> intx
     else:

@@ -135,7 +135,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       &max_shared, MU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
   if (shared > max_shared) {
-    PyErr_SetString(PyExc_RuntimeError, "Requested shared memory exceeds device limit");
+    PyErr_SetString(PyExc_RuntimeError,
+                    "Requested shared memory exceeds device limit");
     return NULL;
   }
   Py_END_ALLOW_THREADS;
