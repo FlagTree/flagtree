@@ -51,7 +51,7 @@ class AttrsDescriptor:
                                equal_to_1=set(data.get('equal_to_1', [])))
 
     def hash(self):
-        key = str([sorted(x) for x in self.__dict__.values()])
+        key = str([sorted(x) for x in self.__dict__.values() if x is not None])
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
         key = flagtree_backend_specialization("ext_AttrsDescriptor_hash_key", self) or key

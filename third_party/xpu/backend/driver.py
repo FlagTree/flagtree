@@ -384,9 +384,13 @@ class XPULauncher(object):
 class XPUDriver(GPUDriver):
 
     def __init__(self):
-        self.utils = XPUUtils()
+        # self.utils = XPUUtils()
         self.launcher_cls = XPULauncher
         super().__init__()
+
+    @property
+    def utils(self):
+        return XPUUtils()
 
     @staticmethod
     def is_active():
