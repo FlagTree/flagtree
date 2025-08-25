@@ -317,9 +317,13 @@ class MacaLauncher(object):
 class MacaDriver(GPUDriver):
 
     def __init__(self):
-        self.utils = MacaUtils()  # TODO: make static
+        # self.utils = MacaUtils()  # TODO: make static
         self.launcher_cls = MacaLauncher
         super().__init__()
+
+    @property
+    def utils(self):
+        return MacaUtils()
 
     def get_current_target(self):
         device = self.get_current_device()
