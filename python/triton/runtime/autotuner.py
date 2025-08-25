@@ -135,7 +135,7 @@ class Autotuner(KernelInterface):
                 return bench_res
             rett = do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except (OutOfResources, CompileTimeAssertionFailure):
-            bench_results = float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
+            rett = float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
         flagtree_backend_specialization("ext_Autotuner_bench", self)
