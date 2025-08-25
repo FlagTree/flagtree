@@ -1,9 +1,2 @@
-def language_extra_cuda_get_all():
-    __all__ = [
-                "libdevice",
-                #"globaltimer",
-                "num_threads", "num_warps",
-                #"smid",
-                "convert_custom_float8_sm70", "convert_custom_float8_sm80"
-            ]
-    return __all__
+def language_extra_cuda_modify_all(all_array):
+    return [a for a in all_array if a not in {"globaltimer", "smid"}]

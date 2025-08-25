@@ -120,7 +120,7 @@ class FileCacheManager(CacheManager):
         temp_path = f"{filepath}.tmp.pid_{pid}_{rnd_id}"
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        temp_path = flagtree_backend_specialization("get_temp_path", self, pid, rnd_id, filename) or temp_path
+        temp_path = flagtree_backend_specialization("get_temp_path_in_FileCacheManager_put", self, pid, rnd_id, filename) or temp_path
         mode = "wb" if binary else "w"
         with open(temp_path, mode) as f:
             f.write(data)
@@ -129,7 +129,7 @@ class FileCacheManager(CacheManager):
         os.replace(temp_path, filepath)
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        flagtree_backend_specialization("remove_temp_dir", self, pid, rnd_id)
+        flagtree_backend_specialization("remove_temp_dir_in_FileCacheManager_put", self, pid, rnd_id)
         return filepath
 
 

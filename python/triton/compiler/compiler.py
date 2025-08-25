@@ -31,29 +31,30 @@ class AttrsDescriptor:
             self.equal_to_1 = set()
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        self.corexLoad = flagtree_backend_specialization("init_corexLoad", self.corexLoad)
+        self.corexLoad = flagtree_backend_specialization("init_AttrsDescriptor_corexLoad", self.corexLoad)
 
     def to_dict(self):
         dict = {'divisible_by_16': list(self.divisible_by_16), 'equal_to_1': list(self.equal_to_1)}
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        dict = flagtree_backend_specialization("to_dict_corexLoad", self.divisible_by_16, self.equal_to_1, self.corexLoad) or dict
+        dict.update(flagtree_backend_specialization("ext_AttrsDescriptor_to_dict", self.corexLoad) or {})
         return dict
 
     @staticmethod
     def from_dict(data):
-        attrsDescriptor = AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
-                               equal_to_1=set(data.get('equal_to_1', [])))
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        attrsDescriptor = flagtree_backend_specialization("from_dict_corexLoad", data) or attrsDescriptor
-        return attrsDescriptor
+        ret = flagtree_backend_specialization("ext_AttrsDescriptor_from_dict", data)
+        if ret is not None:
+            return ret
+        return AttrsDescriptor(divisible_by_16=set(data.get('divisible_by_16', [])),
+                               equal_to_1=set(data.get('equal_to_1', [])))
 
     def hash(self):
         key = str([sorted(x) for x in self.__dict__.values()])
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        key = flagtree_backend_specialization("hash_AttrsDescriptor", self) or key
+        key = flagtree_backend_specialization("ext_AttrsDescriptor_hash_key", self) or key
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -258,7 +259,7 @@ def compile(src, target=None, options=None):
 
     # flagtree backend specialization
     from triton.runtime.driver import flagtree_backend_specialization
-    flagtree_backend_specialization("src_fn_hash_cache_file", ir_source, src, hash)
+    flagtree_backend_specialization("set_src_fn_hash_cache_file", ir_source, src, hash)
     
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
@@ -318,7 +319,7 @@ def compile(src, target=None, options=None):
 
     # flagtree backend specialization
     from triton.runtime.driver import flagtree_backend_specialization
-    flagtree_backend_specialization("src_fn_so_path", ir_source, src)
+    flagtree_backend_specialization("set_src_fn_so_path", ir_source, src)
 
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
@@ -404,7 +405,7 @@ class CompiledKernel:
         
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        flagtree_backend_specialization("init_handles_n_threads", self, *n_threads)
+        flagtree_backend_specialization("handle_n_threads_in_CompiledKernel_init", self, *n_threads)
 
     def __getattribute__(self, name):
         if name == 'run':

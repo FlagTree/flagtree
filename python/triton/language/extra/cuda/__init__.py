@@ -9,4 +9,4 @@ __all__ = [
 
 # flagtree backend specialization
 from triton.runtime.driver import flagtree_backend_specialization
-__all__ = flagtree_backend_specialization("language_extra_cuda_get_all") or __all__
+__all__ = flagtree_backend_specialization("language_extra_cuda_modify_all", __all__) or __all__

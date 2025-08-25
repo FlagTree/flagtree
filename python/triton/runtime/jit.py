@@ -484,11 +484,10 @@ class JITFunction(KernelInterface[T]):
         if hasattr(arg, "data_ptr"):
             return arg.data_ptr() % JITFunction.divisibility == 0
         elif isinstance(arg, int):
-            result = (arg % 16 == 0, arg == 1)
+            rett = (arg % 16 == 0, arg == 1)
             # flagtree backend specialization
             from triton.runtime.driver import flagtree_backend_specialization
-            result = flagtree_backend_specialization("add_is_divisibility_8", arg) or result
-            return result
+            return flagtree_backend_specialization("ext_JITFunction_spec_of", arg) or rett
         return (arg is None, )
 
     def _get_config(self, *args):
@@ -516,10 +515,12 @@ class JITFunction(KernelInterface[T]):
         object = AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1))
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        object = flagtree_backend_specialization("add_corex_param", self, divisible_by_16, equal_to_1, *args) or object
+        ret = flagtree_backend_specialization("ext_JITFunction_get_config", self, divisible_by_16, equal_to_1, *args)
+        if ret:
+            return ret
         # folded equal_to_1 and None
         # TODO: method to collect all folded args
-        return object
+        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1))
         # return _triton.code_gen.instance_descriptor(divisible_by_16,
         # equal_to_1)
 
@@ -632,13 +633,13 @@ class JITFunction(KernelInterface[T]):
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        key = flagtree_backend_specialization("get_JITFunction_key", self, bound_args, sig_and_spec, constexpr_vals, \
+        key = flagtree_backend_specialization("get_JITFunction_key", self, bound_args, sig_and_spec, constexpr_vals,
                                               excess_kwargs, *args, **kwargs) or key
         kernel = self.cache[device].get(key, None)
 
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        flagtree_backend_specialization("is_support_cpu", *args)
+        flagtree_backend_specialization("is_JITFunction_support_cpu", *args)
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
@@ -647,7 +648,7 @@ class JITFunction(KernelInterface[T]):
             options = backend.parse_options(kwargs)
             # flagtree backend specialization
             from triton.runtime.driver import flagtree_backend_specialization
-            options = flagtree_backend_specialization("get_JITFunction_options", self, bound_args, **kwargs) or options
+            options = flagtree_backend_specialization("get_JITFunction_options", self, target, backend, options, bound_args) or options
 
             # deprecated arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
@@ -772,9 +773,8 @@ class JITFunction(KernelInterface[T]):
         self.__globals__ = fn.__globals__
         self.__module__ = fn.__module__
         # flagtree backend specialization
-        # use to record fn cache files
         from triton.runtime.driver import flagtree_backend_specialization
-        flagtree_backend_specialization("record_fn_cache_files", self)
+        flagtree_backend_specialization("ext_JITFunction_init", self)
 
     @property
     def cache_key(self):

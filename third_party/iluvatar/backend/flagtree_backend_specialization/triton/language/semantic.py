@@ -1,16 +1,12 @@
-def cv_cache_modifier(cache_modifier):
+def ext_str_to_load_cache_modifier(cache_modifier):
     from triton._C.libtriton import ir
     if cache_modifier == ".cv":
         return ir.CACHE_MODIFIER.CV
     return None
 
 
-def element_ty_is_bf16(element_ty):
-    from triton.language import core as tl
-    if element_ty in [tl.bfloat16]:
-        return True
-    else:
-        return False
+def is_atomic_support_bf16():
+    return True
 
 
 def atomin_add_int64(sca_ty, builder, val, ptr, mask, sem, scope):

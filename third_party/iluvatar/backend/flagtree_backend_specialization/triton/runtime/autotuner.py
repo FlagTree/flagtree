@@ -1,6 +1,45 @@
-def add_Autotuner_cache_fn_map(autotuner):
+def add_Autotuner_attributes(autotuner):
     # cache_fn_map fmt: {"fn_cache_key: [hash_cache_file_0, hash_cache_file_1, ...], [so_path_0, so_path_1, ...]]"}
     autotuner.cache_fn_map = dict()
+
+
+def get_jit_func(autotuner):
+    if hasattr(autotuner.fn, "cache_key"):
+        # for autotune + jit
+        return autotuner.fn
+    elif hasattr(autotuner.fn.fn, "cache_key"):
+        # for autotune + heuristics + jit
+        return autotuner.fn.fn
+    else:
+        msg = f'Current {autotuner.fn} or {autotuner.fn.fn} has no attribute cache_key.'
+        raise RuntimeError(msg)
+
+
+def ext_Autotuner_bench(autotuner):
+    cache_key = str(get_jit_func(autotuner).cache_key)
+    check_key = autotuner.cache_fn_map.get(str(cache_key), None)
+    if not check_key:
+        autotuner.cache_fn_map.setdefault(cache_key, [[], []])
+    hash_cache_file = str(get_jit_func(autotuner).hash_cache_file)
+    so_path = ''
+    if get_jit_func(autotuner).so_path:
+        so_path = get_jit_func(autotuner).so_path.split('/')[-2]
+    autotuner.cache_fn_map[cache_key][0].append(hash_cache_file)
+    autotuner.cache_fn_map[cache_key][1].append(so_path)
+
+
+def ext_Autotuner_key(autotuner, _args, *args):
+    key = [_args[i] for i in autotuner.key_idx]
+    divisibility = 16
+    for arg in args:
+        if hasattr(arg, "data_ptr"):
+            key.append(arg.dtype)
+            key.append(arg.data_ptr() % divisibility == 0)
+        elif isinstance(arg, int):
+            key.append(arg)
+    key = tuple(key)
+    return key
+
 
 def build_best_config_hash(args_names, key):
     import os
@@ -49,45 +88,7 @@ def save_best_config(cfg, args_names, key):
             }))
 
 
-def get_jit_func(autotuner):
-    if hasattr(autotuner.fn, "cache_key"):
-        # for autotune + jit
-        return autotuner.fn
-    elif hasattr(autotuner.fn.fn, "cache_key"):
-        # for autotune + heuristics + jit
-        return autotuner.fn.fn
-    else:
-        msg = f'Current {autotuner.fn} or {autotuner.fn.fn} has no attribute cache_key.'
-        raise RuntimeError(msg)
-
-
-def get_bench_result(autotuner):
-    cache_key = str(get_jit_func(autotuner).cache_key)
-    check_key = autotuner.cache_fn_map.get(str(cache_key), None)
-    if not check_key:
-        autotuner.cache_fn_map.setdefault(cache_key, [[], []])
-    hash_cache_file = str(get_jit_func(autotuner).hash_cache_file)
-    so_path = ''
-    if get_jit_func(autotuner).so_path:
-        so_path = get_jit_func(autotuner).so_path.split('/')[-2]
-    autotuner.cache_fn_map[cache_key][0].append(hash_cache_file)
-    autotuner.cache_fn_map[cache_key][1].append(so_path)
-
-
-def get_Autotuner_key(autotuner, _args, *args):
-    key = [_args[i] for i in autotuner.key_idx]
-    divisibility = 16
-    for arg in args:
-        if hasattr(arg, "data_ptr"):
-            key.append(arg.dtype)
-            key.append(arg.data_ptr() % divisibility == 0)
-        elif isinstance(arg, int):
-            key.append(arg)
-    key = tuple(key)
-    return key
-
-
-def is_only_save_best_config_cache(autotuner, key, *args, **kwargs):
+def handle_only_save_best_config_cache(autotuner, key, *args, **kwargs):
     import os
     import time
     import builtins
@@ -127,5 +128,3 @@ def is_only_save_best_config_cache(autotuner, key, *args, **kwargs):
                             import shutil
                             shutil.rmtree(del_cache_file, ignore_errors=True)
             autotuner.cache_fn_map.clear()
-    else:
-        return None

@@ -53,7 +53,7 @@ def pinned_memory_of(arg):
         return False
 
 
-def add_is_divisibility_8(arg):
+def ext_JITFunction_spec_of(arg):
     return (arg % 16 == 0, arg % JITFunction.divisibility_8 == 0, arg == 1)
 
 
@@ -84,7 +84,7 @@ def get_corex_param(arg):
     return res_stride
 
 
-def add_corex_param(jitFunction, divisible_by_16, equal_to_1, *args):
+def ext_JITFunction_get_config(jitFunction, divisible_by_16, equal_to_1, *args):
     from triton.compiler import AttrsDescriptor
     enable_sme = get_corex_sme(jitFunction.use_corex_load_inc or jitFunction.visitor.use_sme)
     corex_param = {
@@ -124,7 +124,7 @@ def get_JITFunction_key(jitFunction, bound_args, sig_and_spec, constexpr_vals, e
     return key
 
 
-def is_support_cpu(*args):
+def is_JITFunction_support_cpu(*args):
     pinned_memory_flags = [pinned_memory_of(arg) for arg in args]
     device_types = [device_of(arg) for arg in args]
     device_types = [_device_type for _device_type in device_types if _device_type != ""]
@@ -134,11 +134,7 @@ def is_support_cpu(*args):
         raise ValueError("Cannot find backend for cpu")
 
 
-def get_JITFunction_options(jitFunction, bound_args, **kwargs):
-    from triton.runtime.driver import driver
-    target = driver.active.get_current_target()
-    backend = jitFunction.make_backend(target)
-    options = backend.parse_options(kwargs)
+def get_JITFunction_options(jitFunction, target, backend, options, bound_args):
     options.use_sme = get_corex_sme(jitFunction.use_corex_load_inc or jitFunction.visitor.use_sme)
     #need get sme_param
     configs = None
@@ -149,7 +145,7 @@ def get_JITFunction_options(jitFunction, bound_args, **kwargs):
     return options
 
 
-def record_fn_cache_files(jitFunction):
+def ext_JITFunction_init(jitFunction):
     # use to record fn cache files
     jitFunction.hash_cache_file = None
     jitFunction.so_path = None

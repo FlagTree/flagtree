@@ -94,7 +94,7 @@ class Autotuner(KernelInterface):
         self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        flagtree_backend_specialization("add_Autotuner_cache_fn_map", self)
+        flagtree_backend_specialization("add_Autotuner_attributes", self)
 
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
@@ -133,13 +133,13 @@ class Autotuner(KernelInterface):
                 with torch.cuda.stream(torch.cuda.Stream()):
                     bench_res = do_bench_cudagraph(kernel_call, rep=self.num_reps, return_mode="median")
                 return bench_res
-            bench_results = do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
+            rett = do_bench(kernel_call, warmup=self.num_warmups, rep=self.num_reps, quantiles=(0.5, 0.2, 0.8))
         except (OutOfResources, CompileTimeAssertionFailure):
             bench_results = float("inf") if self.use_cuda_graph else [float("inf"), float("inf"), float("inf")]
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        bench_results = flagtree_backend_specialization("get_bench_result", self) or bench_results
-        return bench_results
+        flagtree_backend_specialization("ext_Autotuner_bench", self)
+        return rett
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -157,7 +157,7 @@ class Autotuner(KernelInterface):
             key = tuple(key)
             # flagtree backend specialization
             from triton.runtime.driver import flagtree_backend_specialization
-            key = flagtree_backend_specialization("get_Autotuner_key", self, _args, *args) or key
+            key = flagtree_backend_specialization("ext_Autotuner_key", self, _args, *args) or key
             if key not in self.cache:
                 # prune configs
                 used_cached_result = False
@@ -171,7 +171,7 @@ class Autotuner(KernelInterface):
                 self.configs_timings = timings
                 # flagtree backend specialization
                 from triton.runtime.driver import flagtree_backend_specialization
-                flagtree_backend_specialization("is_only_save_best_config_cache", self, key, *args, **kwargs)
+                flagtree_backend_specialization("handle_only_save_best_config_cache", self, key, *args, **kwargs)
             config = self.cache[key]
         else:
             config = self.configs[0]

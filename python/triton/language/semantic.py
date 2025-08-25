@@ -849,18 +849,17 @@ def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
 def _str_to_load_cache_modifier(cache_modifier):
     cache = ir.CACHE_MODIFIER.NONE  # default
     if cache_modifier:
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        ext_cache = flagtree_backend_specialization("ext_str_to_load_cache_modifier", cache_modifier)
         if cache_modifier == ".ca":
             cache = ir.CACHE_MODIFIER.CA
         elif cache_modifier == ".cg":
             cache = ir.CACHE_MODIFIER.CG
+        elif ext_cache is not None:
+            cache = ext_cache
         else:
-            # flagtree backend specialization
-            from triton.runtime.driver import flagtree_backend_specialization
-            cv_cache = flagtree_backend_specialization("cv_cache_modifier", cache_modifier)
-            if cv_cache is not None:
-                cache = cv_cache
-            else:
-                raise ValueError(f"Cache modifier {cache_modifier} not supported")
+            raise ValueError(f"Cache modifier {cache_modifier} not supported")
     return cache
 
 
@@ -1170,12 +1169,10 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     element_ty = ptr.type.scalar.element_ty
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
-    if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
-        # flagtree backend specialization
-        from triton.runtime.driver import flagtree_backend_specialization
-        is_bf16 = flagtree_backend_specialization("element_ty_is_bf16", element_ty)
-        if not is_bf16:
-            raise ValueError("atomic_" + op + " does not support " + str(element_ty))
+    # flagtree backend specialization
+    from triton.runtime.driver import flagtree_backend_specialization
+    if element_ty in [tl.int1, tl.int8, tl.int16] + ([] if flagtree_backend_specialization("is_atomic_support_bf16") else [tl.bfloat16]):
+        raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask is not None:
             mask = broadcast_impl_shape(mask, ptr.type.get_block_shapes(), builder)
@@ -1276,11 +1273,10 @@ def atomic_add(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope:
     scope = _str_to_scope(scope)
     sca_ty = val.type.scalar
     op = ir.ATOMIC_OP.FADD if sca_ty.is_floating() else ir.ATOMIC_OP.ADD
-    value = tl.tensor(builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
+    rett = tl.tensor(builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
     # flagtree backend specialization
     from triton.runtime.driver import flagtree_backend_specialization
-    value = flagtree_backend_specialization("atomin_add_int64", sca_ty, builder, val, ptr, mask, sem, scope) or value
-    return value
+    return flagtree_backend_specialization("atomin_add_int64", sca_ty, builder, val, ptr, mask, sem, scope) or rett
 
 
 def atomic_and(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
