@@ -7,6 +7,9 @@ from .triton.runtime.build import *
 from .triton.runtime.cache import *
 from .triton.runtime.jit import *
 from .triton.testing import *
+from .triton.ops.flash_attention import *
+from .triton.ops.matmul import *
+from .triton.ops.matmul_perf_model import *
 
 __all__ = [
     "kernel_suffix_by_divisibility", "generate_new_attrs_in_ast_to_ttir", "init_AttrsDescriptor_corexLoad",
@@ -17,5 +20,7 @@ __all__ = [
     "get_cc", "get_temp_path_in_FileCacheManager_put", "remove_temp_dir_in_FileCacheManager_put",
     "ext_JITFunction_spec_of", "ext_JITFunction_get_config", "get_JITFunction_key", "is_JITFunction_support_cpu",
     "get_JITFunction_options", "ext_JITFunction_init", "backend_smi_cmd", "get_mem_clock_khz",
-    "is_get_tflops_support_capability_lt_8"
+    "is_get_tflops_support_capability_lt_8", "is_iluvatar", "attention_forward_config", "attention_backward_config",
+    "is_hasattr_corex", "get_configs_compute_bound", "get_nv_configs", "get_matmul_configs", "get_matmul_top_k",
+    "get_pid_mn_configs", "k_divisiable_by_bk_and_sk", "calculate_total_time_ms", "get_pruned_configs"
 ]
