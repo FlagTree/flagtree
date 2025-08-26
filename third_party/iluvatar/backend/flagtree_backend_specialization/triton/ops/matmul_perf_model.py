@@ -23,5 +23,6 @@ def get_pruned_configs(capability, v, BLOCK_M, BLOCK_N, BLOCK_K):
                     pruned_configs.append(random_config)
                 elif v[stage][1] > 2 and blocks > 256:
                     pruned_configs.append(random_config)
+        return pruned_configs
     else:
         return None
