@@ -13,7 +13,7 @@ import triton
 
 from .. import cdiv, jit
 from .. import language as tl
-from triton.runtime.build import is_corex
+from triton.backends.iluvatar.flagtree_backend_specialization.triton.runtime.build import is_corex
 
 
 def is_hip():
