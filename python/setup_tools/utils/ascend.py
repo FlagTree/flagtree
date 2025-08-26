@@ -4,7 +4,7 @@ from pathlib import Path
 from setup_tools.utils.tools import flagtree_root_dir, Module, flagtree_submoduel_dir, download_module
 
 submodules = (Module(name="ascendnpu-ir", url="https://gitee.com/ascend/ascendnpu-ir.git",
-                     commit_id="f4bb879a22c56c591b163f397eeb3b82794863f9",
+                     commit_id="222d689c12b5251e2c35eb6cf31ee8dfd25fd9ce",
                      dst_path=os.path.join(flagtree_submoduel_dir, "ascend/third_party/ascendnpu-ir")), )
 
 
