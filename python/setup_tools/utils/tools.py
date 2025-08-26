@@ -92,3 +92,4 @@ def download_module(module, required=False):
         raise RuntimeError(
             f"[ERROR]: Failed to download {module.name} from {module.url}, It's most likely the network!")
     remove_triton_in_modules(module)
+    return True
