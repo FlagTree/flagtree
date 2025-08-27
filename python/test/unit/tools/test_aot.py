@@ -331,7 +331,7 @@ def test_compile_link_matmul():
 
         # run test case
         env = os.environ.copy()
-        # env["LD_LIBRARY_PATH"] = tmp_dir
+        env["LD_LIBRARY_PATH"] = tmp_dir
         subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
 
         # read data and compare against reference
