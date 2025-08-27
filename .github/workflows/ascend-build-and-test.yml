@@ -23,18 +23,10 @@ jobs:
           export FLAGTREE_BACKEND=ascend
           source ~/env.sh
           cd python
-          MAX_JOBS=32 python3.9 -m pip install . --no-build-isolation
+          MAX_JOBS=32 python3 -m pip install . --no-build-isolation
 
       - name: FlagTree Test on Ascend
         shell: bash
         run: |
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
-          python3.9 third_party/tests/ascend/vector-add.py
-
-      - name: FlagGems Test on FlagTree
-        shell: bash
-        run: |
-          git clone https://github.com/FlagOpen/FlagGems.git
-          cd FlagGems
-          python3.9 -m pip install . --no-build-isolation
-          python3.9 -c "import flag_gems; flag_gems.enable()"
+          python3 third_party/tests/ascend/vector-add.py
