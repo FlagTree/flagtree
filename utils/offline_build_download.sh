@@ -30,7 +30,7 @@ fi
 # handle system arch
 if [ $# -eq 0 ]; then
     echo -e "${RED}Error: No system architecture specified for offline build.${NC}"
-    echo -e "${GREEN}Usage: sh $0 arch=<system arch>${NC}"
+    echo -e "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
     echo -e "You need to specify the target system architecture to build the FlagTree"
     echo -e "Supported system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
     exit 1
@@ -53,7 +53,7 @@ case "$arch" in
     *)
         echo -e "${RED}Error: Unsupported system architecture '$arch'.${NC}"
         echo -e "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
-        echo -e "Supported system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
+        echo -e "   Supported system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
         exit 1
         ;;
 esac
@@ -71,10 +71,10 @@ check_download() {
 
 if [ $# -ge 2 ]; then
     target_dir="$2"
-    echo -e "Use $target_dir as download output directory"
+    echo -e "${BLUE}Use $target_dir as download output directory${NC}"
 else
     echo -e "${RED}Error: No output directory specified for downloading.${NC}"
-    echo -e "${GREEN}Usage: sh utils/offline_build_download.sh arch=<system arch> <output_dir>${NC}"
+    echo -e "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
     echo -e "   Support system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
     exit 1
 fi
