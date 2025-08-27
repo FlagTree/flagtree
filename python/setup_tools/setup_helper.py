@@ -353,7 +353,7 @@ cache = FlagTreeCache()
 cache.store(
     file="iluvatarTritonPlugin.so", condition=("iluvatar" == flagtree_backend) and (flagtree_plugin == ''), url=
     "https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz",
-    copy_dst_path="third_party/iluvatar", md5_digest="015b9af8")
+    copy_dst_path=f"third_party/{flagtree_backend}", md5_digest="015b9af8")
 
 cache.store(
     file="iluvatar-llvm18-x86_64",
@@ -397,6 +397,11 @@ cache.store(
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
+
+cache.store(
+    file="mthreadsTritonPlugin.so", condition=("mthreads" == flagtree_backend) and (flagtree_plugin == ''), url=
+    "https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz",
+    copy_dst_path=f"third_party/{flagtree_backend}", md5_digest="2a9ca0b8")
 
 # ascend
 cache.store(
