@@ -2,7 +2,7 @@ def is_iluvatar():
     return True
 
 
-def attention_forward_config(capability):
+def attention_forward_config():
     from ..runtime.build import is_corex
     if is_corex():
         BLOCK_M = 64
@@ -10,8 +10,6 @@ def attention_forward_config(capability):
         num_stages = 1
         return (BLOCK_M, BLOCK_N, num_stages)
     else:
-        if capability[0] < 8:
-            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
         BLOCK_M = 128
         BLOCK_N = 64
         num_stages = 4

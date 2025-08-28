@@ -373,12 +373,14 @@ class _attention(torch.autograd.Function):
     def forward(ctx, q, k, v, causal, sm_scale, sequence_parallel=False):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        if capability[0] < 8 and not flagtree_backend_specialization("is_corex"):
+            raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
         BLOCK_M = 128
         BLOCK_N = 64
         num_stages = 4
-        # flagtree backend specialization
-        from triton.runtime.driver import flagtree_backend_specialization
-        BLOCK_M, BLOCK_N, num_stages = flagtree_backend_specialization("attention_forward_config", capability) or (BLOCK_M, BLOCK_N, num_stages)
+        BLOCK_M, BLOCK_N, num_stages = flagtree_backend_specialization("attention_forward_config") or (BLOCK_M, BLOCK_N, num_stages)
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv

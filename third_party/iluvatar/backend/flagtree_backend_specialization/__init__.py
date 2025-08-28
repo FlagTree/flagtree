@@ -19,7 +19,7 @@ __all__ = [
     "set_src_fn_hash_cache_file", "set_src_fn_so_path", "handle_n_threads_in_CompiledKernel_init",
     "language_extra_cuda_modify_all", "ext_str_to_load_cache_modifier", "is_atomic_support_bf16", "atomin_add_int64",
     "add_Autotuner_attributes", "ext_Autotuner_bench", "ext_Autotuner_key", "handle_only_save_best_config_cache",
-    "get_cc", "get_temp_path_in_FileCacheManager_put", "remove_temp_dir_in_FileCacheManager_put",
+    "is_corex", "get_cc", "get_temp_path_in_FileCacheManager_put", "remove_temp_dir_in_FileCacheManager_put",
     "ext_JITFunction_spec_of", "ext_JITFunction_get_config", "get_JITFunction_key", "is_JITFunction_support_cpu",
     "get_JITFunction_options", "ext_JITFunction_init", "backend_smi_cmd", "get_mem_clock_khz",
     "is_get_tflops_support_capability_lt_8", "is_iluvatar", "attention_forward_config", "attention_backward_config",
