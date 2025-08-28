@@ -129,19 +129,15 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   MUSA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(muDeviceGetAttribute(
       &shared_optin, MU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
-  // supported based on QY2, PH1 is ok here
-  if (shared > 73728 && shared_optin > 73728) {
-    MUSA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-        muFuncSetCacheConfig(fun, MU_FUNC_CACHE_PREFER_SHARED));
-    int shared_total, shared_static;
-    MUSA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(muDeviceGetAttribute(
-        &shared_total, MU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
-        device));
-    MUSA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(muFuncGetAttribute(
-        &shared_static, MU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, fun));
-    MUSA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
-        muFuncSetAttribute(fun, MU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
-                           shared_optin - shared_static));
+
+  int max_shared;
+  MUSA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(muDeviceGetAttribute(
+      &max_shared, MU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
+      device));
+  if (shared > max_shared) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "Requested shared memory exceeds device limit");
+    return NULL;
   }
   Py_END_ALLOW_THREADS;
 
