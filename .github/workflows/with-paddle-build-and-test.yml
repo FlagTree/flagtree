@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  iluvatar-build-and-test:
-    runs-on: iluvatar
+   with_paddle-build-and-test:
+    runs-on: with_paddle
     if: ${{ github.repository == 'FlagTree/flagtree' }}
     steps:
       - name: Checkout code (attempt 1)
