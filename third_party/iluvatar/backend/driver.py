@@ -391,9 +391,16 @@ class CudaLauncher(object):
 class CudaDriver(GPUDriver):
 
     def __init__(self):
-        self.utils = CudaUtils()  # TODO: make static
+        # self.utils = CudaUtils()  # TODO: make static
         self.launcher_cls = CudaLauncher
+        # flagtree backend specialization
+        from triton.backends.iluvatar import flagtree_backend_specialization
+        self.flagtree_backend_specialization = flagtree_backend_specialization
         super().__init__()
+
+    @property
+    def utils(self):
+        return CudaUtils()
 
     def get_current_target(self):
         device = self.get_current_device()
