@@ -49,7 +49,6 @@ jobs:
       - name: FlagTree Build With Paddle
         shell: bash
         run: |
-          source ~/env.sh
           cd python
           MAX_JOBS=20 pip3 install . --no-build-isolation
 
