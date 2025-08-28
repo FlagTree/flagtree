@@ -8,7 +8,7 @@ NC='\033[0m'
 
 echo -e " =================== Start Downloading Offline Build Files ==================="
 # detect pybind11 version requirement
-PYBIND11_VERSION_FILE="cmake/pybind11-version.txt"
+PYBIND11_VERSION_FILE="../cmake/pybind11-version.txt"
 if [ -f "$PYBIND11_VERSION_FILE" ]; then
     pybind11_version=$(tr -d '\n' < "$PYBIND11_VERSION_FILE")
     echo -e "Pybind11 Version Required: $pybind11_version"
@@ -18,7 +18,7 @@ else
 fi
 
 # detect nvidia toolchain version requirement
-NV_TOOLCHAIN_VERSION_FILE="cmake/nvidia-toolchain-version.txt"
+NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
 if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
     nv_toolchain_version=$(tr -d '\n' < "$NV_TOOLCHAIN_VERSION_FILE")
     echo -e "Nvidia Toolchain Version Required: $nv_toolchain_version"
