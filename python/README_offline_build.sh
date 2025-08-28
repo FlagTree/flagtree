@@ -8,7 +8,7 @@ NC='\033[0m'
 
 echo -e " =================== Offline Build README ==================="
 # detect pybind11 version requirement
-PYBIND11_VERSION_FILE="cmake/pybind11-version.txt"
+PYBIND11_VERSION_FILE="../cmake/pybind11-version.txt"
 if [ -f "$PYBIND11_VERSION_FILE" ]; then
     pybind11_version=$(tr -d '\n' < "$PYBIND11_VERSION_FILE")
     echo -e "Pybind11 Version Required: $pybind11_version"
@@ -18,7 +18,7 @@ else
 fi
 
 # detect nvidia toolchain version requirement
-NV_TOOLCHAIN_VERSION_FILE="cmake/nvidia-toolchain-version.txt"
+NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
 if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
     nv_toolchain_version=$(tr -d '\n' < "$NV_TOOLCHAIN_VERSION_FILE")
     echo -e "Nvidia Toolchain Version Required: $nv_toolchain_version"
@@ -87,7 +87,7 @@ echo -e "      TRITON_SHARED should be downloaded from: ${BLUE}https://github.co
 echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 echo -e ""
 echo -e "  ${BLUE}2. Use the script to download.${NC} You can specify the directory the store the downloaded files into:"
-echo -e "          ${GREEN}$ sh utils/offline_build_download.sh arch=<system arch> <YOUR_DOWNLOAD_DIR>${NC}"
+echo -e "          ${GREEN}$ sh scripts/offline_build_download.sh arch=<system arch> <YOUR_DOWNLOAD_DIR>${NC}"
 echo -e ""
 echo -e "  ${BLUE}3. Directly download the packed file${NC}. Then you can jump to the ${GREEN}Step-3${NC}:"
 echo -e "          TODO: add the link to the .zip file"
@@ -96,14 +96,14 @@ echo -e "${YELLOW}>>>>> Step-2${NC} Run the script to pack the dependencies into
 echo -e "      providing the downloaded files and the output directory to store the packed .zip file"
 echo -e "       # Specify the input & output directory, the script will compress the files in YOU_DOWNLOAD_DIR"
 echo -e "       # into a .zip file in YOU_PACK_DIR"
-echo -e "          ${GREEN}$ sh utils/offline_build_pack.sh <YOUR_DOWNLOAD_DIR> <YOUR_PACK_DIR>${NC}"
+echo -e "          ${GREEN}$ sh scripts/offline_build_pack.sh <YOUR_DOWNLOAD_DIR> <YOUR_PACK_DIR>${NC}"
 echo -e ""
-echo -e "${YELLOW}>>>>> Step-3${NC} After uploading the packed .zip file to the offline environment, run the script utils/offline_build_unpack.sh "
+echo -e "${YELLOW}>>>>> Step-3${NC} After uploading the packed .zip file to the offline environment, run the script scripts/offline_build_unpack.sh "
 echo -e "      to extract the dependencies to an appropriate location for FlagTree to copy. You can specify the directory to store the"
 echo -e "      packed .zip file and the directory to store the unpacked dependencies."
 echo -e "       # Specify the input & output directory, the script will extract the packed .zip file in YOUR_INPUT_DIR"
 echo -e "       # into the YOUR_UNPACK_DIR"
-echo -e "          ${GREEN}$ sh utils/offline_build_unpack.sh <YOUR_INPUT_DIR> <YOUR_UNPACK_DIR>${NC}"
+echo -e "          ${GREEN}$ sh scripts/offline_build_unpack.sh <YOUR_INPUT_DIR> <YOUR_UNPACK_DIR>${NC}"
 echo -e ""
 echo -e "${YELLOW}>>>>> Step-4${NC} You can proceed with the installation normally according to the README.md."
 echo -e "      NOTE: Set the environment variables required for offline build before running 'pip install'"
