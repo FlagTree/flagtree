@@ -11,7 +11,7 @@ apt install zlib1g zlib1g-dev libxml2 libxml2-dev  # ubuntu
 cd python; python3 -m pip install -r requirements.txt
 ```
 
-编译安装，目前支持的后端 backendxxx 包括 iluvatar、xpu、mthreads、cambricon（有限支持）：
+构建安装：
 ```shell
 cd python
 export FLAGTREE_BACKEND=backendxxx
@@ -21,7 +21,7 @@ python3 -m pip install . --no-build-isolation -v
 ## 构建技巧
 
 自动下载依赖库的速度可能受限于网络环境，编译前可自行下载至缓存目录 ~/.flagtree（可通过环境变量 FLAGTREE_CACHE_DIR 修改），无需自行设置 LLVM_BUILD_DIR 等环境变量。 <br>
-各后端完整编译命令如下： <br>
+各后端完整构建命令如下： <br>
 
 [iluvatar](/third_party/iluvatar/)
 ```shell
@@ -48,12 +48,14 @@ cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=xpu
 python3 -m pip install . --no-build-isolation -v
 ```
-[mthreads](https://github.com/FlagTree/flagtree/tree/main/third_party/mthreads/)
+[mthreads](/third_party/mthreads/)
 ```shell
 # 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.10-mthreads
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
 tar zxvf mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
+tar zxvf mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
@@ -82,15 +84,19 @@ python3 -m pip install . --no-build-isolation -v
 ```
 [ascend](https://github.com/FlagTree/flagtree/blob/triton_v3.2.x/python/setup_tools/setup_helper.py)
 ```shell
-# 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu20.04-python3.9-ascend
+# 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.11-ascend
 # 在 https://www.hiascend.com/developer/download/community/result?module=cann
 # 注册账号后下载对应平台的 cann-toolkit、cann-kernels
-# 这里以 AArch64 架构的 A3 处理器为例展示如何安装
-chmod +x Ascend-cann-toolkit_8.2.RC1.alpha002_linux-aarch64.run
-./Ascend-cann-toolkit_8.2.RC1.alpha002_linux-aarch64.run --install
-chmod +x Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run
-./Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run --install
-# 编译安装
+# cann-toolkit
+chmod +x Ascend-cann-toolkit_8.3.RC1.alpha001_linux-aarch64.run
+./Ascend-cann-toolkit_8.3.RC1.alpha001_linux-aarch64.run --install
+# cann-kernels for 910B (A2)
+chmod +x Ascend-cann-kernels-910b_8.3.RC1.alpha001_linux-aarch64.run
+./Ascend-cann-kernels-910b_8.3.RC1.alpha001_linux-aarch64.run --install
+# cann-kernels for 910C (A3)
+chmod +x Atlas-A3-cann-kernels_8.3.RC1.alpha001_linux-aarch64.run
+./Atlas-A3-cann-kernels_8.3.RC1.alpha001_linux-aarch64.run --install
+# 构建安装
 mkdir -p ~/.flagtree/ascend; cd ~/.flagtree/ascend
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz
 tar zxvf llvm-b5cc222d-ubuntu-arm64.tar.gz
@@ -100,20 +106,19 @@ export FLAGTREE_BACKEND=ascend
 python3 -m pip install . --no-build-isolation -v
 ```
 
-使用默认的编译命令，可以编译安装 nvidia、amd、triton_shared (cpu) 后端：
+[nvidia](/third_party/nvidia/)
+使用默认的构建命令，可以构建安装 nvidia、amd、triton_shared (cpu) 后端：
 ```shell
-# 自行下载 llvm
 cd ${YOUR_LLVM_DOWNLOAD_DIR}
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-10dc3a8e-ubuntu-x64.tar.gz
 tar zxvf llvm-10dc3a8e-ubuntu-x64.tar.gz
-# 编译安装
 cd ${YOUR_CODE_DIR}/flagtree/python
 export LLVM_SYSPATH=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-10dc3a8e-ubuntu-x64
 export LLVM_INCLUDE_DIRS=$LLVM_SYSPATH/include
 export LLVM_LIBRARY_DIR=$LLVM_SYSPATH/lib
 unset FLAGTREE_BACKEND
 python3 -m pip install . --no-build-isolation -v
-# 如果接下来需要编译安装其他后端，应清空 LLVM 相关环境变量
+# 如果接下来需要构建安装其他后端，应清空 LLVM 相关环境变量
 unset LLVM_SYSPATH LLVM_INCLUDE_DIRS LLVM_LIBRARY_DIR
 ```
 

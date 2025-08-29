@@ -54,6 +54,8 @@ python3 -m pip install . --no-build-isolation -v
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
 tar zxvf mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
+tar zxvf mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
@@ -82,14 +84,18 @@ python3 -m pip install . --no-build-isolation -v
 ```
 [ascend](https://github.com/FlagTree/flagtree/blob/triton_v3.2.x/python/setup_tools/setup_helper.py)
 ```shell
-# Recommended: Use the Dockerfile flagtree/dockerfiles/Dockerfile-ubuntu20.04-python3.9-ascend
+# Recommended: Use the Dockerfile flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.11-ascend
 # After registering an account at https://www.hiascend.com/developer/download/community/result?module=cann,
 # download the cann-toolkit and cann-kernels for the corresponding platform.
-# Here we use the A3 processor with AArch64 architecture as an example to demonstrate how to install.
-chmod +x Ascend-cann-toolkit_8.2.RC1.alpha002_linux-aarch64.run
-./Ascend-cann-toolkit_8.2.RC1.alpha002_linux-aarch64.run --install
-chmod +x Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run
-./Atlas-A3-cann-kernels_8.1.RC1_linux-aarch64.run --install
+# cann-toolkit
+chmod +x Ascend-cann-toolkit_8.3.RC1.alpha001_linux-aarch64.run
+./Ascend-cann-toolkit_8.3.RC1.alpha001_linux-aarch64.run --install
+# cann-kernels for 910B (A2)
+chmod +x Ascend-cann-kernels-910b_8.3.RC1.alpha001_linux-aarch64.run
+./Ascend-cann-kernels-910b_8.3.RC1.alpha001_linux-aarch64.run --install
+# cann-kernels for 910C (A3)
+chmod +x Atlas-A3-cann-kernels_8.3.RC1.alpha001_linux-aarch64.run
+./Atlas-A3-cann-kernels_8.3.RC1.alpha001_linux-aarch64.run --install
 # build
 mkdir -p ~/.flagtree/ascend; cd ~/.flagtree/ascend
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz
@@ -100,13 +106,12 @@ export FLAGTREE_BACKEND=ascend
 python3 -m pip install . --no-build-isolation -v
 ```
 
+[nvidia](/third_party/nvidia/)
 To build with default backends nvidia, amd, triton_shared (cpu):
 ```shell
-# manually download LLVM
 cd ${YOUR_LLVM_DOWNLOAD_DIR}
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-10dc3a8e-ubuntu-x64.tar.gz
 tar zxvf llvm-10dc3a8e-ubuntu-x64.tar.gz
-# build
 cd ${YOUR_CODE_DIR}/flagtree/python
 export LLVM_SYSPATH=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-10dc3a8e-ubuntu-x64
 export LLVM_INCLUDE_DIRS=$LLVM_SYSPATH/include
