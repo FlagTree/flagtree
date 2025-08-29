@@ -9,7 +9,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #endif
 
-// Below headers will allow registration to ROCm passes
 #ifdef __AMD__
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -68,7 +67,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerAllocateSharedMemoryPass();
 #ifdef __ILUVATAR__
-  DEFINE_CALL_LOAD_FUNC(iluvatar, registerConvertTritonGPUToLLVMPass)
+  XDEFINE_CALL_LOAD_FUNC(PLUGINSO_DIR, registerConvertTritonGPUToLLVMPass)
   func();
 #endif
 #ifdef __NVIDIA__
