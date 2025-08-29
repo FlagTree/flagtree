@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Checkout code (attempt 1)
         id: checkout1
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         continue-on-error: true
 
       - name: Sleep before checkout2
@@ -29,7 +29,7 @@ jobs:
       - name: Checkout code (attempt 2)
         id: checkout2
         if: steps.checkout1.outcome == 'failure'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         continue-on-error: true
 
       - name: Sleep before final checkout
@@ -40,7 +40,7 @@ jobs:
 
       - name: Checkout code (final attempt)
         if: steps.checkout1.outcome == 'failure' && steps.checkout2.outcome == 'failure'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Verify checkout success
         if: success()
@@ -49,12 +49,13 @@ jobs:
       - name: FlagTree Build on Iluvatar
         shell: bash
         run: |
+          pip uninstall -y triton
           export FLAGTREE_BACKEND=iluvatar
           source ~/env.sh
           cd python
-          MAX_JOBS=20 pip3 install . --no-build-isolation
+          MAX_JOBS=20 python3 -m pip install . --no-build-isolation
 
       - name: FlagTree Test on Iluvatar
         shell: bash
         run: |
-          CUDA_VISIBLE_DEVICES=15 pytest -s third_party/iluvatar/python/test/unit
+          CUDA_VISIBLE_DEVICES=15 python3 -m pytest -s third_party/iluvatar/python/test/unit
