@@ -54,6 +54,8 @@ python3 -m pip install . --no-build-isolation -v
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads
 wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
 tar zxvf mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
+wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
+tar zxvf https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v

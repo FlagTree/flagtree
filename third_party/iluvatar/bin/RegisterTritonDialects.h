@@ -67,7 +67,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerAllocateSharedMemoryPass();
 #ifdef __ILUVATAR__
-  XDEFINE_CALL_LOAD_FUNC(PLUGINSO_DIR, registerConvertTritonGPUToLLVMPass)
+  DEFINE_CALL_LOAD_FUNC(FLAGTREE_BACKEND_PLUGIN_LIB_DIR,
+                        registerConvertTritonGPUToLLVMPass)
   func();
 #endif
 #ifdef __NVIDIA__

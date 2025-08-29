@@ -1130,7 +1130,8 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
                                                       type);
   } else if (auto mmaLayout = mlir::dyn_cast<IluvatarMmaEncodingAttr>(layout)) {
     if (mmaLayout.isVolta()) {
-      DEFINE_CALL_LOAD_FUNC(iluvatar, emitBaseIndexForTCULayout)
+      DEFINE_CALL_LOAD_FUNC(FLAGTREE_BACKEND_PLUGIN_LIB_DIR,
+                            emitBaseIndexForTCULayout)
       result = func(loc, rewriter, mmaLayout, type);
     }
   } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(layout)) {
@@ -1203,7 +1204,8 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   }
   if (auto mmaLayout = dyn_cast<IluvatarMmaEncodingAttr>(layout)) {
     if (mmaLayout.isVolta()) {
-      DEFINE_CALL_LOAD_FUNC(iluvatar, emitOffsetForTCULayout)
+      DEFINE_CALL_LOAD_FUNC(FLAGTREE_BACKEND_PLUGIN_LIB_DIR,
+                            emitOffsetForTCULayout)
       return func(mmaLayout, type);
     }
   }
@@ -1369,7 +1371,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     auto capability = getNVIDIAComputeCapability(
         smemObj.base.getDefiningOp()->getParentOfType<ModuleOp>());
     if (resSharedLayout.getUseTcu() && idx.size() == 2) {
-      DEFINE_CALL_LOAD_FUNC(iluvatar, remapOffset)
+      DEFINE_CALL_LOAD_FUNC(FLAGTREE_BACKEND_PLUGIN_LIB_DIR, remapOffset)
       off = func(idx[0], idx[1], srcTy, isRow, loc, rewriter, capability,
                  !perPhase);
     } else {

@@ -3,9 +3,9 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
 add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
-set(PLUGINSO_DIR "$ENV{HOME}/.flagtree/$ENV{FLAGTREE_BACKEND}/")
+set(FLAGTREE_BACKEND_PLUGIN_LIB_DIR "$ENV{HOME}/.flagtree/$ENV{FLAGTREE_BACKEND}/")
 
-add_compile_definitions(PLUGINSO_DIR=${PLUGINSO_DIR})
+add_compile_definitions(FLAGTREE_BACKEND_PLUGIN_LIB_DIR=${FLAGTREE_BACKEND_PLUGIN_LIB_DIR})
 # TODO: what's this?
 llvm_update_compile_flags(triton-opt)
 target_link_libraries(triton-opt PRIVATE

@@ -245,7 +245,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
               // check A & B use sme|async
               if (dotOperandLayout.getOpIdx() == 0) {
                 insertBuffId(src, tmpInfo, allocation);
-                DEFINE_CALL_LOAD_FUNC(iluvatar, getLoadIncNum_RankedTensorType)
+                DEFINE_CALL_LOAD_FUNC(FLAGTREE_BACKEND_PLUGIN_LIB_DIR,
+                                      getLoadIncNum_RankedTensorType)
                 asyncOrSmeNum = func(dstTy, capability, numWarps,
                                      srcSharedLayout.getOrder(), 0);
                 Value dotB = dotOp.getOperand(1);
@@ -266,7 +267,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                       auto sharedBLayout =
                           srcBTy.getEncoding()
                               .cast<mlir::triton::gpu::SharedEncodingAttr>();
-                      DEFINE_CALL_LOAD_FUNC(iluvatar, getLoadIncNum_MemDescType)
+                      DEFINE_CALL_LOAD_FUNC(FLAGTREE_BACKEND_PLUGIN_LIB_DIR,
+                                            getLoadIncNum_MemDescType)
                       unsigned incBNum = func(srcBTy, capability, numWarps,
                                               sharedBLayout.getOrder(), 1);
                       asyncOrSmeNum += incBNum;
@@ -274,7 +276,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                   }
                 }
               } else if (dotOperandLayout.getOpIdx() == 1) {
-                DEFINE_CALL_LOAD_FUNC(iluvatar, getLoadIncNum_RankedTensorType)
+                DEFINE_CALL_LOAD_FUNC(FLAGTREE_BACKEND_PLUGIN_LIB_DIR,
+                                      getLoadIncNum_RankedTensorType)
                 asyncOrSmeNum = func(dstTy, capability, numWarps,
                                      srcSharedLayout.getOrder(), 1);
                 insertBuffId(src, tmpInfo, allocation);
