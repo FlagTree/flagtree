@@ -1,0 +1,16 @@
+set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
+
+set(LLVM_TARGET_DEFINITIONS TritonHCUGPUOps.td)
+mlir_tablegen(Dialect.h.inc -gen-dialect-decls -dialect=hcugpu)
+mlir_tablegen(Dialect.cpp.inc -gen-dialect-defs -dialect=hcugpu)
+mlir_tablegen(OpsConversions.inc -gen-llvmir-conversions)
+mlir_tablegen(Ops.h.inc -gen-op-decls)
+mlir_tablegen(Ops.cpp.inc -gen-op-defs)
+add_mlir_doc(TritonHCUGPUDialect TritonHCUGPUDialect dialects/ -gen-dialect-doc)
+add_mlir_doc(TritonHCUGPUOps TritonHCUGPUOps dialects/ -gen-op-doc)
+add_public_tablegen_target(TritonHCUGPUTableGen)
+
+set(LLVM_TARGET_DEFINITIONS TritonHCUGPUAttrDefs.td)
+mlir_tablegen(TritonHCUGPUAttrDefs.h.inc -gen-attrdef-decls)
+mlir_tablegen(TritonHCUGPUAttrDefs.cpp.inc -gen-attrdef-defs)
+add_public_tablegen_target(TritonHCUGPUAttrDefsIncGen)
