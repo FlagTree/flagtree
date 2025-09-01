@@ -51,10 +51,9 @@ jobs:
         run: |
           source ~/env.sh
           cd python
-          MAX_JOBS=20 pip3 install . --no-build-isolation
+          MAX_JOBS=20 pip3 install . --no-build-isolation -v
 
       - name: FlagTree Test
         shell: bash
         run: |
           pytest -s python/test/unit
-          pytest -s python/test/operators
