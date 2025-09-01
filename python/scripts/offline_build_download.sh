@@ -7,15 +7,6 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e " =================== Start Downloading Offline Build Files ==================="
-# detect pybind11 version requirement
-PYBIND11_VERSION_FILE="../cmake/pybind11-version.txt"
-if [ -f "$PYBIND11_VERSION_FILE" ]; then
-    pybind11_version=$(tr -d '\n' < "$PYBIND11_VERSION_FILE")
-    echo -e "Pybind11 Version Required: $pybind11_version"
-else
-    echo -e "${RED}Error: version file $PYBIND11_VERSION_FILE is not exist${NC}"
-    exit 1
-fi
 
 # detect nvidia toolchain version requirement
 NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
@@ -116,12 +107,6 @@ cupti_url=https://anaconda.org/nvidia/cuda-cupti/${nv_toolchain_version}/downloa
 echo -e "Downloading CUPTI from: ${BLUE}$cupti_url${NC}"
 echo -e "wget $cupti_url -O ${target_dir}/cuda-cupti-${nv_toolchain_version}-0.tar.bz2"
 wget "$cupti_url" -O ${target_dir}/cuda-cupti-${nv_toolchain_version}-0.tar.bz2
-check_download
-
-pybind11_url=https://github.com/pybind/pybind11/archive/refs/tags/v${pybind11_version}.tar.gz
-echo -e "Downloading Pybind11 from: ${BLUE}$pybind11_url${NC}"
-echo -e "wget $pybind11_url -O ${target_dir}/pybind11-${pybind11_version}.tar.gz"
-wget "$pybind11_url" -O ${target_dir}/pybind11-${pybind11_version}.tar.gz
 check_download
 
 json_url=https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip

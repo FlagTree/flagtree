@@ -8,15 +8,6 @@ NC='\033[0m'
 
 echo -e " =================== Start Unpacking Offline Build Dependencies ==================="
 echo -e ""
-# detect pybind11 version requirement
-PYBIND11_VERSION_FILE="../cmake/pybind11-version.txt"
-if [ -f "$PYBIND11_VERSION_FILE" ]; then
-    pybind11_version=$(tr -d '\n' < "$PYBIND11_VERSION_FILE")
-    echo -e "Pybind11 Version Required: $pybind11_version"
-else
-    echo -e "${RED}Error: version file $PYBIND11_VERSION_FILE is not exist${NC}"
-    exit 1
-fi
 
 # detect nvidia toolchain version requirement
 NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
@@ -62,7 +53,6 @@ nvdisam_file="${output_dir}/cuda-nvdisasm-${nv_toolchain_version}-0.tar.bz2"
 cudart_file="${output_dir}/cuda-cudart-dev-${nv_toolchain_version}-0.tar.bz2"
 cupti_file="${output_dir}/cuda-cupti-${nv_toolchain_version}-0.tar.bz2"
 json_file="${output_dir}/include.zip"
-pybind11_file="${output_dir}/pybind11-${pybind11_version}.tar.gz"
 googletest_file="${output_dir}/googletest-release-1.12.1.zip"
 triton_shared_file="${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
@@ -115,11 +105,6 @@ mkdir "${output_dir}/json"
 echo -e "Extracting $json_file into ${output_dir}/json ..."
 unzip $json_file -d "${output_dir}/json" > /dev/null
 
-echo -e "Creating directory ${output_dir}/pybind11 ..."
-mkdir "${output_dir}/pybind11"
-echo -e "Extracting $pybind11_file into ${output_dir}/pybind11 ..."
-tar -zxf $pybind11_file -C "${output_dir}/pybind11"
-
 echo -e "Extracting $googletest_file into ${output_dir}/googletest-release-1.12.1 ..."
 unzip $googletest_file -d "${output_dir}" > /dev/null
 
@@ -144,8 +129,6 @@ echo -e "Delete $cupti_file"
 rm $cupti_file
 echo -e "Delete $json_file"
 rm $json_file
-echo -e "Delete $pybind11_file"
-rm $pybind11_file
 echo -e "Delete $googletest_file"
 rm $googletest_file
 if [ -f "${triton_shared_file}" ]; then
