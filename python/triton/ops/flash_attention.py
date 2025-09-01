@@ -150,7 +150,8 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
                               BLOCK_N: tl.constexpr,  #
                               SEQUENCE_PARALLEL: tl.constexpr,  #
                               CAUSAL: tl.constexpr,  #
-                              MMA_V3: tl.constexpr  #
+                              MMA_V3: tl.constexpr,  #
+                              IS_ILUVATAR: tl.constexpr  #
                               ):
     if CAUSAL:
         lo = start_n * BLOCK_M
@@ -217,9 +218,7 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
             dq += tl.dot(ds, k)
             tl.store(DQ_block_ptr, dq.to(Q.dtype.element_ty))
         elif SEQUENCE_PARALLEL:
-            # flagtree backend specialization
-            from triton.runtime.driver import flagtree_backend_specialization
-            if MMA_V3 or flagtree_backend_specialization("is_iluvatar"):
+            if MMA_V3 or IS_ILUVATAR:
                 dq = tl.dot(ds, k)
             else:
                 # not work with mma v3, because M % 64 != 0
@@ -251,7 +250,8 @@ def _bwd_kernel(Q, K, V, sm_scale,  #
                 BLOCK_N: tl.constexpr,  #
                 SEQUENCE_PARALLEL: tl.constexpr,  #
                 CAUSAL: tl.constexpr,  #
-                MMA_V3: tl.constexpr  #
+                MMA_V3: tl.constexpr,  #
+                IS_ILUVATAR: tl.constexpr  #
                 ):
     qk_scale = sm_scale * 1.44269504
     off_hz = tl.program_id(0)
@@ -344,7 +344,8 @@ def _bwd_kernel(Q, K, V, sm_scale,  #
                                       BLOCK_N=BLOCK_N,  #
                                       SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,  #
                                       CAUSAL=CAUSAL,  #
-                                      MMA_V3=MMA_V3  #
+                                      MMA_V3=MMA_V3,  #
+                                      IS_ILUVATAR=IS_ILUVATAR  #
                                       )
     else:
         start_n = tl.program_id(1)
@@ -363,7 +364,8 @@ def _bwd_kernel(Q, K, V, sm_scale,  #
                                   BLOCK_N=BLOCK_N,  #
                                   SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,  #
                                   CAUSAL=CAUSAL,  #
-                                  MMA_V3=MMA_V3  #
+                                  MMA_V3=MMA_V3,  #
+                                  IS_ILUVATAR=IS_ILUVATAR  #
                                   )
 
 
@@ -447,6 +449,11 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK,
             D_HEAD=ctx.BLOCK_DMODEL,
         )
+
+        # call flagtree specialization out of jit function
+        from triton.runtime.driver import flagtree_backend_specialization
+        IS_ILUVATAR = bool(flagtree_backend_specialization("is_iluvatar") or False)
+
         _bwd_kernel[(ctx.grid[1], cdiv(seq_len_kv, BLOCK) if sequence_parallel else 1)](
             q, k, v, ctx.sm_scale,  #
             o, do,  #
@@ -465,7 +472,8 @@ class _attention(torch.autograd.Function):
             CAUSAL=ctx.causal,  #
             MMA_V3=MMA_V3,  #
             num_warps=num_warps,  #
-            num_stages=1  #
+            num_stages=1,  #
+            IS_ILUVATAR=IS_ILUVATAR  #
         )
 
         if len(dq.shape) == 5:
