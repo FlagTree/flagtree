@@ -7,15 +7,6 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e " =================== Offline Build README ==================="
-# detect pybind11 version requirement
-PYBIND11_VERSION_FILE="../cmake/pybind11-version.txt"
-if [ -f "$PYBIND11_VERSION_FILE" ]; then
-    pybind11_version=$(tr -d '\n' < "$PYBIND11_VERSION_FILE")
-    echo -e "Pybind11 Version Required: $pybind11_version"
-else
-    echo -e "${RED}Error: version file $PYBIND11_VERSION_FILE is not exist${NC}"
-    exit 1
-fi
 
 # detect nvidia toolchain version requirement
 NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
@@ -78,8 +69,6 @@ echo -e "      CUPTI should be downloaded from: ${BLUE}https://anaconda.org/nvid
 echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-cupti-${nv_toolchain_version}-0.tar.bz2"
 echo -e "      JSON library should be downloaded from: ${BLUE}https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip${NC}"
 echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/include.zip"
-echo -e "      PYBIND11 should be downloaded from: ${BLUE}https://github.com/pybind/pybind11/archive/refs/tags/v${pybind11_version}.tar.gz${NC}"
-echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/pybind11-${pybind11_version}.tar.gz"
 echo -e "      GOOGLETEST should be downloaded from ${BLUE}https://github.com/google/googletest/archive/refs/tags/release-1.12.1.zip${NC}"
 echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/googletest-release-1.12.1.zip"
 echo -e "      (TRITON_SHARED is optional):"

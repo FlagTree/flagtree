@@ -8,15 +8,6 @@ NC='\033[0m'
 
 echo -e " =================== Start Packing Downloaded Offline Build Files ==================="
 echo -e ""
-# detect pybind11 version requirement
-PYBIND11_VERSION_FILE="../cmake/pybind11-version.txt"
-if [ -f "$PYBIND11_VERSION_FILE" ]; then
-    pybind11_version=$(tr -d '\n' < "$PYBIND11_VERSION_FILE")
-    echo -e "Pybind11 Version Required: $pybind11_version"
-else
-    echo -e "${RED}Error: version file $PYBIND11_VERSION_FILE is not exist${NC}"
-    exit 1
-fi
 
 # detect nvidia toolchain version requirement
 NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
@@ -28,7 +19,7 @@ else
     exit 1
 fi
 
-output_zip="offline-packed-nv${nv_toolchain_version}-pybind${pybind11_version}.zip"
+output_zip="offline-packed-nv${nv_toolchain_version}.zip"
 
 # handle input
 echo -e ""
@@ -63,7 +54,6 @@ nvdisam_file="cuda-nvdisasm-${nv_toolchain_version}-0.tar.bz2"
 cudart_file="cuda-cudart-dev-${nv_toolchain_version}-0.tar.bz2"
 cupti_file="cuda-cupti-${nv_toolchain_version}-0.tar.bz2"
 json_file="include.zip"
-pybind11_file="pybind11-${pybind11_version}.tar.gz"
 googletest_file="googletest-release-1.12.1.zip"
 triton_shared_file="triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
@@ -103,12 +93,6 @@ if [ ! -f "$input_dir/$json_file" ]; then
 fi
 echo -e "Find $input_dir/$json_file"
 
-if [ ! -f "$input_dir/$pybind11_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$pybind11_file does not exist, run README_offline_build.sh for more information${NC}"
-    exit 1
-fi
-echo -e "Find $input_dir/$pybind11_file"
-
 if [ ! -f "$input_dir/$googletest_file" ]; then
     echo -e "${RED}Error: File $input_dir/$googletest_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
@@ -127,7 +111,7 @@ cd "$input_dir"
 
 echo -e "Compressing..."
 zip "$output_zip" "$nvcc_file" "$cuobjdump_file" "$nvdisam_file" "$cudart_file" "$cupti_file" \
-    "$json_file" "$pybind11_file" "$googletest_file" "$triton_shared_file"
+    "$json_file" "$googletest_file" "$triton_shared_file"
 
 echo -e "cd -"
 cd -
