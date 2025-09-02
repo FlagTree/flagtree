@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 flagtree_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 flagtree_submoduel_dir = os.path.join(flagtree_root_dir, "third_party")
+flagtree_backend = os.environ.get("FLAGTREE_BACKEND")
 
 network_configs = {
     "MAX_RETRY_COUNT": 4,
@@ -145,7 +146,7 @@ class OfflineBuildManager:
             kargs['post_hock'](self.src)
 
     def handle_triton_origin_toolkits(self):
-        triton_origin_toolkits = ["nvidia/ptxas", "nvidia/nvdisasm", "nvidia/cuobjdump", "nvidia/cudacrt", "nvidia/cudart", "nvidia/cupti", "pybind11", "json"]
+        triton_origin_toolkits = ["nvidia/ptxas", "nvidia/nvdisasm", "nvidia/cuobjdump", "nvidia/cudacrt", "nvidia/cudart", "nvidia/cupti", "json"]
         for toolkit in triton_origin_toolkits:
             toolkit_cache_path = os.path.join(self.triton_cache_path, toolkit)
             if os.path.exists(toolkit_cache_path):

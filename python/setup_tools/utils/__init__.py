@@ -2,7 +2,7 @@ from pathlib import Path
 import importlib.util
 import os
 from . import tools, ascend, cambricon, xpu
-from .tools import download_module, flagtree_submoduel_dir
+from .tools import download_module, flagtree_submoduel_dir, OfflineBuildManager
 
 flagtree_submoduels = {
     "triton_shared":
@@ -26,4 +26,4 @@ def activate(backend, suffix=".py"):
     return module
 
 
-__all__ = ["download_module", "tools", "ascend", "cambricon", "xpu"]
+__all__ = ["download_module", "tools", "ascend", "cambricon", "xpu", "OfflineBuildManager"]
