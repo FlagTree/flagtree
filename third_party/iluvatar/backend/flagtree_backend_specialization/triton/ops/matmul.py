@@ -50,20 +50,3 @@ def get_nv_configs():
         Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 64, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
     ]
     return configs
-
-
-def get_matmul_configs():
-    from triton.ops.matmul import get_configs_io_bound
-    configs = get_nv_configs() + get_configs_io_bound() + get_configs_compute_bound()
-    return configs
-
-
-def get_matmul_top_k():
-    top_k = 15
-    return top_k
-
-
-def get_pid_mn_configs(pid, grid_n):
-    pid_m = pid // grid_n
-    pid_n = pid % grid_n
-    return (pid_m, pid_n)
