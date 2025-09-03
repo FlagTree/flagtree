@@ -80,13 +80,20 @@ def dir_rollback(deep, base_path):
     return Path(base_path)
 
 
+def is_skip_flagtree_third_party(name):
+    return os.environ.get(f"USE_{name.upper()}", 'ON') == 'OFF'
+
+
 def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
-        submoduel = utils.flagtree_submoduels[name]
-        utils.download_module(submoduel, required)
-        if callable(hock):
-            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
-                 default_backends=default_backends)
+        if not is_skip_flagtree_third_party(name):
+            submoduel = utils.flagtree_submoduels[name]
+            utils.download_module(submoduel, required)
+            if callable(hock):
+                hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
+                     default_backends=default_backends)
+        else:
+            print(f"\033[1;33m[WARN] Skip downloading {name} since USE_{name.upper()} is set to OFF\033[0m")
 
 
 def configure_cambricon_packages_and_data(packages, package_dir, package_data):
