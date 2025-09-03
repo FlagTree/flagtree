@@ -80,13 +80,16 @@ def dir_rollback(deep, base_path):
     return Path(base_path)
 
 
-def is_skip_flagtree_third_party(name):
-    return os.environ.get(f"USE_{name.upper()}", 'ON') == 'OFF'
+def enable_flagtree_third_party(name):
+    if name in ["triton_shared"]:
+        return os.environ.get(f"USE_{name.upper()}", 'OFF') == 'OFF'
+    else:
+        return os.environ.get(f"USE_{name.upper()}", 'ON') == 'ON'
 
 
 def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
-        if not is_skip_flagtree_third_party(name):
+        if enable_flagtree_third_party(name):
             submoduel = utils.flagtree_submoduels[name]
             utils.download_module(submoduel, required)
             if callable(hock):
