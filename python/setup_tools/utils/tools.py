@@ -41,7 +41,10 @@ def remove_triton_in_modules(model):
 
 
 def py_clone(module):
-    import git
+    try:
+        import git
+    except ImportError:
+        return False
     retry_count = network_configs["MAX_RETRY_COUNT"]
     has_specialization_commit = module.commit_id is not None
     while (retry_count):
