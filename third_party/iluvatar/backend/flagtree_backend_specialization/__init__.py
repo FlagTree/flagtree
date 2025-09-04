@@ -23,6 +23,6 @@ __all__ = [
     "ext_JITFunction_spec_of", "ext_JITFunction_get_config", "get_JITFunction_key", "is_JITFunction_support_cpu",
     "get_JITFunction_options", "ext_JITFunction_init", "backend_smi_cmd", "get_mem_clock_khz",
     "is_get_tflops_support_capability_lt_8", "is_iluvatar", "attention_forward_config", "attention_backward_config",
-    "is_hasattr_corex", "get_configs_compute_bound", "get_nv_configs", "k_divisiable_by_bk_and_sk",
-    "calculate_total_time_ms", "get_pruned_configs", "ops_modify_all", "bmm_utils", "_bmm", "bmm"
+    "is_hasattr_corex", "matmul_kernel", "k_divisiable_by_bk_and_sk", "calculate_total_time_ms",
+    "get_pruned_configs", "ops_modify_all", "bmm_utils", "_bmm", "bmm"
 ]
