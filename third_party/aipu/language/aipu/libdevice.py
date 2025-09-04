@@ -509,10 +509,6 @@ def nearbyint(arg0):
     ...
 
 
-def isnan(arg0):
-    ...
-
-
 def signbit(arg0):
     ...
 
@@ -549,10 +545,6 @@ def log2(arg0):
     ...
 
 
-def exp(arg0):
-    ...
-
-
 def exp10(arg0):
     ...
 
@@ -562,10 +554,6 @@ def cosh(arg0):
 
 
 def sinh(arg0):
-    ...
-
-
-def atan2(arg0, arg1):
     ...
 
 
@@ -755,6 +743,16 @@ def create_unary_op_wrapper(func_name, dtypes):
     return unary_op
 
 
+def create_unary_op_wrapper_with_to_dtype(func_name, dtypes, to_dtype):
+
+    @core.extern
+    def unary_op(arg0, _builder=None):
+        func_impl = {(core.dtype(dtype), ): (func_name, core.dtype(to_dtype)) for dtype in dtypes}
+        return core.extern_elementwise("", "", [arg0], func_impl, is_pure=True, _builder=_builder)
+
+    return unary_op
+
+
 def create_binary_op_wrapper(func_name, dtypes):
 
     @core.extern
@@ -774,11 +772,15 @@ pow = create_binary_op_wrapper("powf", ["fp32", "fp16"])
 div_rz = create_binary_op_wrapper("div_rz", ["fp32", "fp16"])
 div_rn = create_binary_op_wrapper("div_rn", ["fp32", "fp16"])
 fmod = create_binary_op_wrapper("fmod", ["fp32", "fp16"])
+atan2 = create_binary_op_wrapper("atan2", ["fp32", "fp16"])
 
 tanh = create_unary_op_wrapper("tanh", ["fp32", "fp16"])
 erf = create_unary_op_wrapper("erf", ["fp32", "fp16"])
 trunc = create_unary_op_wrapper("trunc", ["fp32", "fp16"])
+exp = create_unary_op_wrapper("exp", ["fp32", "fp16"])
 exp2 = create_unary_op_wrapper("exp2", ["fp32", "fp16"])
-finitef = create_unary_op_wrapper("isfinite", ["fp32", "fp16"])
-isinf = create_unary_op_wrapper("isinf", ["fp32", "fp16"])
 rsqrt = create_unary_op_wrapper("rsqrt", ["fp32", "fp16"])
+
+finitef = create_unary_op_wrapper_with_to_dtype("isfinite", ["fp32", "fp16"], "int1")
+isinf = create_unary_op_wrapper_with_to_dtype("isinf", ["fp32", "fp16"], "int1")
+isnan = create_unary_op_wrapper_with_to_dtype("isnan", ["fp32", "fp16"], "int1")

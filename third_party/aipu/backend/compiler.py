@@ -3,7 +3,7 @@ from triton.backends.aipu import transform, analysis
 from triton.backends.aipu.codegen import codegenAIPU
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, aipu, passes
-import triton._C.libaipu_interface as aipu_interface
+from triton._C import aipu_interface
 from mlir.passmanager import PassManager
 from mlir.ir import Context, Module
 
@@ -107,23 +107,29 @@ class AIPUBackend(BaseBackend):
     def make_aipubin(mod, metadata, opt):
         ctx = Context()
         ctx.allow_unregistered_dialects = True
+        aipu_interface.dialects.register_all_dialects(ctx._CAPIPtr)
         pm = PassManager("builtin.module", ctx)
         mod = Module.parse(aipu.common.generic_print(mod), ctx)
 
         # Add pass here.
-        linalg_generic_size = analysis.get_linalg_generic_size(mod)
-        # Affine loop fusion run failed when dealing with ir which owns more than 50 loops.
-        # So here fuse the loop in linalg.
-        if linalg_generic_size > 50:
-            pm.add("func.func(linalg-fuse-elementwise-ops)")
+        transform.linalg_transform(mod, ctx)
+        transform.tensor_transform(mod, ctx)
+
+        pm.add("func.func(linalg-fuse-elementwise-ops)")
         pm.add("scf-loop-bufferization-preprocessing")
         pm.add("one-shot-bufferize")
         pm.add("func.func(convert-bool-arg-to-i8)")
         pm.add("func.func(convert-linalg-to-affine-loops)")
-        pm.add("func.func(affine-loop-fusion)")
+        pm.add("func.func(affine-loop-normalize{promote-single-iter=1})")
+        pm.add("func.func(affine-loop-fusion{mode=sibling})")
+        pm.add("func.func(flatten-memref)")
+        pm.add("func.func(canonicalize)")
         pm.run(mod.operation)
 
         pm = PassManager("builtin.module", ctx)
+        transform.convert_memref_i1_i8(mod, ctx)
+        transform.remove_empty_linalg_generic(mod, ctx)
+        # vectorize
         vfactor = analysis.determine_vectorization_factor(mod, metadata["vector_register_bits"])
         if vfactor > 1:
             pm.add(f"func.func(affine-super-vectorize{{virtual-vector-size={vfactor}}})")

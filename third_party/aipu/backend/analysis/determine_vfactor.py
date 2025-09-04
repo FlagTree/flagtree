@@ -15,6 +15,7 @@ def determine_vectorization_factor(module, target_bitwidth=256, debug=False):
              otherwise target_bitwidth/min_dtype_width)
     """
     min_width = target_bitwidth
+    skip_vectorize = False
 
     def _get_width(value):
         elem_type = (value.type.element_type if hasattr(value.type, 'element_type') else value.type)
@@ -25,7 +26,7 @@ def determine_vectorization_factor(module, target_bitwidth=256, debug=False):
         return elem_width
 
     def walk_callback(op):
-        nonlocal min_width
+        nonlocal min_width, skip_vectorize
         if op.name == "affine.for":
             all_ops = (_op for region in op.regions for block in region.blocks for _op in block.operations)
             for _op in all_ops:
@@ -33,6 +34,10 @@ def determine_vectorization_factor(module, target_bitwidth=256, debug=False):
                 for item in items:
                     if width := _get_width(item):
                         min_width = min(min_width, width)
+
+        # Current affine-super-vectorize cannot deal with these op.
+        if op.name in ("arith.mulsi_extended", "arith.mului_extended"):
+            skip_vectorize = True
 
         return ir.WalkResult.ADVANCE
 
@@ -42,4 +47,4 @@ def determine_vectorization_factor(module, target_bitwidth=256, debug=False):
     vfactor = target_bitwidth // min_width
     if debug:
         print(f"[Debug]: Recommended vectorization factor: {vfactor}")
-    return vfactor
+    return vfactor if not skip_vectorize else 1

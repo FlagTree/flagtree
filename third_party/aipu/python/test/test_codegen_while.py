@@ -1,5 +1,5 @@
 import numpy as np
-from tvm import aipu
+from tvm.compass.dsl import BuildManager
 from mlir import ir
 from triton.backends.aipu.codegen import AIPUModule, CodeGenerator
 
@@ -33,8 +33,8 @@ def test_while():
     cg = CodeGenerator(mod)
     cg.mod.walk_mod(cg.dispatch)
 
-    bm = aipu.tir.BuildManager(disabled_pass=["tir.CommonSubexprElimTIR"])
-    ex = bm.build(cg.prim_func)
+    bm = BuildManager(disabled_pass=["tir.CommonSubexprElimTIR"])
+    ex = bm.build(cg.ir_mod)
     print(ex.c_code)
     """
     __kernel void while_loop(__global int* var_4, __global int* var_11) {

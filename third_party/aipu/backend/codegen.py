@@ -1,9 +1,25 @@
 import numpy as np
-from tvm import tir, ir, aipu
+import tvm
+from tvm import tir, ir
 from tvm.script.parser import tir as T
-from tvm.aipu import script as S
+from tvm.compass.dsl import BuildManager, script as S
 from mlir import ir as mlir_ir
 from mlir.dialects import func
+
+
+def gen_cumsum(dtype, axis, shape):
+    assert axis == 0, f"Only support axis == 0 but got {axis}."
+    assert len(shape) == 1, f"Only support 1d cumsum but got {shape}."
+    length = shape[0]
+
+    @S.prim_func
+    def cumsum(inp: S.ptr(dtype), out: S.ptr(dtype)):
+        out[0] = inp[0]
+        for i in range(1, length):
+            out[i] = out[i - 1] + inp[i]
+
+    return T.prim_func(cumsum.py_func, check_well_formed=False).with_attr("tir.is_entry_func", False)
+
 
 _CMPI_MAPPING = {
     0: T.EQ,
@@ -64,6 +80,16 @@ class WalkStage:
         return self.next_region
 
 
+def _get_vload_vstore_mask(op, buffer, lanes_value):
+    mask = op.mask
+    assert mask is None, "Currently only support op.mask is None."
+    if len(buffer.shape) == 1:
+        lanes_buffer = buffer.shape[0]
+        if lanes_buffer != -1 and lanes_buffer < lanes_value:
+            mask = f"{lanes_buffer}T"
+    return mask
+
+
 def _convert_scalar_type(type):
     """convert from mlir_type to tvm_type_str"""
     if isinstance(type, mlir_ir.IndexType):
@@ -95,6 +121,18 @@ def _compute_strides(shape):
     for dim_size in reversed(shape[1:]):
         strides.append(strides[-1] * dim_size)
     return list(reversed(strides))
+
+
+def _compute_dynamic_strides(shape, strides):
+    """compute tensor dynamic strides with given shape"""
+    assert len(shape) == len(strides)
+    assert not mlir_ir.ShapedType.is_dynamic_size(strides[-1])
+
+    for i in range(len(strides) - 2, -1, -1):
+        if mlir_ir.ShapedType.is_dynamic_size(strides[i]):
+            strides[i] = shape[i + 1] * strides[i + 1]
+
+    return strides
 
 
 def _is_scalar_type(ty):
@@ -139,6 +177,24 @@ def _get_buffer(ptr):
     return _get_buffer(ptr.buffer)
 
 
+def _eliminate_one_in_shape(src_shape, src_strides, dst_strides):
+    if len(src_shape) <= 2:
+        return src_shape, src_strides, dst_strides
+
+    new_src_shape = []
+    new_src_strides = []
+    new_dst_strides = []
+
+    for i, size in enumerate(src_shape):
+        if size == 1:
+            continue
+        new_src_shape.append(size)
+        new_src_strides.append(src_strides[i])
+        new_dst_strides.append(dst_strides[i])
+
+    return new_src_shape, new_src_strides, new_dst_strides
+
+
 class CodeGenerator():
 
     def __init__(self, mod) -> None:
@@ -148,7 +204,7 @@ class CodeGenerator():
         # Keys are MLIR values, and values are TVM TIR variables or buffers.
         self.mlir_to_tir_mapping = {}
         self.name_idx = 0
-        self.prim_func = None
+        self.ir_mod = tvm.IRModule()
         self.scope_stack = []
         self.gridx_var = None
         self.while_cond = None
@@ -197,15 +253,16 @@ class CodeGenerator():
         self.mlir_to_tir_mapping[value] = var
         return var
 
+    def get_static_or_dynamic_value(self, static_v, dynamic_v):
+        dynamic_v = list(dynamic_v)
+        return [
+            self.get_or_create_var(dynamic_v.pop(0)) if mlir_ir.ShapedType.is_dynamic_size(v) else v for v in static_v
+        ]
+
     def get_offsets_sizes_strides(self, op):
-
-        def _get_static_or_dynamic_value(static_v, dynamic_v):
-            dynamic_v = list(dynamic_v)
-            return [self.get_or_create_var(dynamic_v.pop(0)) if v < 0 else v for v in static_v]
-
-        offsets = _get_static_or_dynamic_value(op.static_offsets, op.offsets)
-        sizes = _get_static_or_dynamic_value(op.static_sizes, op.sizes)
-        strides = _get_static_or_dynamic_value(op.static_strides, op.strides)
+        offsets = self.get_static_or_dynamic_value(op.static_offsets, op.offsets)
+        sizes = self.get_static_or_dynamic_value(op.static_sizes, op.sizes)
+        strides = self.get_static_or_dynamic_value(op.static_strides, op.strides)
 
         return offsets, sizes, strides
 
@@ -296,16 +353,27 @@ class CodeGenerator():
         elif op_name in ("arith.xori", "arith.xorf"):
             self.gen_binary(op, T.bitwise_xor)
         elif op_name in ("arith.remsi", "arith.remui"):
-            self.gen_binary(op, T.Mod)
+            if _is_vector_type(op.operands[0].type):
+                self.gen_binary(op, S.vmod)
+            else:
+                self.gen_binary(op, T.Mod)
         elif op_name in ("arith.remf", ):
             remainder = lambda x, y: T.call_extern(_get_type(op.result), "remainder", x, y)
             self.gen_binary(op, remainder)
         elif op_name == "arith.cmpi":
             self.gen_binary(op, _CMPI_MAPPING[op.predicate.value])
         elif op_name == "arith.cmpf":
-            self.gen_binary(op, _CMPF_MAPPING[op.predicate.value])
+            if op.predicate.value == 13:
+                result = op.result
+                if _is_vector_type(result.type):
+                    self.gen_binary(op, S.vcneq)
+                else:
+                    not_equal = lambda x, y: T.call_extern(_get_type(result), "isnotequal", x, y)
+                    self.gen_binary(op, not_equal)
+            else:
+                self.gen_binary(op, _CMPF_MAPPING[op.predicate.value])
         elif op_name in ("arith.sitofp", "arith.extf", "arith.truncf", "arith.extsi", "arith.extui", "arith.trunci",
-                         "arith.uitofp"):
+                         "arith.uitofp", "arith.fptosi", "arith.bitcast"):
             self.gen_arith_cast(op)
         elif op_name == "arith.select":
             self.gen_select(op)
@@ -316,9 +384,8 @@ class CodeGenerator():
         elif op_name in ("arith.mulsi_extended", "arith.mului_extended"):
             self.gen_arith_mul_extended(op)
         # Math Dialect
-        elif op_name == "mathext.fmod":
-            fmod = lambda x, y: T.call_extern(_get_type(op.result), "fmod", x, y)
-            self.gen_binary(op, fmod)
+        elif op_name == "math.atan2":
+            self.gen_binary(op, S.atan2)
         elif op_name == "math.powf":
             self.gen_binary(op, S.pow)
         elif op_name == "math.rsqrt":
@@ -354,6 +421,12 @@ class CodeGenerator():
             self.ib.emit(tir.call_extern("void", "__vset_rounding_mode_rtz"))
             self.gen_binary(op, T.Div)
             self.ib.emit(tir.call_extern("void", "__vset_rounding_mode_rtn"))
+        elif op_name == "math.isinf":
+            self.gen_is_like(op, S.isinf)
+        elif op_name == "math.isfinite":
+            self.gen_is_like(op, S.isfinite)
+        elif op_name == "math.isnan":
+            self.gen_is_like(op, S.isnan)
         # Func Dialect
         elif op_name == "func.return":
             self.gen_func_return(op)
@@ -372,7 +445,8 @@ class CodeGenerator():
             self.while_cond = self.get_operand(op, 0)
             self.after_args = [self.get_or_create_var(arg) for arg in op.args]
         elif op_name == "scf.yield":
-            self.yeild_args = [self.get_or_create_var(value) for value in op.operands]
+            pf_args = [self.get_or_create_var(value) for value in op.operands]
+            self.yeild_args = [arg.addr_of(0) if isinstance(arg, tir.Buffer) else arg for arg in pf_args]
         # Vector Dialect
         elif op_name == "vector.transfer_read":
             self.gen_vload(op)
@@ -380,11 +454,29 @@ class CodeGenerator():
             self.gen_vstore(op)
         elif op_name == "vector.broadcast":
             self.gen_vbcast(op)
+        # TritonTilingExt Dialect
+        elif op_name == "ttx.cumsum":
+            inp = self.get_operand(op, 0)
+            out = self.get_operand(op, 1)
+            dtype = inp.dtype
+            axis = op.attributes["axis"].value
+            shape = _get_shape(op.operands[0])
+
+            inp_type = ir.PrimType(dtype)
+            ret_type = ir.PrimType("void")
+            cumsum_gv = ir.GlobalVar("cumsum", ir.FuncType([inp_type, inp_type], ret_type))
+            self.ir_mod[cumsum_gv] = gen_cumsum(dtype, axis, shape)
+            self.ib.emit(tir.call_tir(cumsum_gv, inp.addr_of(0), out.addr_of(0)))
         # Others
         elif op_name == "builtin.module":
             pass
         elif op_name == "builtin.unrealized_conversion_cast":
-            self.mlir_to_tir_mapping[op.result] = self.get_operand(op, 0)
+            result = op.result
+            arg0 = self.get_operand(op, 0)
+            if "from_pass_convert_bool_arg" in op.attributes and op.attributes["from_pass_convert_bool_arg"]:
+                self.mlir_to_tir_mapping[result] = arg0.as_ptr(_convert_scalar_type(result.type.element_type))
+            else:
+                self.mlir_to_tir_mapping[result] = arg0
         elif op_name == "tt.bitcast":
             self.mlir_to_tir_mapping[op.result] = self.get_operand(op, 0).as_ptr("i8")
         else:
@@ -392,16 +484,16 @@ class CodeGenerator():
 
     def generate(self):
         self.mod.walk_mod(self.dispatch)
-        bm = aipu.tir.BuildManager()
-        return bm.build(self.prim_func)
+        return BuildManager().build(self.ir_mod)
 
     def gen_memref_reinterpret_cast(self, op):
         result = op.result
         arg = self.get_operand(op, 0)
+        data = arg.base if isinstance(arg, tir.Pointer) else arg.data
         dtype = _get_type(result).element_type.dtype
         offsets, sizes, strides = self.get_offsets_sizes_strides(op)
 
-        buffer = T.Buffer(sizes, elem_offset=offsets[0], data=arg.base, dtype=dtype, strides=strides)
+        buffer = T.Buffer(sizes, elem_offset=offsets[0], data=data, dtype=dtype, strides=strides)
         self.mlir_to_tir_mapping[result] = buffer
 
     def gen_memref_load(self, op):
@@ -451,17 +543,77 @@ class CodeGenerator():
     def gen_memref_copy(self, op):
         src = self.get_operand(op, 0)
         dst = self.get_operand(op, 1)
-        shape = src.shape
+        src_shape, src_strides, dst_strides = _eliminate_one_in_shape(src.shape, src.strides, dst.strides)
+        src = src.addr_of(0) if isinstance(src, tir.Buffer) else src
+        dst = dst.addr_of(0) if isinstance(dst, tir.Buffer) else dst
 
-        if len(shape) == 1:
-            dma_copy = S.dma_copy(dst, src, shape[0])
+        if len(src_shape) == 1:
+            dma_copy = S.dma_copy(dst, src, src_shape[0])
+            self.ib.emit(dma_copy)
+        elif len(src_shape) == 2:
+            src_ptr = tir.Pointer(src.dtype, src.scope, name=self.create_var_name())
+            self.ib.emit(lambda x: tir.LetStmt(src_ptr.base, src, x))
+            dst_ptr = tir.Pointer(dst.dtype, dst.scope, name=self.create_var_name())
+            self.ib.emit(lambda x: tir.LetStmt(dst_ptr.base, dst, x))
+
+            with self.ib.if_scope(src_strides[1] < 0):
+                with self.ib.for_range(0, src_shape[0], name=self.create_var_name()) as i:
+                    with self.ib.for_range(0, src_shape[1], name=self.create_var_name()) as j:
+                        src_offset = i * src_strides[0] + j * src_strides[1]
+                        dst_offset = i * dst_strides[0] + j * dst_strides[1]
+                        self.ib.emit(tir.BufferStore(dst_ptr.buffer, src_ptr.buffer[src_offset], [dst_offset]))
+            with self.ib.else_scope():
+                with self.ib.if_scope(src_strides[1] == 0):
+                    with self.ib.for_range(0, src_shape[0]):
+                        dma_memset = S.dma_memset(dst_ptr, src_ptr[0], src_shape[1])
+                        self.ib.emit(dma_memset)
+                        self.ib.emit(tir.reassign(src_ptr.base, src_ptr + src_strides[0]))
+                        self.ib.emit(tir.reassign(dst_ptr.base, dst_ptr + dst_strides[0]))
+                with self.ib.else_scope():
+                    with self.ib.if_scope(src_strides[0] == 0):
+                        with self.ib.for_range(0, src_shape[0]):
+                            dma_copy = S.dma_copy(dst_ptr, src_ptr, src_shape[1])
+                            self.ib.emit(dma_copy)
+                            self.ib.emit(tir.reassign(src_ptr.base, src_ptr + src_strides[0]))
+                            self.ib.emit(tir.reassign(dst_ptr.base, dst_ptr + dst_strides[0]))
+                    with self.ib.else_scope():
+                        dma_copy = S.dma_copy(dst, src, width=src_shape[1], src_stride=src_strides[0],
+                                              times=src_shape[0], dst_stride=dst_strides[0])
+                        self.ib.emit(dma_copy)
+        elif len(src_shape) == 3:
+            src_ptr = tir.Pointer(src.dtype, src.scope, name=self.create_var_name())
+            self.ib.emit(lambda x: tir.LetStmt(src_ptr.base, src, x))
+            dst_ptr = tir.Pointer(dst.dtype, dst.scope, name=self.create_var_name())
+            self.ib.emit(lambda x: tir.LetStmt(dst_ptr.base, dst, x))
+
+            with self.ib.if_scope(src_strides[2] < 0):
+                with self.ib.for_range(0, src_shape[0], name=self.create_var_name()) as i:
+                    with self.ib.for_range(0, src_shape[1], name=self.create_var_name()) as j:
+                        with self.ib.for_range(0, src_shape[2], name=self.create_var_name()) as k:
+                            src_offset = i * src_strides[0] + j * src_strides[1] + k * src_strides[2]
+                            dst_offset = i * dst_strides[0] + j * dst_strides[1] + k * dst_strides[2]
+                            self.ib.emit(tir.BufferStore(dst_ptr.buffer, src_ptr.buffer[src_offset], [dst_offset]))
+            with self.ib.else_scope():
+                # Scalar broadcast scenario.
+                with self.ib.if_scope(src_strides[2] == 0):
+                    with self.ib.for_range(0, src_shape[0]):
+                        temp_dst_ptr = tir.Pointer(dst.dtype, dst.scope, name=self.create_var_name())
+                        self.ib.emit(lambda x: tir.LetStmt(temp_dst_ptr.base, dst_ptr, x))
+                        with self.ib.for_range(0, src_shape[1]):
+                            # Here need to use the origin src pointer base.
+                            dma_memset = S.dma_memset(temp_dst_ptr, src[-src.offset], src_shape[2])
+                            self.ib.emit(dma_memset)
+                            self.ib.emit(tir.reassign(temp_dst_ptr.base, temp_dst_ptr + dst_strides[1]))
+                        self.ib.emit(tir.reassign(dst_ptr.base, dst_ptr + dst_strides[0]))
+                with self.ib.else_scope():
+                    with self.ib.for_range(0, src_shape[0]):
+                        dma_copy = S.dma_copy(dst_ptr, src_ptr, width=src_shape[2], src_stride=src_strides[1],
+                                              times=src_shape[1], dst_stride=dst_strides[1])
+                        self.ib.emit(dma_copy)
+                        self.ib.emit(tir.reassign(src_ptr.base, src_ptr + src_strides[0]))
+                        self.ib.emit(tir.reassign(dst_ptr.base, dst_ptr + dst_strides[0]))
         else:
-            if not len(shape) == 2:
-                raise RuntimeError(f"only suport 1d/2d DMA copy, but got shape={shape}")
-            dma_copy = S.dma_copy(dst, src, width=src.shape[1], src_stride=src.strides[0], times=src.shape[0],
-                                  dst_stride=dst.strides[0])
-
-        self.ib.emit(dma_copy)
+            raise RuntimeError(f"Only suport 1d/2d/3d DMA copy, but got shape={src.shape}.")
 
     def gen_memref_subview(self, op):
         result = op.result
@@ -481,19 +633,21 @@ class CodeGenerator():
     def gen_memref_expand_shape(self, op):
         result = op.result
         inp_buf = _get_buffer(self.get_operand(op, 0))
-        out_shape = list(op.static_output_shape)
+        out_shape = self.get_static_or_dynamic_value(op.static_output_shape, op.output_shape)
+        strides = result.type.get_strides_and_offset()[0] or [1]
 
         expanded_buffer = T.Buffer(out_shape, elem_offset=inp_buf.elem_offset, data=inp_buf.data, dtype=inp_buf.dtype,
-                                   strides=_compute_strides(out_shape))
+                                   strides=_compute_dynamic_strides(out_shape, strides))
         self.mlir_to_tir_mapping[result] = expanded_buffer
 
     def gen_memref_collapse_shape(self, op):
         result = op.result
         inp_buf = _get_buffer(self.get_operand(op, 0))
-        out_shape = result.type.shape
+        out_shape = _get_shape(result)
+        strides = result.type.get_strides_and_offset()[0] or [1]
 
         out_buffer = T.Buffer(out_shape, elem_offset=inp_buf.elem_offset, data=inp_buf.data, dtype=inp_buf.dtype,
-                              strides=_compute_strides(out_shape))
+                              strides=_compute_dynamic_strides(out_shape, strides))
         self.mlir_to_tir_mapping[result] = out_buffer
 
     def gen_memref_cast(self, op):
@@ -531,7 +685,7 @@ class CodeGenerator():
         result = op.result
         arg0 = self.get_operand(op, 0)
 
-        self.emit_let(T.Cast("int32", arg0), result)
+        self.emit_let(S.cast(arg0, "int32"), result)
 
     def gen_binary(self, op, method):
         result = op.result
@@ -551,13 +705,24 @@ class CodeGenerator():
 
     def gen_arith_cast(self, op):
         result = op.result
+        dtype = _get_type(op.result)
         arg0 = self.get_operand(op, 0)
 
-        if arg0.dtype.startswith("bool"):
+        if dtype.startswith("bool") and _is_vector_type(op.result.type):
+            # arg_type >bool
+            arg0 = S.vcneq(arg0, S.cast(0, arg0.dtype))
+        elif arg0.dtype.startswith("bool") and _is_vector_type(op.operands[0].type):
+            # bool->associate_type->ret_type
             associated_dtype = self._get_associated_dtype(op)
-            arg0 = T.Select(arg0, S.cast(1, associated_dtype), 0)
+            arg0 = T.Select(arg0, S.cast(1, associated_dtype), S.cast(0, associated_dtype))
+            # if associate_type is float16 -> float32
+            if associated_dtype.startswith("float16"):
+                arg0 = S.cast(arg0, "float32")
+            arg0 = S.cast(arg0, _get_type(result))
+        else:
+            arg0 = S.cast(arg0, _get_type(result))
 
-        self.emit_let(S.cast(arg0, _get_type(result)), result)
+        self.emit_let(arg0, result)
 
     def gen_arith_mul_extended(self, op):
         mull, mulh = op.results
@@ -575,6 +740,16 @@ class CodeGenerator():
         arg0 = self.get_operand(op, 0)
 
         self.emit_let(method(arg0), result)
+
+    def gen_is_like(self, op, method):
+        result = op.result
+        arg0 = self.get_operand(op, 0)
+
+        value = method(arg0)
+        var_name = self.create_var_name()
+        let_var = tir.Var(var_name, dtype=f"boolx{arg0.dtype.lanes}")
+        self.ib.emit(lambda x: tir.LetStmt(let_var, value, x))
+        self.mlir_to_tir_mapping[result] = let_var
 
     def gen_func_return(self, op):
         self.ib.emit(T.ret(None))
@@ -594,7 +769,9 @@ class CodeGenerator():
                 else:
                     args.append(var)
 
-            self.prim_func = tir.PrimFunc(args, self.ib.get()).with_attr("global_symbol", func_name)
+            gv = ir.GlobalVar(func_name)
+            prim_func = tir.PrimFunc(args, self.ib.get())
+            self.ir_mod[gv] = prim_func.with_attr("global_symbol", func_name).with_attr("tir.is_entry_func", True)
 
     def gen_func_call(self, op):
         result = op.result
@@ -633,19 +810,45 @@ class CodeGenerator():
         # If branch
         if stage.is_before_all_regions():
             cond = self.get_operand(op, 0)
+            for result in op.results:
+                res_type = _get_type(result)
+                if isinstance(res_type, ir.PointerType):
+                    dtype = res_type.element_type.dtype
+                    handle_var = tir.Var(self.create_var_name(), ir.PointerType(ir.PrimType(dtype), "local"))
+                    empty_var = self.ib.let(self.create_var_name(), S.i32(0))
+                    self.ib.emit(lambda x: tir.LetStmt(handle_var, empty_var.addr, x))
+                    self.mlir_to_tir_mapping[result] = handle_var
+                else:
+                    self.emit_let(S.cast(0, res_type), result)
 
             if_scope = self.ib.if_scope(cond)
             self.enter_scope(if_scope)
+
         # Else branch
         if stage.is_after_region(0):
+            for i, result in enumerate(op.results):
+                reassign_var = self.get_or_create_var(result)
+                self.ib.emit(tir.reassign(reassign_var, self.yeild_args[i]))
+
             self.exit_scope()
             else_scope = self.ib.else_scope()
             self.enter_scope(else_scope)
+
         # Finish
         if stage.is_after_all_regions():
+            for i, result in enumerate(op.results):
+                reassign_var = self.get_or_create_var(result)
+                self.ib.emit(tir.reassign(reassign_var, self.yeild_args[i]))
+
             self.exit_scope()
-            for i, value in enumerate(op.results):
-                self.mlir_to_tir_mapping[value] = self.yeild_args[i]
+            for result in op.results:
+                res_type = _get_type(result)
+                if isinstance(res_type, ir.PointerType):
+                    handle_var = self.get_or_create_var(result)
+                    init_ptr = tir.Pointer(res_type.element_type.dtype, "local", handle_var)
+                    self.mlir_to_tir_mapping[result] = init_ptr
+                else:
+                    self.mlir_to_tir_mapping[result] = self.get_or_create_var(result)
 
     def gen_scf_while(self, op, stage):
         if stage.is_before_all_regions():
@@ -677,18 +880,35 @@ class CodeGenerator():
             self.exit_scope()
 
     def gen_vload(self, op):
-        result = op.result
-        buffer = _get_buffer(self.get_operand(op, 0))
-        indices = self.get_list_value(op.indices) or 0
+        # TODO(CP-22941): support other permutation_map cases
 
-        self.emit_let(S.vload(buffer.addr_of(indices), lanes=result.type.shape[0]), result)
+        result = op.result
+        lanes = result.type.shape[0]
+        buffer = _get_buffer(self.get_operand(op, 0))
+        indices = self.get_list_value(op.indices)
+        mask = _get_vload_vstore_mask(op, buffer, lanes)
+
+        def _is_broadcast(permutation_map):
+            """ permutation_map:  (d0, d1, ...) ->(0) is for broadcast """
+            affinemap = permutation_map.value
+            return (len(affinemap.results) == 1 and str(affinemap.results[0]) == '0')
+
+        if _is_broadcast(op.permutation_map):
+            indices = indices or [0]
+            value = T.BufferLoad(buffer, indices)
+            self.emit_let(S.vbcast(S.cast(value, value.dtype), lanes=lanes), result)
+        else:
+            indices = indices or 0
+            self.emit_let(S.vload(buffer.addr_of(indices), lanes=lanes, mask=mask), result)
 
     def gen_vstore(self, op):
         value = self.get_operand(op, 0)
+        lanes_value = op.operands[0].type.shape[0]
         buffer = _get_buffer(self.get_operand(op, 1))
         indices = self.get_list_value(op.indices) or 0
 
-        self.ib.emit(S.vstore(value, buffer.addr_of(indices)))
+        mask = _get_vload_vstore_mask(op, buffer, lanes_value)
+        self.ib.emit(S.vstore(value, buffer.addr_of(indices), mask=mask))
 
     def gen_vbcast(self, op):
         result = op.result

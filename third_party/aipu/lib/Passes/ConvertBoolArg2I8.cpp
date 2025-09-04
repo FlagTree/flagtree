@@ -43,9 +43,17 @@ private:
 
   void modifyRelatedOps(BlockArgument arg, Type originType, OpBuilder builder) {
     builder.setInsertionPointToStart(arg.getParentBlock());
-    auto trunci =
-        builder.create<arith::TruncIOp>(arg.getLoc(), originType, arg);
-    arg.replaceAllUsesExcept(trunci, trunci);
+    if (originType.isInteger(1)) {
+      auto trunci =
+          builder.create<arith::TruncIOp>(arg.getLoc(), originType, arg);
+      arg.replaceAllUsesExcept(trunci, trunci);
+    } else {
+      auto attr = builder.getNamedAttr("from_pass_convert_bool_arg",
+                                       builder.getBoolAttr(true));
+      auto origin_arg = builder.create<UnrealizedConversionCastOp>(
+          arg.getLoc(), originType, arg, attr);
+      arg.replaceAllUsesExcept(origin_arg.getResult(0), origin_arg);
+    }
   }
 
 public:
@@ -65,10 +73,7 @@ public:
         arg.setType(newType);
         newInputTypes.push_back(newType);
         modified = true;
-
-        if (type.isInteger(1)) {
-          modifyRelatedOps(arg, type, builder);
-        }
+        modifyRelatedOps(arg, type, builder);
       } else {
         newInputTypes.push_back(arg.getType());
       }

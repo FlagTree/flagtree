@@ -13,6 +13,8 @@ target_link_libraries(aipu-opt PRIVATE
   MLIRTransforms
   # AIPU pass
   MLIRAIPUPasses
+  # Triton
+  TritonIR
 )
 
 mlir_check_all_link_libraries(aipu-opt)

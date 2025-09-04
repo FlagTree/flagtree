@@ -36,16 +36,62 @@ class AIPUUtils(object):
 
 
 def _reset_output_path(ex):
-    parts = ex._output_dir.split("_", 3)
-    ex._output_dir = "_".join(parts[:3]) + str(uuid.uuid4().hex)
+    output_dir = f"{os.getcwd()}/compass_dsl_{ex._func_name}_restore_{uuid.uuid4().hex}"
+    ex._output_dir = output_dir
     ex._gbuilder_dir = f"{ex._output_dir}/gbuilder"
     ex._op_lib_path = f"{ex._gbuilder_dir}/op_lib/{ex._func_name}.o"
+
+
+def _get_cpu_origin_tensor(tensor):
+    origin_tensor = tensor
+    while (base := origin_tensor._base) is not None:
+        origin_tensor = base
+
+    return origin_tensor.cpu().contiguous()
+
+
+def _get_np_array_from_strided_buffer(tensor, sb):
+    dtype = str(sb.dtype).split(".")[-1]
+    itemsize = sb.element_size()
+    offset = (sb.data_ptr() - sb._base.data_ptr())
+    shape = sb.size()
+    stride = [x * itemsize for x in sb.stride()]
+
+    return np.ndarray(
+        shape,
+        dtype,
+        tensor.numpy(),
+        offset,
+        stride,
+    )
 
 
 class AIPULauncher(object):
 
     def __init__(self, src, metadata):
         self.constants = src.constants
+
+    def lanch_kernel(self, ex, np_args, tail_args, totoal_pid_size):
+        convert_map = {}
+        real_args = []
+        for i, arg in enumerate(np_args):
+            if isinstance(arg, np.ndarray) and arg.dtype == "bool":
+                real_args.append(arg.astype(np.int8))
+                convert_map[i] = np.bool_
+            elif isinstance(arg, np.ndarray) and arg.dtype == "int64":
+                real_args.append(arg.astype(np.int32))
+                convert_map[i] = np.int64
+            else:
+                real_args.append(arg)
+
+        tec_num = 4
+        for i in range((totoal_pid_size + tec_num - 1) // tec_num):
+            tail_args[3] = i
+            ex(*(real_args + tail_args))
+
+        for i, arg in enumerate(real_args):
+            if i in convert_map.keys():
+                np.copyto(np_args[i], arg.astype(convert_map[i]))
 
     # TODO(aipu-teams): This is just a temporary solution for now, because the real driver interface is not ready yet.
     # These code will be refactor later.
@@ -58,37 +104,29 @@ class AIPULauncher(object):
         ex = pickle.loads(function)
         _reset_output_path(ex)
         np_args = []
+        sb_maps = {}
         args = [arg for i, arg in enumerate(args[4:]) if i not in chain(*self.constants.keys())]
 
-        for arg in args:
+        for i, arg in enumerate(args):
             if isinstance(arg, torch.Tensor):
-                np_args.append(arg.cpu().numpy())
+                np_args.append(_get_cpu_origin_tensor(arg).numpy())
             elif isinstance(arg, StridedBuffer):
-                np_args.append(arg._base.cpu().numpy())
+                tensor = _get_cpu_origin_tensor(arg)
+                np_args.append(_get_np_array_from_strided_buffer(tensor, arg))
+                sb_maps[i] = tensor
             else:
                 np_args.append(arg)
 
-        bool_index = []
-        for i, arr in enumerate(np_args):
-            if isinstance(arr, np.ndarray) and arr.dtype == "bool":
-                np_args[i] = arr.astype(np.int8)
-                bool_index.append(i)
-
         tail_args = [gridx_size, gridy_size, gridz_size, 0, 0, 0]
-        tec_num = 4
-
-        for i in range((gridx_size * gridy_size * gridz_size + tec_num - 1) // tec_num):
-            tail_args[3] = i
-            ex(*(np_args + tail_args))
-
-        for i, arr in enumerate(np_args):
-            if i in bool_index:
-                np_args[i] = arr.astype(np.bool_)
+        total_pid_size = gridx_size * gridy_size * gridz_size
+        self.lanch_kernel(ex, np_args, tail_args, total_pid_size)
 
         for i, param_info in enumerate(ex._cur_param_infos):
             if param_info.is_output_tensor:
-                aipu_tensor = args[i] if isinstance(args[i], torch.Tensor) else args[i]._base
-                aipu_tensor.copy_(torch.from_numpy(np_args[i]))
+                if isinstance(args[i], torch.Tensor):
+                    args[i].copy_(torch.from_numpy(np_args[i]))
+                else:
+                    args[i]._base.copy_(sb_maps[i])
 
 
 class AIPUDriver(DriverBase):
