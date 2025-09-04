@@ -7,4 +7,4 @@ lit
 GitPython
 pytest
 scipy
-nanobind
+nanobind==2.6.1
