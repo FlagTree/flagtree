@@ -42,6 +42,7 @@ static void *load_backend_plugin(const char *backend_name) {
   void *handle = dlopen(plugin_path.c_str(), RTLD_LAZY);
   if (!handle) {
     std::cerr << "Failed to load plugin: " << std::string(dlerror());
+    assert(handle);
     std::cerr << "We define your shared library path as "
                  "$ENV{FLAGTREE_BACKEND_PLUGIN_LIB_DIR}/"
                  "$ENV{FLAGTREE_BACKEND}TritonPlugin.so.\n"
