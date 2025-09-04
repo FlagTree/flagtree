@@ -9,6 +9,7 @@ int main(int argc, char **argv) {
   mlir::registerAllDialects(registry);
   mlir::aipu::registerAIPUConvertBoolArg2I8();
   mlir::aipu::registerSCFLoopBufferizationPreprocessing();
+  mlir::aipu::registerFlattenMemrefsPass();
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "AIPU optimizer driver\n", registry));
