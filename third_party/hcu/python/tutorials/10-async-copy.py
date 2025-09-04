@@ -13,13 +13,16 @@ os.environ["HCUGCN_USE_BUFFER_OPS"] = "1"
 # torch.cuda.set_device(5)
 # torch.set_printoptions(threshold=10_000, profile="full")
 
+
 @triton.jit
-def copy_kernel(S, D,
-                    M: tl.constexpr,
-                    N: tl.constexpr,
-                    BLOCK_M: tl.constexpr,
-                    BLOCK_N: tl.constexpr,
-                    ):
+def copy_kernel(
+    S,
+    D,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
     start_m = tl.program_id(0)
     # block pointers
     S_block_ptr = tl.make_block_ptr(
@@ -46,8 +49,9 @@ def copy_kernel(S, D,
         acc += s
 
         S_block_ptr = tl.advance(S_block_ptr, (0, BLOCK_N))
-    
+
     tl.store(O_block_ptr, acc)
+
 
 copy_kernel_ttgir = """
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 1], order = [1, 0]}>
@@ -109,6 +113,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 :
 #loc8 = loc("/home/lisj/chaindot/01-copy.py":49:4)
 """
 
+
 def copy(src):
     M, N = src.shape
     dst = torch.empty_like(src)
@@ -122,12 +127,13 @@ def copy(src):
     import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as ttgir:
         ttgir.write(copy_kernel_ttgir)
-        ttgir.flush()        
+        ttgir.flush()
         copy_ttgir_kernel = triton.compile(ttgir.name)
 
     grid = (triton.cdiv(M, BLOCK_M), 1, 1)
     copy_ttgir_kernel[grid](src, dst)
     return dst
+
 
 M, N = 64, 64
 torch.cuda.manual_seed(0)

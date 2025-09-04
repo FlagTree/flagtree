@@ -171,9 +171,12 @@ public:
       // computation, we will be able to maintain the Q tensor in the registers.
       auto dstType = cast<RankedTensorType>(op.getResult().getType());
       auto dstEnc = dstType.getEncoding();
-      if (!isa<ttg::SharedEncodingAttr>(dstEnc) && !isa<ttg::DotOperandEncodingAttr>(dstEnc)) return;
-      Operation* argOp = op.getOperand().getDefiningOp();
-      if (!argOp) return;
+      if (!isa<ttg::SharedEncodingAttr>(dstEnc) &&
+          !isa<ttg::DotOperandEncodingAttr>(dstEnc))
+        return;
+      Operation *argOp = op.getOperand().getDefiningOp();
+      if (!argOp)
+        return;
       op->moveAfter(argOp);
     });
 

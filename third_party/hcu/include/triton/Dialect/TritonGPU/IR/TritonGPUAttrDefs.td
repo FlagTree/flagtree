@@ -286,7 +286,7 @@ compared to 1*64 when the hasLeadingOffset is false.
             int innerDimLength = shape[order[0]];
             int maxPhase = std::max(innerDimLength/vecSize, 1);
             return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
-          } 
+          }
           unsigned mDim = mfmaEnc.getMDim();
           unsigned nDim = mfmaEnc.getNDim();
           unsigned kDim = mfmaEnc.getKDim();
@@ -304,24 +304,24 @@ compared to 1*64 when the hasLeadingOffset is false.
                 SmallVector<unsigned> rev_order = isKDimInner == true ? col_order : row_order;
                 int innerDimLength = isKDimInner == true ? shape[order[1]] : shape[order[0]];
                 int vecSize = 32;
-                int perPhase = 1; 
+                int perPhase = 1;
                 int maxPhase = std::max(innerDimLength/vecSize, 1);
                 return get(context, vecSize, perPhase, maxPhase, rev_order, CTALayout);
               } else if(dotOpEnc.getOpIdx() == 1){
                 int innerDimLength = shape[order[0]];
                 int vecSize = 32;
-                int perPhase = 1; 
+                int perPhase = 1;
                 int maxPhase = std::max(innerDimLength/vecSize, 1);
                 SmallVector<unsigned> rev_order = {1, 0};
                 return get(context, vecSize, perPhase, maxPhase, rev_order, CTALayout);
               }
             }
-            
+
             if((mDim == 16 && nDim == 32) && dotOpEnc.getOpIdx() == 1){
               SmallVector<unsigned> rev_order = {1, 0};
               int innerDimLength = shape[order[0]];
               int vecSize = 32;
-              int perPhase = 1; 
+              int perPhase = 1;
               int maxPhase = std::max(innerDimLength/vecSize, 1);
               return get(context, vecSize, perPhase, maxPhase, rev_order, CTALayout);
             }
@@ -359,7 +359,7 @@ compared to 1*64 when the hasLeadingOffset is false.
             // TODO (zhanglx): figure out better parameters for mfma4
             if (mfmaEnc.getMDim() == 4)
               maxPhase = 4;
-            
+
             // DS_READ
             return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
           } else {

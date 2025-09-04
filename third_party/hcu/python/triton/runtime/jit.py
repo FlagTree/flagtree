@@ -292,10 +292,10 @@ dtype2str = {}
 
 
 def mangle_type(arg, is_const=False):
-    #rearrange the if-else control flow so that more common types (such as tensors and integers) 
-    #get matched with higher priority than more esoteric types  
+    #rearrange the if-else control flow so that more common types (such as tensors and integers)
+    #get matched with higher priority than more esoteric types
     #this will reduce the average runtime spent in this function.
-    if  hasattr(arg, 'dtype'):
+    if hasattr(arg, 'dtype'):
         dsk = (arg.dtype, is_const)
         res = dtype2str.get(dsk, None)
         if res is None:
@@ -325,7 +325,6 @@ def mangle_type(arg, is_const=False):
             res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
             dtype2str[dsk] = res
         return res
-
 
 
 class KernelInterface(Generic[T]):
@@ -636,7 +635,7 @@ class JITFunction(KernelInterface[T]):
         # bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
 
         # compute cache key
-        
+
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
         # print("key:",key)
         #kernel = self.cache[device].get(key, None)

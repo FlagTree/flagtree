@@ -466,23 +466,29 @@ def ilogb(arg0, _builder=None):
             (core.dtype("fp32"), ): ("__ocml_ilogb_f32", core.dtype("int32")),
             (core.dtype("fp64"), ): ("__ocml_ilogb_f64", core.dtype("int32")),
         }, is_pure=True, _builder=_builder)
+
+
 @core.extern
 def isfinited(arg0, _builder=None):
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp64"), ): ("__ocml_isfinite_f64", core.dtype("int32")),
-        }, is_pure=True, _builder=_builder)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__ocml_isfinite_f64", core.dtype("int32")),
+    }, is_pure=True, _builder=_builder)
+
+
 @core.extern
 def finitef(arg0, _builder=None):
-    return core.extern_elementwise(
-        "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__ocml_isfinite_f32", core.dtype("int32")),
-        }, is_pure=True, _builder=_builder)
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__ocml_isfinite_f32", core.dtype("int32")),
+    }, is_pure=True, _builder=_builder)
+
+
 @core.extern
 def div_rz(arg0, arg1, _builder=None):
     return core.extern_elementwise("", "", [arg0, arg1], {
         (core.dtype("fp32"), core.dtype("fp32")): ("__ocml_div_rtz_f32", core.dtype("fp32")),
     }, is_pure=True, _builder=_builder)
+
+
 @core.extern
 def div_rn(arg0, arg1, _builder=None):
     return core.extern_elementwise("", "", [arg0, arg1], {

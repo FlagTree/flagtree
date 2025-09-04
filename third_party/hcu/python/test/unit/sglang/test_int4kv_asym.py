@@ -1,13 +1,8 @@
 import random
 import pytest
 import torch
-from decode_attention_int4kv import (
-    decode_attention_fwd_int4kv,
-    destindex_copy_quantize_int4kv_init,
-    destindex_dequantize_int4kv,
-    gama_int4kv_init,
-    degama_int4kv_init
-)
+from decode_attention_int4kv import (decode_attention_fwd_int4kv, destindex_copy_quantize_int4kv_init,
+                                     destindex_dequantize_int4kv, gama_int4kv_init, degama_int4kv_init)
 from decode_attention import decode_attention_fwd_ori
 
 
@@ -46,26 +41,16 @@ def decode_attention_once(B, KV_SEQ, H_Q, H_KV, D):
     k_buffer_deq = torch.randn(total_tokens, H_KV, D, dtype=dtype, device="cuda")
     v_buffer_deq = torch.randn(total_tokens, H_KV, D, dtype=dtype, device="cuda")
 
-    k_buffer_int4 = torch.empty(
-        (total_tokens, H_KV, D // 2), dtype=torch.int8, device="cuda"
-    )
-    v_buffer_int4 = torch.empty(
-        (total_tokens, H_KV, D // 2), dtype=torch.int8, device="cuda"
-    )
+    k_buffer_int4 = torch.empty((total_tokens, H_KV, D // 2), dtype=torch.int8, device="cuda")
+    v_buffer_int4 = torch.empty((total_tokens, H_KV, D // 2), dtype=torch.int8, device="cuda")
 
     k_quant_group_size = int(2)
     v_quant_group_size = int(2)
 
-    k_buffer_scales = torch.empty(
-        (total_tokens, H_KV, D // k_quant_group_size * 2), dtype=dtype, device="cuda"
-    )
-    v_buffer_scales = torch.empty(
-        (total_tokens, H_KV, D // v_quant_group_size * 2), dtype=dtype, device="cuda"
-    )
+    k_buffer_scales = torch.empty((total_tokens, H_KV, D // k_quant_group_size * 2), dtype=dtype, device="cuda")
+    v_buffer_scales = torch.empty((total_tokens, H_KV, D // v_quant_group_size * 2), dtype=dtype, device="cuda")
 
-    k_gamas = torch.empty(
-        (H_KV, D), dtype=dtype, device="cuda"
-    )
+    k_gamas = torch.empty((H_KV, D), dtype=dtype, device="cuda")
 
     gama_int4kv_init(k_buffer, k_gamas, k_buffer_g, alpha=0.5)
     # degama_int4kv_init(k_buffer_g, k_gamas, k_buffer_deq, alpha=0.5)
@@ -117,12 +102,9 @@ def decode_attention_once(B, KV_SEQ, H_Q, H_KV, D):
     req_to_token = torch.arange(total_tokens, device="cuda").reshape(B, seq_len)
     b_req_idx = torch.arange(B, device="cuda")
     b_start_loc = torch.arange(0, total_tokens, seq_len, device="cuda")
-    b_seq_len = torch.full((B,), seq_len, device="cuda")
+    b_seq_len = torch.full((B, ), seq_len, device="cuda")
 
-    attn_logits = torch.empty(
-        (H_Q, total_tokens),
-        dtype=torch.float16,
-        device="cuda")
+    attn_logits = torch.empty((H_Q, total_tokens), dtype=torch.float16, device="cuda")
 
     decode_attention_fwd_ori(
         q,
@@ -140,19 +122,9 @@ def decode_attention_once(B, KV_SEQ, H_Q, H_KV, D):
     torch.cuda.synchronize()
 
     best_config = {
-        "kernel_kind": "v1_2stages",
-        "best_config": {
-            "stage1": {
-                "BLOCK_N": 16,
-                "BLOCK": 16,
-                "num_stages": 4,
-                "num_warps": 2
-            },
-            "stage2": {
-                "BLOCK_N": 64,
-                "num_stages": 4,
-                "num_warps": 1
-            }
+        "kernel_kind": "v1_2stages", "best_config": {
+            "stage1": {"BLOCK_N": 16, "BLOCK": 16, "num_stages": 4, "num_warps": 2}, "stage2":
+            {"BLOCK_N": 64, "num_stages": 4, "num_warps": 1}
         }
     }
 

@@ -1,8 +1,8 @@
-#include "triton/Conversion/TritonGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/GCNAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -46,13 +46,15 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (dyn_cast<HCUMfmaEncodingAttr>(srcLayout) && dyn_cast<HCUMfmaEncodingAttr>(dstLayout)) {
+    if (dyn_cast<HCUMfmaEncodingAttr>(srcLayout) &&
+        dyn_cast<HCUMfmaEncodingAttr>(dstLayout)) {
       auto srcLayout = dyn_cast<HCUMfmaEncodingAttr>(srcTy.getEncoding());
       auto dstLayout = dyn_cast<HCUMfmaEncodingAttr>(dstTy.getEncoding());
       auto srcWarpsPerCTA = srcLayout.getWarpsPerCTA();
       auto dstWarpsPerCTA = dstLayout.getWarpsPerCTA();
       // chain-dot opt: (mfma->mfma) && (srcWarpsPerCTA == dstWarpsPerCTA)
-      if((product(srcWarpsPerCTA) == product(dstWarpsPerCTA)) && (srcWarpsPerCTA[0] == dstWarpsPerCTA[0])){
+      if ((product(srcWarpsPerCTA) == product(dstWarpsPerCTA)) &&
+          (srcWarpsPerCTA[0] == dstWarpsPerCTA[0])) {
         rewriter.replaceOp(op, adaptor.getSrc());
         return success();
       }
@@ -102,11 +104,11 @@ private:
     else if (isPtr)
       elemTy = IntegerType::get(elemTy.getContext(), 64);
     bool isDsReadMat = false;
-    if (isa<HCUMfmaEncodingAttr>(layout)){
+    if (isa<HCUMfmaEncodingAttr>(layout)) {
       auto mfmaLayout = cast<HCUMfmaEncodingAttr>(layout);
       auto mDim = mfmaLayout.getMDim();
       auto nDim = mfmaLayout.getNDim();
-      if(mDim == 32 && nDim == 32){
+      if (mDim == 32 && nDim == 32) {
         isDsReadMat = true;
       }
     }
@@ -143,12 +145,16 @@ private:
         if (stNotRd) {
           Value valVec = undef(vecTy);
           unsigned index = 0;
-          for (unsigned v = 0; v < vec; ++v) {        
-            if (!isDsReadMat){
-                index = elemId + linearCTAId * accumSizePerThread + v;
-            }else{
-                index = (elemId/8) == 0 ? ((elemId % 8) + multiDimCTAId[1] * 8) + multiDimCTAId[0] * 2 * numCTATiles[1] * 8 : 
-                                              (numCTATiles[1] * 8 + (elemId % 8) + multiDimCTAId[1] * 8) + multiDimCTAId[0] * 2 * numCTATiles[1] * 8;
+          for (unsigned v = 0; v < vec; ++v) {
+            if (!isDsReadMat) {
+              index = elemId + linearCTAId * accumSizePerThread + v;
+            } else {
+              index = (elemId / 8) == 0
+                          ? ((elemId % 8) + multiDimCTAId[1] * 8) +
+                                multiDimCTAId[0] * 2 * numCTATiles[1] * 8
+                          : (numCTATiles[1] * 8 + (elemId % 8) +
+                             multiDimCTAId[1] * 8) +
+                                multiDimCTAId[0] * 2 * numCTATiles[1] * 8;
             }
             auto currVal = vals[index];
             if (isInt1)
@@ -245,7 +251,8 @@ private:
         GCNBuilder BuilderMemfenceLDS;
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.create<>("s_barrier")->operator()();
-        BuilderMemfenceLDS.launch(rewriter, loc, void_ty(rewriter.getContext()));
+        BuilderMemfenceLDS.launch(rewriter, loc,
+                                  void_ty(rewriter.getContext()));
       }
       auto successful = targetInfo.processReplicaUsingStMatrix(
           rewriter, loc, smemBase, vals, srcTy,
@@ -296,38 +303,41 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-    if (dyn_cast<HCUMfmaEncodingAttr>(srcTy.getEncoding()) && dyn_cast<HCUMfmaEncodingAttr>(dstTy.getEncoding())) {
-        auto srcLayout = dyn_cast<HCUMfmaEncodingAttr>(srcTy.getEncoding());
-        auto dstLayout = dyn_cast<HCUMfmaEncodingAttr>(dstTy.getEncoding());
-        auto srcWarpsPerCTA = srcLayout.getWarpsPerCTA();
-        auto dstWarpsPerCTA = dstLayout.getWarpsPerCTA();
-        // chain-dot opt: (mfma->mfma) && (srcWarpsPerCTA == dstWarpsPerCTA)
-        if((product(srcWarpsPerCTA) == product(dstWarpsPerCTA)) && (srcWarpsPerCTA[0] == dstWarpsPerCTA[0])){
-          if (auto rankedSrcTy = mlir::dyn_cast<RankedTensorType>(srcTy)) {
-            ArrayRef<int64_t> srcShape = rankedSrcTy.getShape();
-            if (!srcShape.empty() && srcShape.back() != 1) {
-              rewriter.replaceOp(op, adaptor.getSrc());
-              return success();
-            }
+    if (dyn_cast<HCUMfmaEncodingAttr>(srcTy.getEncoding()) &&
+        dyn_cast<HCUMfmaEncodingAttr>(dstTy.getEncoding())) {
+      auto srcLayout = dyn_cast<HCUMfmaEncodingAttr>(srcTy.getEncoding());
+      auto dstLayout = dyn_cast<HCUMfmaEncodingAttr>(dstTy.getEncoding());
+      auto srcWarpsPerCTA = srcLayout.getWarpsPerCTA();
+      auto dstWarpsPerCTA = dstLayout.getWarpsPerCTA();
+      // chain-dot opt: (mfma->mfma) && (srcWarpsPerCTA == dstWarpsPerCTA)
+      if ((product(srcWarpsPerCTA) == product(dstWarpsPerCTA)) &&
+          (srcWarpsPerCTA[0] == dstWarpsPerCTA[0])) {
+        if (auto rankedSrcTy = mlir::dyn_cast<RankedTensorType>(srcTy)) {
+          ArrayRef<int64_t> srcShape = rankedSrcTy.getShape();
+          if (!srcShape.empty() && srcShape.back() != 1) {
+            rewriter.replaceOp(op, adaptor.getSrc());
+            return success();
           }
-          Location loc = op->getLoc();
-          auto typeConverter = getTypeConverter();
-          Attribute srcLayout = srcTy.getEncoding();
-          Attribute dstLayout = dstTy.getEncoding();
-          auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-          auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
-          auto resultOffsets = emitOffsetForLayout(dstLayout, dstTy);
-          std::map<SmallVector<unsigned>, Value> srcValues;
-          for (size_t i = 0; i < srcOffsets.size(); i++) {
-            srcValues[srcOffsets[i]] = srcVals[i];
-          }
-          SmallVector<Value> resultVals;
-          for (size_t i = 0; i < resultOffsets.size(); i++) {
-            auto offset = resultOffsets[i];
-            resultVals.push_back(srcValues.at(offset));
-          }
-          Value ret = packLLElements(loc, typeConverter, resultVals, rewriter, dstTy);
-          rewriter.replaceOp(op, ret);
+        }
+        Location loc = op->getLoc();
+        auto typeConverter = getTypeConverter();
+        Attribute srcLayout = srcTy.getEncoding();
+        Attribute dstLayout = dstTy.getEncoding();
+        auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+        auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
+        auto resultOffsets = emitOffsetForLayout(dstLayout, dstTy);
+        std::map<SmallVector<unsigned>, Value> srcValues;
+        for (size_t i = 0; i < srcOffsets.size(); i++) {
+          srcValues[srcOffsets[i]] = srcVals[i];
+        }
+        SmallVector<Value> resultVals;
+        for (size_t i = 0; i < resultOffsets.size(); i++) {
+          auto offset = resultOffsets[i];
+          resultVals.push_back(srcValues.at(offset));
+        }
+        Value ret =
+            packLLElements(loc, typeConverter, resultVals, rewriter, dstTy);
+        rewriter.replaceOp(op, ret);
         return success();
       }
     }

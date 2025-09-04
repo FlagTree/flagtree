@@ -450,37 +450,38 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
     offsets.push_back(
         llvm::to_vector_of<unsigned>(llvm::make_second_range(idxs)));
   }
-  /* ldmatrixes MFMA:32x32 
-     ---- ----(0) ---- ----(2) ...  
+  /* ldmatrixes MFMA:32x32
+     ---- ----(0) ---- ----(2) ...
      ++++ ++++(1) ++++ ++++(3) ...
 
-     origin arange[BUG]:    ---- ----(0) ++++ ++++(1) ---- ----(2) ++++ ++++(3) ... ...
-     new arange[BUG FIXED]: ---- ----(0) ---- ----(2)    ...       ++++ ++++(1) ++++ ++++(3) ...
+     origin arange[BUG]:    ---- ----(0) ++++ ++++(1) ---- ----(2) ++++ ++++(3)
+     ... ... new arange[BUG FIXED]: ---- ----(0) ---- ----(2)    ...       ++++
+     ++++(1) ++++ ++++(3) ...
   */
-  if(isa<HCUMfmaEncodingAttr>(layout)){
+  if (isa<HCUMfmaEncodingAttr>(layout)) {
     auto mfmaLayout = dyn_cast<HCUMfmaEncodingAttr>(layout);
     unsigned mDim = mfmaLayout.getMDim();
     unsigned nDim = mfmaLayout.getNDim();
     SmallVector<unsigned> sizePerThread = mfmaLayout.getSizePerThread();
-    if(shape[0] == 1 && mDim == 32 && nDim == 32){
-      sizePerThread.erase(sizePerThread.begin() + 0/*dim:0*/);
+    if (shape[0] == 1 && mDim == 32 && nDim == 32) {
+      sizePerThread.erase(sizePerThread.begin() + 0 /*dim:0*/);
       auto accumSizePerThread = product<unsigned>(sizePerThread);
       SmallVector<SmallVector<unsigned>> reArrangeOffsets = std::move(offsets);
-      for(unsigned i=0; i < reArrangeOffsets.size(); i++){
-        if((i / accumSizePerThread) % 2 == 0){ // even
+      for (unsigned i = 0; i < reArrangeOffsets.size(); i++) {
+        if ((i / accumSizePerThread) % 2 == 0) { // even
           offsets.push_back(reArrangeOffsets[i]);
-        }else{
+        } else {
           continue;
         }
       }
-      for(unsigned i=0; i < reArrangeOffsets.size(); i++){
-        if((i / accumSizePerThread) % 2 == 1){ // odd
+      for (unsigned i = 0; i < reArrangeOffsets.size(); i++) {
+        if ((i / accumSizePerThread) % 2 == 1) { // odd
           offsets.push_back(reArrangeOffsets[i]);
-        }else{
+        } else {
           continue;
         }
       }
-    }else if(mDim == 32 && nDim == 32){
+    } else if (mDim == 32 && nDim == 32) {
       std::sort(offsets.begin(), offsets.end());
     }
   }

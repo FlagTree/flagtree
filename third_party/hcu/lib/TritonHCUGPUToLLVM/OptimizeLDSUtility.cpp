@@ -54,8 +54,8 @@ Attribute createTmpLayout(Attribute layout, ArrayRef<unsigned> warpsPerCTA) {
   if (auto src = dyn_cast<triton::gpu::HCUMfmaEncodingAttr>(layout))
     return triton::gpu::HCUMfmaEncodingAttr::get(
         ctx, src.getVersionMajor(), src.getVersionMinor(), warpsPerCTA,
-        src.getMDim(), src.getNDim(), src.getKDim(), src.getIsTransposed(), src.getInterleave(),
-        src.getCTALayout());
+        src.getMDim(), src.getNDim(), src.getKDim(), src.getIsTransposed(),
+        src.getInterleave(), src.getCTALayout());
   if (auto src = dyn_cast<triton::gpu::HCUWmmaEncodingAttr>(layout))
     return triton::gpu::HCUWmmaEncodingAttr::get(
         ctx, /*version=*/1, warpsPerCTA, src.getCTALayout());
@@ -68,7 +68,7 @@ Attribute createTmpLayout(Attribute layout, ArrayRef<unsigned> warpsPerCTA) {
         ctx, src.getOpIdx(), createTmpLayout(src.getParent(), warpsPerCTA),
         src.getKWidth());
   }
-  if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout)){
+  if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout)) {
     auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(src.getParent());
     return triton::gpu::SliceEncodingAttr::get(
         ctx, src.getDim(), createTmpLayout(src.getParent(), parentWarpsPerCTA));

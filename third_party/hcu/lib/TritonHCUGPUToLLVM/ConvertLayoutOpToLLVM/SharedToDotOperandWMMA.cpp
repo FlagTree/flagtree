@@ -24,10 +24,10 @@
 #include "SharedToDotOperandHelper.h"
 #include "Utility.h"
 
-using ::mlir::triton::gpu::HCUWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::HCUWmmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace SharedToDotOperandWMMA {
@@ -70,7 +70,8 @@ computeTensorElemMappingInBlockWmma1(
     ConversionPatternRewriter &rewriter, Location loc,
     const ArrayRef<int64_t> &elemsPerInstr, Value warpId, Value laneId,
     int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
-    int loadVecSize, unsigned iNonKDim, [[maybe_unused]] unsigned iKDim, bool interleave) {
+    int loadVecSize, unsigned iNonKDim, [[maybe_unused]] unsigned iKDim,
+    bool interleave) {
   assert(reps.size() == 3);
   assert(elemsPerInstr.size() == 2);
   auto numK = reps[2];
@@ -103,7 +104,8 @@ computeTensorElemMappingInBlockWmma2(
     ConversionPatternRewriter &rewriter, Location loc,
     const ArrayRef<int64_t> &elemsPerInstr, Value warpId, Value laneId,
     int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
-    int loadVecSize, unsigned iNonKDim, [[maybe_unused]] unsigned iKDim, bool interleave) {
+    int loadVecSize, unsigned iNonKDim, [[maybe_unused]] unsigned iKDim,
+    bool interleave) {
   assert(reps.size() == 3);
   assert(elemsPerInstr.size() == 2);
   auto numK = reps[2];

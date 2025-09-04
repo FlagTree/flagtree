@@ -1,3 +1,4 @@
+#include "TritonHCUTransforms/ConvertToBufferOps.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -16,7 +17,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "TritonHCUTransforms/ConvertToBufferOps.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <deque>
 #include <optional>
@@ -50,7 +50,7 @@ bool verifyNonNegativeByAssumption(Value expr,
   return false;
 }
 } // namespace
-namespace mlir{
+namespace mlir {
 bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
 
   // Check if the expression is contained in any assumption
@@ -140,7 +140,7 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
   if (cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth() != 32)
     return false;
   LDBG("32 bit offset");
-  
+
   // 3. Check if the offset is non-negative
   // if (!verifyNonNegativeExpr(offset, assumptions))
   //   return false;
@@ -148,7 +148,7 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
   LDBG("Non-negative");
   return true;
 }
-}
+} // namespace mlir
 
 struct ConvertTritonLoadToBufferLoad
     : public mlir::OpRewritePattern<triton::LoadOp> {

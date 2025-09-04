@@ -48,7 +48,8 @@ if __name__ == "__main__":
     parser.add_argument("--num-stages", "-ns", type=int, default=3,
                         help="Number of stages (meta-parameter of the kernel)")
     parser.add_argument("--num-ldmatrixes", "-w", type=int, default=0, help="Number of ldmatrix to use in matmul")
-    parser.add_argument("--enable-mmacfuse", "-w", type=int, default=0, help="enable mmac fuse 16x64x32 instruction, default is closed")
+    parser.add_argument("--enable-mmacfuse", "-w", type=int, default=0,
+                        help="enable mmac fuse 16x64x32 instruction, default is closed")
     parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
@@ -114,7 +115,10 @@ if __name__ == "__main__":
     for i in equal_to_1:
         constants.update({kernel.arg_names[i]: 1})
     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
-    opts = {"num_warps": args.num_warps, "num_stages": args.num_stages, "num_ldmatrixes": args.num_ldmatrixes, "enable_mmacfuse": args.enable_mmacfuse}
+    opts = {
+        "num_warps": args.num_warps, "num_stages": args.num_stages, "num_ldmatrixes": args.num_ldmatrixes,
+        "enable_mmacfuse": args.enable_mmacfuse
+    }
     ccinfo = triton.compile(src, options=opts)
     arg_names = []
     arg_types = []

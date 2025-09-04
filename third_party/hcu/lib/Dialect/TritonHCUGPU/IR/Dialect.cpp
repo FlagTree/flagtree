@@ -21,9 +21,9 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 // clang-format off
 #include "triton/Dialect/TritonHCUGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonHCUGPU/IR/Dialect.cpp.inc"

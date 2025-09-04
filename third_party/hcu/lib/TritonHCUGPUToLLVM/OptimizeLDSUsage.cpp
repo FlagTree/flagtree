@@ -110,13 +110,14 @@ class OptimizeHCULDSUsage
     SmallVector<unsigned> elemsPerThread(rank, 1);
     SmallVector<unsigned> threadsPerWarp(rank, 1);
     // Special case for rank == 1
-    // ref https://github.com/triton-lang/triton/commit/4af6cf508cd0c8ad9340e98560dc4f09259923fb
+    // ref
+    // https://github.com/triton-lang/triton/commit/4af6cf508cd0c8ad9340e98560dc4f09259923fb
     if (rank == 1) {
-       threadsPerWarp[0] = warpSize;
+      threadsPerWarp[0] = warpSize;
     } else {
-       assert(rank > 1);
-       threadsPerWarp[rank - 1] = warpSize / 8;
-       threadsPerWarp[rank - 2] = warpSize / threadsPerWarp[rank - 1];
+      assert(rank > 1);
+      threadsPerWarp[rank - 1] = warpSize / 8;
+      threadsPerWarp[rank - 2] = warpSize / threadsPerWarp[rank - 1];
     }
     auto layoutCTA = triton::gpu::getCTALayout(srcEnc);
     auto order = triton::gpu::getOrder(srcEnc);

@@ -5,10 +5,10 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::triton::gpu::HCUMfmaEncodingAttr;
-using ::mlir::triton::gpu::HCUWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::HCUMfmaEncodingAttr;
+using ::mlir::triton::gpu::HCUWmmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace SharedToDotOperandMFMA {
