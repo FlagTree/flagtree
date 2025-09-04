@@ -80,13 +80,23 @@ def dir_rollback(deep, base_path):
     return Path(base_path)
 
 
+def enable_flagtree_third_party(name):
+    if name in ["triton_shared"]:
+        return os.environ.get(f"USE_{name.upper()}", 'OFF') == 'OFF'
+    else:
+        return os.environ.get(f"USE_{name.upper()}", 'ON') == 'ON'
+
+
 def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
-        submoduel = utils.flagtree_submoduels[name]
-        utils.download_module(submoduel, required)
-        if callable(hock):
-            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
-                 default_backends=default_backends)
+        if enable_flagtree_third_party(name):
+            submoduel = utils.flagtree_submoduels[name]
+            utils.download_module(submoduel, required)
+            if callable(hock):
+                hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
+                     default_backends=default_backends)
+        else:
+            print(f"\033[1;33m[Note] Skip downloading {name} since USE_{name.upper()} is set to OFF\033[0m")
 
 
 def configure_cambricon_packages_and_data(packages, package_dir, package_data):
