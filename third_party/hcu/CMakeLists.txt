@@ -1,0 +1,7 @@
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
+add_subdirectory(include)
+add_subdirectory(lib)
+if(TRITON_BUILD_PYTHON_MODULE)
+  add_triton_plugin(TritonHCU ${CMAKE_CURRENT_SOURCE_DIR}/python/triton_hcu.cc LINK_LIBS TritonHCUGPUToLLVM TritonHCUTransforms)
+endif()
