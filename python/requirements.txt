@@ -7,3 +7,4 @@ lit
 GitPython
 pytest
 scipy
+nanobind
