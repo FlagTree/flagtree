@@ -1,4 +1,4 @@
-def k_divisiable_by_bk_and_sk(K, BLOCK_K, SPLIT_K):
+def k_must_be_divisiable_by_bk_sk(K, BLOCK_K, SPLIT_K):
     if (K % (BLOCK_K * SPLIT_K) != 0):
         return True
     return False

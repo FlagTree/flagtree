@@ -24,6 +24,5 @@ __all__ = [
     "get_JITFunction_options", "ext_JITFunction_init", "backend_smi_cmd", "get_mem_clock_khz",
     "is_get_tflops_support_capability_lt_8", "always_support_flash_attention", "attention_forward_config",
     "attention_backward_config", "compute_dq_like_mma_v3", "only_supports_num_stages_le_2", "matmul_kernel",
-    "k_divisiable_by_bk_and_sk", "calculate_total_time_ms", "get_pruned_configs", "ops_modify_all", "bmm_utils", "_bmm",
-    "bmm"
+    "k_must_be_divisiable_by_bk_sk", "calculate_total_time_ms", "get_pruned_configs", "ops_modify_all", "_bmm", "bmm"
 ]

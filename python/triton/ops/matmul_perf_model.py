@@ -60,7 +60,7 @@ def estimate_matmul_time(
 
     # flagtree backend specialization
     from triton.runtime.driver import flagtree_backend_specialization
-    if flagtree_backend_specialization("k_divisiable_by_bk_and_sk", K, BLOCK_K, SPLIT_K):
+    if flagtree_backend_specialization("k_must_be_divisiable_by_bk_sk", K, BLOCK_K, SPLIT_K):
         return float('inf')
 
     num_cta_m = cdiv(M, BLOCK_M)
@@ -109,7 +109,8 @@ def estimate_matmul_time(
     total_time_ms = max(compute_ms, load_ms) + store_ms
     # flagtree backend specialization
     from triton.runtime.driver import flagtree_backend_specialization
-    total_time_ms = flagtree_backend_specialization("calculate_total_time_ms", compute_ms, load_ms, store_ms) or total_time_ms
+    total_time_ms = flagtree_backend_specialization("calculate_total_time_ms", compute_ms, load_ms,
+                                                    store_ms) or total_time_ms
     if debug:
         print(f'Total time: {total_time_ms}ms, compute time: {compute_ms}ms, '
               f'loading time: {load_ms}ms, store time: {store_ms}ms, '
@@ -159,7 +160,7 @@ def early_config_prune(configs, named_args, **kwargs):
         BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, num_warps = k
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
-        if capability[0] >= 8 and not flagtree_backend_specialization("is_hasattr_corex"):
+        if capability[0] >= 8 and not flagtree_backend_specialization("only_supports_num_stages_le_2"):
             # compute cycles (only works for ampere GPUs)
             mmas = BLOCK_M * BLOCK_N * BLOCK_K / (16 * 8 * 16)
             mma_cycles = mmas / min(4, num_warps) * 8
@@ -180,5 +181,6 @@ def early_config_prune(configs, named_args, **kwargs):
             pruned_configs.append(random_config)
             # flagtree backend specialization
             from triton.runtime.driver import flagtree_backend_specialization
-            pruned_configs = flagtree_backend_specialization("get_pruned_configs", capability, v, BLOCK_M, BLOCK_N, BLOCK_K) or pruned_configs
+            pruned_configs = flagtree_backend_specialization("get_pruned_configs", capability, v, BLOCK_M, BLOCK_N,
+                                                             BLOCK_K) or pruned_configs
     return pruned_configs
