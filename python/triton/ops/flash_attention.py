@@ -150,7 +150,8 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
                               BLOCK_N: tl.constexpr,  #
                               SEQUENCE_PARALLEL: tl.constexpr,  #
                               CAUSAL: tl.constexpr,  #
-                              MMA_V3: tl.constexpr  #
+                              MMA_V3: tl.constexpr,  #
+                              COMPUTE_DQ_LIKE_MMA_V3: tl.constexpr  #
                               ):
     if CAUSAL:
         lo = start_n * BLOCK_M
@@ -217,7 +218,7 @@ def _bwd_kernel_one_col_block(Q, K, V, sm_scale, qk_scale,  #
             dq += tl.dot(ds, k)
             tl.store(DQ_block_ptr, dq.to(Q.dtype.element_ty))
         elif SEQUENCE_PARALLEL:
-            if MMA_V3:
+            if MMA_V3 or COMPUTE_DQ_LIKE_MMA_V3:
                 dq = tl.dot(ds, k)
             else:
                 # not work with mma v3, because M % 64 != 0
@@ -249,7 +250,8 @@ def _bwd_kernel(Q, K, V, sm_scale,  #
                 BLOCK_N: tl.constexpr,  #
                 SEQUENCE_PARALLEL: tl.constexpr,  #
                 CAUSAL: tl.constexpr,  #
-                MMA_V3: tl.constexpr  #
+                MMA_V3: tl.constexpr,  #
+                COMPUTE_DQ_LIKE_MMA_V3: tl.constexpr  #
                 ):
     qk_scale = sm_scale * 1.44269504
     off_hz = tl.program_id(0)
@@ -342,7 +344,8 @@ def _bwd_kernel(Q, K, V, sm_scale,  #
                                       BLOCK_N=BLOCK_N,  #
                                       SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,  #
                                       CAUSAL=CAUSAL,  #
-                                      MMA_V3=MMA_V3  #
+                                      MMA_V3=MMA_V3,  #
+                                      COMPUTE_DQ_LIKE_MMA_V3=COMPUTE_DQ_LIKE_MMA_V3  #
                                       )
     else:
         start_n = tl.program_id(1)
@@ -361,7 +364,8 @@ def _bwd_kernel(Q, K, V, sm_scale,  #
                                   BLOCK_N=BLOCK_N,  #
                                   SEQUENCE_PARALLEL=SEQUENCE_PARALLEL,  #
                                   CAUSAL=CAUSAL,  #
-                                  MMA_V3=MMA_V3  #
+                                  MMA_V3=MMA_V3,  #
+                                  COMPUTE_DQ_LIKE_MMA_V3=COMPUTE_DQ_LIKE_MMA_V3  #
                                   )
 
 
@@ -371,10 +375,15 @@ class _attention(torch.autograd.Function):
     def forward(ctx, q, k, v, causal, sm_scale, sequence_parallel=False):
         # only support for Ampere now
         capability = torch.cuda.get_device_capability()
-        if capability[0] < 8:
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        if capability[0] < 8 and not flagtree_backend_specialization("always_support_flash_attention"):
             raise RuntimeError("Flash attention currently only supported for compute capability >= 80")
         BLOCK_M = 128
         BLOCK_N = 64
+        num_stages = 4
+        BLOCK_M, BLOCK_N, num_stages = flagtree_backend_specialization("attention_forward_config") or (BLOCK_M, BLOCK_N,
+                                                                                                       num_stages)
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
@@ -396,7 +405,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_DMODEL=Lk,  #
             IS_CAUSAL=causal,  #
             num_warps=num_warps,  #
-            num_stages=4  #
+            num_stages=num_stages  #
         )
 
         ctx.save_for_backward(q, k, v, o, L)
@@ -412,6 +421,11 @@ class _attention(torch.autograd.Function):
         capability = torch.cuda.get_device_capability()
         MMA_V3 = capability[0] >= 9
         BLOCK = 128
+        num_warps = 8
+        # flagtree backend specialization
+        from triton.runtime.driver import flagtree_backend_specialization
+        BLOCK, num_warps = flagtree_backend_specialization("attention_backward_config",
+                                                           ctx.BLOCK_DMODEL) or (BLOCK, num_warps)
 
         if is_hip():
             # Bwd pass runs out of shared memory on HIP with larger block size.
@@ -437,6 +451,11 @@ class _attention(torch.autograd.Function):
             BLOCK_M=BLOCK,
             D_HEAD=ctx.BLOCK_DMODEL,
         )
+
+        # call flagtree specialization out of jit function
+        from triton.runtime.driver import flagtree_backend_specialization
+        COMPUTE_DQ_LIKE_MMA_V3 = bool(flagtree_backend_specialization("compute_dq_like_mma_v3") or False)
+
         _bwd_kernel[(ctx.grid[1], cdiv(seq_len_kv, BLOCK) if sequence_parallel else 1)](
             q, k, v, ctx.sm_scale,  #
             o, do,  #
@@ -454,8 +473,9 @@ class _attention(torch.autograd.Function):
             SEQUENCE_PARALLEL=sequence_parallel,  #
             CAUSAL=ctx.causal,  #
             MMA_V3=MMA_V3,  #
-            num_warps=8,  #
-            num_stages=1  #
+            num_warps=num_warps,  #
+            num_stages=1,  #
+            COMPUTE_DQ_LIKE_MMA_V3=COMPUTE_DQ_LIKE_MMA_V3  #
         )
 
         if len(dq.shape) == 5:
