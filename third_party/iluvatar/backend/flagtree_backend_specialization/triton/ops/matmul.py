@@ -1,10 +1,8 @@
 from triton import language as tl
 
-def is_hasattr_corex():
-    import torch
-    if hasattr(torch, "corex"):
-        return True
-    return False
+
+def only_supports_num_stages_le_2():
+    return True
 
 
 def get_configs_compute_bound():
@@ -127,13 +125,13 @@ def matmul_kernel(grid, a, b, c, M, N, K, acc_dtype, input_precision, fp8_fast_a
             tl.store(C, acc, mask=mask)
         else:
             tl.atomic_add(C, acc, mask=mask)
-    
+
     return _kernel[grid](
-            a, b, c, M, N, K,  #
-            a.stride(0), a.stride(1),  #
-            b.stride(0), b.stride(1),  #
-            c.stride(0), c.stride(1),  #
-            acc_dtype=acc_dtype,  #
-            input_precision=input_precision,  #
-            fp8_fast_accum=fp8_fast_accum,  #
-            GROUP_M=8, AB_DTYPE=ab_dtype)
+        a, b, c, M, N, K,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        acc_dtype=acc_dtype,  #
+        input_precision=input_precision,  #
+        fp8_fast_accum=fp8_fast_accum,  #
+        GROUP_M=8, AB_DTYPE=ab_dtype)

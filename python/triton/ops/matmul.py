@@ -37,7 +37,7 @@ def get_configs_io_bound():
     configs = []
     # flagtree backend specialization
     from triton.runtime.driver import flagtree_backend_specialization
-    if flagtree_backend_specialization("is_hasattr_corex"):
+    if flagtree_backend_specialization("only_supports_num_stages_le_2"):
         return configs
     for num_stages in [2, 3, 4, 5, 6]:
         for block_m in [16, 32]:
