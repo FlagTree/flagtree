@@ -208,15 +208,15 @@ class _matmul(torch.autograd.Function):
         # flagtree backend specialization
         from triton.runtime.driver import flagtree_backend_specialization
         flagtree_backend_specialization("matmul_kernel", grid, a, b, c, M, N, K, acc_dtype, input_precision, fp8_fast_accum, ab_dtype) or \
-            _kernel[grid](
-                a, b, c, M, N, K,  #
-                a.stride(0), a.stride(1),  #
-                b.stride(0), b.stride(1),  #
-                c.stride(0), c.stride(1),  #
-                acc_dtype=acc_dtype,  #
-                input_precision=input_precision,  #
-                fp8_fast_accum=fp8_fast_accum,  #
-                GROUP_M=8, AB_DTYPE=ab_dtype)
+        _kernel[grid](
+            a, b, c, M, N, K,  #
+            a.stride(0), a.stride(1),  #
+            b.stride(0), b.stride(1),  #
+            c.stride(0), c.stride(1),  #
+            acc_dtype=acc_dtype,  #
+            input_precision=input_precision,  #
+            fp8_fast_accum=fp8_fast_accum,  #
+            GROUP_M=8, AB_DTYPE=ab_dtype)
         return c
 
     @staticmethod
