@@ -8,4 +8,5 @@ __all__ = ["blocksparse", "_cross_entropy", "cross_entropy", "_matmul", "matmul"
 
 # flagtree backend specialization
 from triton.runtime.driver import flagtree_backend_specialization
+
 __all__ = flagtree_backend_specialization("ops_modify_all", __all__) or __all__
