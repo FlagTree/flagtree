@@ -7,10 +7,10 @@ import triton
 
 
 class bmm_utils:
+
     @staticmethod
     def init_to_zero(name):
         return lambda nargs: nargs[name].zero_()
-
 
     @staticmethod
     def get_configs_io_bound():
@@ -23,13 +23,12 @@ class bmm_utils:
                         num_warps = 4 if block_n <= 64 else 8
                         configs.append(
                             triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': 1},
-                                        num_stages=num_stages, num_warps=num_warps))
+                                          num_stages=num_stages, num_warps=num_warps))
                         # split_k
                         #for split_k in [2, 4, 8, 16]:
                         #    configs.append(triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': split_k},
                         #                                 num_stages=num_stages, num_warps=num_warps, pre_hook=init_to_zero('C')))
         return configs
-
 
     @staticmethod
     def get_configs_compute_bound():
@@ -40,10 +39,9 @@ class bmm_utils:
                     num_warps = 8 if block_n <= 64 else 16
                     configs.append(
                         triton.Config({'BLOCK_M': block_m, 'BLOCK_N': block_n, 'BLOCK_K': block_k, 'SPLIT_K': 1},
-                                    num_stages=1, num_warps=num_warps))
+                                      num_stages=1, num_warps=num_warps))
         return configs
 
-    
     @staticmethod
     def _get_bmm_kernel():
         import triton.language as tl
@@ -52,7 +50,9 @@ class bmm_utils:
         @triton.autotune(
             configs=[] + bmm_utils.get_configs_compute_bound() + bmm_utils.get_configs_io_bound(),
             key=['M', 'N', 'K'],
-            prune_configs_by={'early_config_prune': early_config_prune, 'perf_model': estimate_matmul_time, 'top_k': 10},
+            prune_configs_by={
+                'early_config_prune': early_config_prune, 'perf_model': estimate_matmul_time, 'top_k': 10
+            },
         )
         @triton.heuristics({
             'EVEN_K': lambda args: args['K'] % args['BLOCK_K'] == 0,
@@ -125,7 +125,7 @@ class bmm_utils:
             mask = (idx_m < M) & (idx_n < N)
             # handles write-back with reduction-splitting
             tl.store(C, acc, mask=mask)
-        
+
         return _bmm_kernel
 
 
@@ -176,8 +176,9 @@ class _bmm(torch.autograd.Function):
                 dot_out_dtype = tl.int32
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), B, 1)
-        bmm_utils._get_bmm_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), a.stride(2), b.stride(0), b.stride(1),
-                          b.stride(2), c.stride(0), c.stride(1), c.stride(2), dot_out_dtype=dot_out_dtype, GROUP_M=8)
+        bmm_utils._get_bmm_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1),
+                                        a.stride(2), b.stride(0), b.stride(1), b.stride(2), c.stride(0), c.stride(1),
+                                        c.stride(2), dot_out_dtype=dot_out_dtype, GROUP_M=8)
         return c
 
     @staticmethod
