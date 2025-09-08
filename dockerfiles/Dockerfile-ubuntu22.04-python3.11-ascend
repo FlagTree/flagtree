@@ -1,0 +1,36 @@
+FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.2.rc1.alpha003-a3-ubuntu22.04-py3.11 as base
+
+ARG ASCEND_BASE=/usr/local/Ascend
+ENV LD_LIBRARY_PATH=\
+$ASCEND_BASE/driver/lib64:\
+$ASCEND_BASE/driver/lib64/common:\
+$ASCEND_BASE/driver/lib64/driver:\
+$ASCEND_BASE/driver/tools/hccn_tool/:/lib64:\
+$LD_LIBRARY_PATH
+
+RUN sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    apt-get update -y && \
+    apt-get install -y net-tools wget git vim curl libnuma-dev unzip && \
+    apt-get clean && \
+    git config --global http.sslVerify "false" && \
+    pip config set global.index-url https://mirrors.huaweicloud.com/repository/pypi/simple && \
+    pip config set global.trusted-host mirrors.huaweicloud.com && \
+    pip config set global.timeout 120 && \
+    pip config set global.extra-index-url "https://download.pytorch.org/whl/cpu/ https://mirrors.huaweicloud.com/ascend/repos/pypi" && \
+    pip install cmake modelscope ray[serve] && \
+    pip cache purge
+
+FROM base as build
+
+RUN apt update -y && apt install -y zlib1g-dev clang-15 lld-15 ccache && apt clean && \
+    update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20 && \
+    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 20 && \
+    update-alternatives --install /usr/bin/lld lld /usr/bin/lld-15 20 && \
+    pip install ninja cmake wheel pybind11 && \
+    pip install attrs==24.2.0 numpy==1.26.4 scipy==1.13.1 decorator==5.1.1 psutil==6.0.0 pytest==8.3.2 pytest-xdist==3.6.1 pyyaml torch==2.6.0 torch-npu==2.6.0rc1
+
+FROM build as build_triton
+
+RUN export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/Ascend/ascend-toolkit/latest/`uname -i`-linux/devlib && \
+    source /usr/local/Ascend/ascend-toolkit/set_env.sh && \
+    pip install -U setuptools
