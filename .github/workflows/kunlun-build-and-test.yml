@@ -16,6 +16,12 @@ jobs:
     runs-on: xpu
     if: ${{ github.repository == 'FlagTree/flagtree' }}
     steps:
+      - name: Setup environment
+        shell: bash
+        run: |
+          source ~/env.sh
+          env | grep -E '^(http_proxy|https_proxy|all_proxy|no_proxy)=' >> $GITHUB_ENV || true
+
       - name: Checkout code (attempt 1)
         id: checkout1
         uses: actions/checkout@v5
@@ -51,7 +57,6 @@ jobs:
         shell: bash
         run: |
           pip uninstall -y triton
-          source ~/env.sh
           export FLAGTREE_BACKEND=xpu
           cd python
           MAX_JOBS=32 python3 -m pip install . --no-build-isolation
