@@ -4,6 +4,7 @@
 include "mlir/IR/AttrTypeBase.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "IluvatarDotOperandEncodingAttr.td"
 
 //===----------------------------------------------------------------------===//
 // TritonGPU Attribute Definitions
@@ -258,11 +259,7 @@ compared to 1*64 when the hasLeadingOffset is false.
                      "CTALayoutAttr":$CTALayout), [{
         bool hasLeadingOffset = false; // default value
         bool useTcu;
-#if defined(__ILUVATAR__)
         useTcu = true;
-#else
-        useTcu = false;
-#endif
         return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset, useTcu);
     }]>,
 
@@ -469,11 +466,7 @@ compared to 1*64 when the hasLeadingOffset is false.
         }
 
         bool useTcu;
-#if defined(__ILUVATAR__)
         useTcu = true;
-#else
-        useTcu = false;
-#endif
         return $_get(context, vec, perPhase, maxPhase, order, CTALayout, true, useTcu);
     }]>
   ];
@@ -1347,7 +1340,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let hasCustomAssemblyFormat = 1;
 }
 
-def DotOperandEncodingAttr : DistributedEncoding<"DotOperandEncoding", "dot_operand_encoding"> {
+class BaseDotOperandEncoding<string name, string mnemonic> : DistributedEncoding<name, mnemonic> {
   let mnemonic = "dot_op";
 
   let description = [{
@@ -1369,34 +1362,8 @@ elements along the K dim, or they use all elements of the tensor along the K dim
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    DefaultValuedParameter<"unsigned", "0">:$kWidth,
-    "unsigned":$useSme
+    DefaultValuedParameter<"unsigned", "0">:$kWidth
   );
-
-  let builders = [
-    // Specially for MMAV1(Volta)
-    AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent,
-                     "Type":$eltTy), [{
-      NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
-      if (!parentAttr || !parentAttr.isAmpere())
-        return $_get(context, opIdx, parent, 0, 0);
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      unsigned MMAv2kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, MMAv2kWidth, 0);
-    }]>,
-
-    // Specially for MR/BI150
-    AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent,
-                     "Type":$eltTy,
-                     "unsigned":$useSme), [{
-      IluvatarMmaEncodingAttr parentAttr = mlir::dyn_cast<IluvatarMmaEncodingAttr>(parent);
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
-      unsigned kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, kWidth, useSme);
-    }]>
-  ];
 
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
   let genVerifyDecl = 1;
