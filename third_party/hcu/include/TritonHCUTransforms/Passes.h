@@ -11,9 +11,12 @@ std::unique_ptr<Pass> createTritonHCUGPUStreamPipelinePass();
 
 std::unique_ptr<Pass> createTritonHCUGPUStreamPipelineV2Pass(int numStages = 2);
 
-std::unique_ptr<Pass> createTritonHCUGPUAccelerateMatmulPass(
-    std::string archGenName = std::string(), int matrixInstructionSize = 0,
-    int kpack = 1, int num_ldmatrixes = 0, int enable_mmacfuse = 0);
+std::unique_ptr<Pass>
+createTritonHCUGPUAccelerateMatmulPass(std::string archGenName = std::string(),
+                                       int matrixInstructionSize = 0,
+                                       int kpack = 1,
+                                       int num_ldmatrixes = 0,
+                                       int enable_mmacfuse = 0);
 
 std::unique_ptr<Pass> createTritonHCUGPUCanonicalizeLoopsPass();
 
@@ -39,13 +42,12 @@ std::unique_ptr<Pass> createTritonHCUFaFwdWaitPass(int cnt_control = 0);
 
 std::unique_ptr<Pass> createTritonHCUUpdateAsyncWaitCountPass();
 
-std::unique_ptr<Pass>
-createTritonHCUStreamPipelinePass(int numStages = 2, int globalPrefetch = 0,
-                                  int localPrefetch = 0,
-                                  bool useAsyncCopy = false);
+std::unique_ptr<Pass> createTritonHCUStreamPipelinePass(int numStages = 2, int globalPrefetch = 0,
+                                     int localPrefetch = 0,
+                                     bool useAsyncCopy = false);
 
 #define GEN_PASS_REGISTRATION
 #include "TritonHCUTransforms/Passes.h.inc"
 
-} // namespace mlir
+}
 #endif

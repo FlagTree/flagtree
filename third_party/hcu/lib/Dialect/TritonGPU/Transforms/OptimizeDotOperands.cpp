@@ -263,7 +263,8 @@ public:
 //   dot(convert(lhs #mma) #shared, rhs) #mma ->
 //   dot(convert(lhs #mma) #dot_operand, rhs) #mma,
 // for fp16 or bf16 MMAv3 dots.
-struct MMAV3UseRegOperand : public OpRewritePattern<DotOp> {
+struct MMAV3UseRegOperand
+    : public OpRewritePattern<DotOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(DotOp dotOp,

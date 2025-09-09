@@ -73,8 +73,9 @@ struct BufferEmitter {
   void emitStore(Value rsrcDesc, Value offset, Value data, Value pred);
 
   void emitAtomic(RewriterBase &rewriter, Location loc,
-                  triton::HCU::TargetInfo targetInfo, Value rmwptr,
-                  Value Atomicval, Value rmwMask, bool useAtomicOps = false);
+             triton::HCU::TargetInfo targetInfo, Value rmwptr, Value Atomicval,
+             Value rmwMask,
+             bool useAtomicOps = false);
 
 private:
   // Fill common buffer operation arguments.
@@ -84,7 +85,7 @@ private:
   // Given a type, the buffer type can be either the same type
   // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
   // a vector of 4xi32. This usually makes the life of the backend easier
-  Type getBufferOpType(Type type, bool atomicsOp);
+  Type getBufferOpType(Type type,bool atomicsOp);
 
   // Rewriter utilities
   RewriterBase &rewriter;
@@ -92,7 +93,7 @@ private:
   mlir::triton::HCU::TargetInfo targetInfo;
 };
 mlir::FailureOr<std::pair<Value, Value>> getBaseAndOffset(Value ptr,
-                                                          int64_t pos = 0);
+                                                          int64_t pos=0);
 } // namespace mlir::LLVM::HCU
 
 #endif // TRITON_CONVERSION_TRITONHCUGPU_TO_LLVM_BUFFER_OPS_EMITTER_H

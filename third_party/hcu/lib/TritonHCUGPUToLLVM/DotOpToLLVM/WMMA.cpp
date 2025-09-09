@@ -28,8 +28,8 @@
 namespace mlir::triton::HCU {
 namespace {
 
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::HCUWmmaEncodingAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 
 enum class WMMAInstrType : uint8_t {
   // D = AB + C;

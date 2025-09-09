@@ -267,11 +267,9 @@ class BlockedToMFMA : public RewritePattern {
   int enable_mmacfuse;
 
 public:
-  BlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim, int kPack,
-                int num_ldmatrixes, int enable_mmacfuse)
+  BlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim, int kPack, int num_ldmatrixes, int enable_mmacfuse)
       : RewritePattern(tt::DotOp::getOperationName(), 2, context),
-        mfmaVersion(mfmaVersion), enforcedNonKDim(nonKDim), kPack(kPack),
-        num_ldmatrixes(num_ldmatrixes), enable_mmacfuse(enable_mmacfuse) {}
+        mfmaVersion(mfmaVersion), enforcedNonKDim(nonKDim), kPack(kPack), num_ldmatrixes(num_ldmatrixes), enable_mmacfuse(enable_mmacfuse) {}
 
   bool isChainDot(tt::DotOp &dotOp) const {
     auto filter = [&dotOp](Operation *op) {
@@ -291,10 +289,10 @@ public:
   }
 
   bool isTranspose(ttg::ConvertLayoutOp &cvtOp) const {
-    if (!cvtOp)
+    if(!cvtOp)
       return false;
     auto trans = cvtOp.getSrc().getDefiningOp<tt::TransOp>();
-
+    
     RankedTensorType srcTy = cvtOp.getSrc().getType();
     RankedTensorType dstTy = cvtOp.getType();
     Attribute srcLayout = srcTy.getEncoding();
@@ -302,9 +300,9 @@ public:
     auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(srcLayout);
     auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(dstLayout);
     bool isNT = false;
-    if (blockedLayout && dotLayout)
+    if(blockedLayout && dotLayout)
       isNT = (dotLayout.getOpIdx() != blockedLayout.getOrder()[0]);
-    if (trans || isNT)
+    if(trans || isNT)
       return true;
 
     return false;
@@ -352,17 +350,17 @@ public:
       if (minSize >= 32 && num_ldmatrixes > 1) {
         mDim = 32;
         nDim = 32;
-      } else if (minSize >= 32 && num_ldmatrixes == 1) {
+      }else if (minSize >= 32 && num_ldmatrixes == 1) {
         mDim = 16;
         nDim = 32;
-      } else if (minSize >= 32 && num_ldmatrixes < 1) {
+      }else if (minSize >= 32 && num_ldmatrixes < 1){
         mDim = 16;
         nDim = 16;
       }
       if (num_ldmatrixes == 1 && minSize >= 16 && N >= 32) {
         mDim = 16;
         nDim = 32;
-      } else if ((num_ldmatrixes < 1) && (minSize >= 16 && minSize < 32)) {
+      }else if ((num_ldmatrixes < 1) && (minSize >= 16 && minSize < 32)) {
         mDim = 16;
         nDim = 16;
       }
@@ -383,8 +381,8 @@ public:
     }
     assert(mDim != 0 && nDim != 0);
 
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA,
-                                              dataTypeB, mfmaVersion);
+    auto maybeMfmaInsn =
+        MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA, dataTypeB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -418,11 +416,10 @@ public:
       nDim = enforcedNonKDim;
     } else {
       int minSize = std::min(M, N);
-      if ((minSize >= 64 || (minSize >= 16 && N >= 64)) &&
-          enable_mmacfuse == 1) {
+      if ((minSize >= 64 || (minSize >= 16 && N >= 64)) && enable_mmacfuse == 1) {
         mDim = 16;
         nDim = 64;
-      } else {
+      }else {
         mDim = 16;
         nDim = 16;
       }
@@ -444,8 +441,8 @@ public:
     }
     assert(mDim != 0 && nDim != 0);
 
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA,
-                                              dataTypeB, mfmaVersion);
+    auto maybeMfmaInsn =
+        MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA, dataTypeB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -484,11 +481,11 @@ public:
       nDim = enforcedNonKDim;
     } else {
       int minSize = std::min(M, N);
-      if ((minSize >= 16 && K >= 32) && enable_mmacfuse == 2) {
+      if ((minSize >= 16 && K >=32 ) && enable_mmacfuse == 2) {
         mDim = 16;
         nDim = 16;
         kDim = 32;
-      } else {
+      }else {
         mDim = 16;
         nDim = 16;
       }
@@ -509,8 +506,8 @@ public:
       }
     }
     assert(mDim != 0 && nDim != 0);
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA,
-                                              dataTypeB, mfmaVersion);
+    auto maybeMfmaInsn =
+        MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA, dataTypeB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -549,11 +546,11 @@ public:
       nDim = enforcedNonKDim;
     } else {
       int minSize = std::min(M, N);
-      if ((minSize >= 16 && K >= 64) && enable_mmacfuse == 2) {
+      if ((minSize >= 16 && K >=64 ) && enable_mmacfuse == 2) {
         mDim = 16;
         nDim = 16;
         kDim = 64;
-      } else {
+      }else {
         mDim = 16;
         nDim = 16;
       }
@@ -574,8 +571,8 @@ public:
       }
     }
     assert(mDim != 0 && nDim != 0);
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA,
-                                              dataTypeB, mfmaVersion);
+    auto maybeMfmaInsn =
+        MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA, dataTypeB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -635,8 +632,8 @@ public:
     }
     assert(mDim != 0 && nDim != 0);
 
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA,
-                                              dataTypeB, mfmaVersion);
+    auto maybeMfmaInsn =
+        MfmaInsn::selectMfma(mDim, nDim, kDim, dataTypeA, dataTypeB, mfmaVersion);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -678,32 +675,21 @@ public:
     auto dataTypeA = oldAType.getElementType();
     auto dataTypeB = oldBType.getElementType();
     auto opB = dotOp.getOperand(1).getDefiningOp<ttg::ConvertLayoutOp>();
-    // DS_READ_M* only support fp16 && NN/NT && num_ldmatrixes>0 && not fa; do
-    // not support other type or TN or FA！
-    if (((dataTypeA.isF16() && dataTypeB.isF16()) ||
-         (dataTypeA.isBF16() && dataTypeB.isBF16()) ||
-         (dataTypeA.isInteger(8) && dataTypeB.isInteger(8))) &&
-        num_ldmatrixes > 0 && !isChainDot(dotOp) && !isTranspose(opB)) {
+    // DS_READ_M* only support fp16 && NN/NT && num_ldmatrixes>0 && not fa; do not support other type or TN or FA！ 
+    if(((dataTypeA.isF16() && dataTypeB.isF16()) || (dataTypeA.isBF16() && dataTypeB.isBF16()) || (dataTypeA.isInteger(8) && dataTypeB.isInteger(8))) 
+          && num_ldmatrixes > 0 && !isChainDot(dotOp) && !isTranspose(opB)){
       mfmaInstr = chooseMfmaInstructionV2(dotOp);
-    } else if (enable_mmacfuse == 1 &&
-               ((dataTypeA.isF16() && dataTypeB.isF16()) ||
-                (dataTypeA.isBF16() && dataTypeB.isBF16()) ||
-                (dataTypeA.isInteger(8) && dataTypeB.isInteger(8))) &&
-               isTranspose(opB)) {
-      mfmaInstr = chooseMfmaInstructionV3(dotOp);
-    } else if (enable_mmacfuse == 2 &&
-               ((dataTypeA.isF16() && dataTypeB.isF16()) ||
-                (dataTypeA.isBF16() && dataTypeB.isBF16())) &&
-               isTranspose(opB)) {
-      mfmaInstr = chooseMfmaInstructionV4(dotOp);
-    } else if (enable_mmacfuse == 2 &&
-               ((dataTypeA.isInteger(8) && dataTypeB.isInteger(8))) &&
-               isTranspose(opB)) {
-      mfmaInstr = chooseMfmaInstructionV5(dotOp);
-    } else {
+    }else if(enable_mmacfuse == 1 && ((dataTypeA.isF16() && dataTypeB.isF16())
+              || (dataTypeA.isBF16() && dataTypeB.isBF16())|| (dataTypeA.isInteger(8) && dataTypeB.isInteger(8))) && isTranspose(opB)){
+       mfmaInstr = chooseMfmaInstructionV3(dotOp);
+    }else if(enable_mmacfuse == 2 && ((dataTypeA.isF16() && dataTypeB.isF16()) || (dataTypeA.isBF16() && dataTypeB.isBF16())) && isTranspose(opB)){
+       mfmaInstr = chooseMfmaInstructionV4(dotOp);
+    }else if(enable_mmacfuse == 2 && ((dataTypeA.isInteger(8) && dataTypeB.isInteger(8))) && isTranspose(opB)){
+       mfmaInstr = chooseMfmaInstructionV5(dotOp);
+    }else{
       mfmaInstr = chooseMfmaInstruction(dotOp);
     }
-
+    
     auto mDim = mfmaInstr.value().getMDim();
     auto nDim = mfmaInstr.value().getNDim();
     auto kDim = mfmaInstr.value().getKDim();
@@ -712,7 +698,7 @@ public:
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
     bool isTransposed = false; // isChainDot(dotOp);
-    bool interleave = false;   // isSecondDot(dotOp);
+    bool interleave = false; // isSecondDot(dotOp);
     mfmaEnc = ttg::HCUMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
@@ -992,8 +978,7 @@ class TritonHCUGPUAccelerateMatmulPass
 public:
   TritonHCUGPUAccelerateMatmulPass() = default;
   TritonHCUGPUAccelerateMatmulPass(StringRef archGen, int matrixInstructionSize,
-                                   int kPack, int num_ldmatrixes,
-                                   int enable_mmacfuse) {
+                                   int kPack, int num_ldmatrixes, int enable_mmacfuse) {
     this->archGenerationName = archGen.data();
     this->matrixInstructionSize = matrixInstructionSize;
     this->kPack = kPack;
@@ -1011,8 +996,7 @@ public:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
       patterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
-                                    matrixInstructionSize, kPack,
-                                    num_ldmatrixes, enable_mmacfuse);
+                                    matrixInstructionSize, kPack, num_ldmatrixes, enable_mmacfuse);
       break;
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context,
@@ -1029,8 +1013,7 @@ public:
 };
 
 std::unique_ptr<Pass> mlir::createTritonHCUGPUAccelerateMatmulPass(
-    std::string archGen, int matrixInstructionSize, int kPack,
-    int num_ldmatrixes, int enable_mmacfuse) {
+    std::string archGen, int matrixInstructionSize, int kPack, int num_ldmatrixes, int enable_mmacfuse) {
   return std::make_unique<TritonHCUGPUAccelerateMatmulPass>(
       archGen, matrixInstructionSize, kPack, num_ldmatrixes, enable_mmacfuse);
 }

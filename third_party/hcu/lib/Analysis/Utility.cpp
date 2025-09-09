@@ -541,8 +541,7 @@ bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
     return false;
-  auto dstmfmaLayout =
-      dyn_cast<HCUMfmaEncodingAttr>(dotOperandLayout.getParent());
+  auto dstmfmaLayout = dyn_cast<HCUMfmaEncodingAttr>(dotOperandLayout.getParent());
   // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
   // improved. In addition, we can enable this shortcut for regular MFMA
   // layout when opIdx == 1.
@@ -558,11 +557,10 @@ bool isMfmaXMfmaCvt(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto srcLayout = dyn_cast<HCUMfmaEncodingAttr>(srcTy.getEncoding());
   auto dstLayout = dyn_cast<HCUMfmaEncodingAttr>(dstTy.getEncoding());
   bool isMfmaEnc = srcLayout && dstLayout;
-  if (isMfmaEnc) {
+  if(isMfmaEnc){
     auto srcWarpsPerCTA = srcLayout.getWarpsPerCTA();
     auto dstWarpsPerCTA = dstLayout.getWarpsPerCTA();
-    return (product(srcWarpsPerCTA) == product(dstWarpsPerCTA)) &&
-           (srcWarpsPerCTA[0] == dstWarpsPerCTA[0]);
+    return (product(srcWarpsPerCTA) == product(dstWarpsPerCTA)) && (srcWarpsPerCTA[0] == dstWarpsPerCTA[0]);
   }
   return false;
 }
@@ -647,7 +645,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !isMmaToDotShortcut(srcTy, dstTy) &&
-         !isMfmaToDotShortcut(srcTy, dstTy) && !isMfmaXMfmaCvt(srcTy, dstTy);
+         !isMfmaToDotShortcut(srcTy, dstTy) &&
+         !isMfmaXMfmaCvt(srcTy, dstTy);
 }
 
 bool atomicNeedsSharedMemory(Value value) {

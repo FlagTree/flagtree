@@ -136,7 +136,6 @@ def cos(x, _builder=None):
     x = semantic.to_tensor(x, _builder)
     return core.tensor(_builder.create_cos(x.handle), x.type)
 
-
 @core.builtin
 @_check_dtype(dtypes=["int32", "int64"])
 @_add_math_1arg_docstr("clz")
@@ -144,7 +143,6 @@ def cos(x, _builder=None):
 def clz(x, _builder=None):
     x = semantic.to_tensor(x, _builder)
     return core.tensor(_builder.create_clz(x.handle), x.type)
-
 
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])

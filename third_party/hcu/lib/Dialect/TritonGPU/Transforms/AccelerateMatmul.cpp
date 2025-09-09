@@ -327,8 +327,9 @@ public:
       auto newBType = RankedTensorType::get(
           oldBType.getShape(), oldBType.getElementType(), newBEncoding);
       b = rewriter.create<ConvertLayoutOp>(b.getLoc(), newBType, b);
-      /*newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b,
-         newAcc, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());*/
+      /*newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b, newAcc,
+                                      dotOp.getInputPrecision(),
+                                      dotOp.getMaxNumImpreciseAcc());*/
     }
     // convert dot instruction
     /*rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType,

@@ -58,9 +58,8 @@ struct MfmaInsnGroupSelectKeyInfo
 
   static inline bool isEqual(const MfmaInsnGroupSelectKey &lhs,
                              const MfmaInsnGroupSelectKey &rhs) {
-    return lhs.mDim == rhs.mDim && lhs.nDim == rhs.nDim &&
-           lhs.kDim == rhs.kDim && lhs.elemType == rhs.elemType &&
-           lhs.mfmaVersion == rhs.mfmaVersion;
+    return lhs.mDim == rhs.mDim && lhs.nDim == rhs.nDim && lhs.kDim == rhs.kDim &&
+           lhs.elemType == rhs.elemType && lhs.mfmaVersion == rhs.mfmaVersion;
   }
 
   static unsigned getHashValue(const MfmaInsnGroupSelectKey &key) {
@@ -79,9 +78,9 @@ private:
   MfmaInsnAttr attr;
 
 public:
-  static FailureOr<MfmaInsn> selectMfma(unsigned mDim, unsigned nDim,
-                                        unsigned kDim, Type elementTypeA,
-                                        Type elementTypeB, int mfmaVersion);
+  static FailureOr<MfmaInsn> selectMfma(unsigned mDim, unsigned nDim, unsigned kDim,
+                                        Type elementTypeA, Type elementTypeB,
+                                        int mfmaVersion);
   MfmaInsn(Type elementTypeA, Type elementTypeB, const MfmaInsnAttr &attr);
   unsigned getKDim();
   unsigned getMDim();

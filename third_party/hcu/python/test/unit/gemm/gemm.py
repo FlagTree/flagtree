@@ -1,3 +1,4 @@
+      
 import torch
 import torch.nn.functional as F
 
@@ -9,7 +10,6 @@ import os
 torch_version = torch.__version__
 
 tuning_full_space = False
-
 
 def get_full_tuning_space():
     configs = []
@@ -32,16 +32,10 @@ def get_full_tuning_space():
             for block_k in block_k_range:
                 for num_warps in num_warps_range:
                     for group_m in group_m_range:
-                        for num_stages in num_stage_range:
-                            configs.append(
-                                triton.Config(
-                                    {
-                                        'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k,
-                                        'GROUP_SIZE_M': group_m
-                                    }, num_stages=num_stages, num_warps=num_warps))
+                            for num_stages in num_stage_range:
+                                configs.append(triton.Config({'BLOCK_SIZE_M': block_m, 'BLOCK_SIZE_N': block_n, 'BLOCK_SIZE_K': block_k, 'GROUP_SIZE_M': group_m}, num_stages=num_stages, num_warps=num_warps))
 
     return configs
-
 
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
 #   - A list of `triton.Config` objects that define different configurations of
@@ -49,7 +43,7 @@ def get_full_tuning_space():
 #   - An auto-tuning *key* whose change in values will trigger evaluation of all the
 #       provided configs
 @triton.autotune(
-    configs=get_full_tuning_space() if tuning_full_space else [
+    configs= get_full_tuning_space() if tuning_full_space else  [
         # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
         # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
         # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
@@ -58,10 +52,10 @@ def get_full_tuning_space():
         # triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=4),
         # triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_stages=1, num_warps=2),
         # triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4}, num_stages=2, num_warps=8),
-
+        
         # [(2048, 11008, 4096),]
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=1,
-                      num_warps=4),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=1, num_warps=4),
+
     ],
     key=['M', 'N', 'K'],
 )
@@ -71,27 +65,18 @@ def get_full_tuning_space():
 @triton.jit
 def matmul_kernel(
     # Pointers to matrices
-    a_ptr,
-    b_ptr,
-    c_ptr,
+    a_ptr, b_ptr, c_ptr,
     # Matrix dimensions
-    M,
-    N,
-    K,
+    M, N, K,
     # The stride variables represent how much to increase the ptr by when moving by 1
     # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
     # by to get the element one row down (A has M rows).
-    stride_am,
-    stride_ak,
-    stride_bk,
-    stride_bn,
-    stride_cm,
-    stride_cn,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
     # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,  #EVEN_K: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr, #EVEN_K: tl.constexpr,
     ACTIVATION: tl.constexpr,
 ):
     """Kernel for computing the matmul C = A x B.
@@ -119,7 +104,7 @@ def matmul_kernel(
     # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
     # See above `Pointer Arithmetics` section for details
     offs_k = tl.arange(0, BLOCK_SIZE_K)
-
+    
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
@@ -141,7 +126,7 @@ def matmul_kernel(
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K, other=0.0)
         # a = tl.load(a_ptrs)
         # b = tl.load(b_ptrs)
-
+        
         # We accumulate along the K dimension.
         accumulator += tl.dot(a, b)
         # Advance the ptrs to the next K block.
@@ -179,6 +164,7 @@ def matmul(a, b, activation=""):
     #     pad = (0,32,0,0)
     #     a_pad = F.pad(a, pad, 'constant', 0)
     #     a = a_pad[:, 0:a.shape[1]]
+    
 
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
@@ -189,9 +175,17 @@ def matmul(a, b, activation=""):
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
     # 1D launch kernel where each block gets its own program.
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-    matmul_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
-                        ACTIVATION=activation)
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+    )
+    matmul_kernel[grid](
+        a, b, c,
+        M, N, K,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
+        ACTIVATION=activation 
+    )
     if os.getenv("TRITON_GEMM_LOG", "0") == "1":
         size_str = f'size, (M: {M}, N: {N}, K: {K})'
         print(f"best config: {matmul_kernel.best_config}, {size_str}")
@@ -204,7 +198,6 @@ def matmul(a, b, activation=""):
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
-
 def unitTest(M, N, K):
     print("M, N, K: ", M, N, K)
     torch.manual_seed(0)
@@ -213,7 +206,7 @@ def unitTest(M, N, K):
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
 
     triton_output = matmul(a, b).to("cpu")
-
+    
     torch_output = torch.matmul(a, b).to("cpu")
     print(f"triton_output={triton_output}")
     print(f"torch_output={torch_output}")
@@ -291,8 +284,9 @@ x_vals = [
     (1, 22016, 4096),
     (1, 4096, 4096),
     (1, 4096, 11008),
-]
 
+
+    ]
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
@@ -300,7 +294,7 @@ x_vals = [
         # x_vals=[
         #    128 * i for i in range(2,33)
         # ],  # Different possible values for `x_name`
-        x_vals=x_vals,
+        x_vals = x_vals,
         line_arg='provider',  # Argument name whose value corresponds to a different line in the plot
         # Possible values for `line_arg`
         line_vals=['rocblas', 'triton'],
@@ -311,15 +305,16 @@ x_vals = [
         ylabel="TFLOPS",  # Label name for the y-axis
         plot_name="matmul-performance",  # Name for the plot, used also as a file name for saving the plot.
         args={},
-    ))
+    )
+)
 def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
     quantiles = [0.5, 0.2, 0.8]
     if provider == 'rocblas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b),quantiles=quantiles)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b),quantiles=quantiles)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
@@ -334,5 +329,6 @@ if __name__ == "__main__":
     # benchmark.run(show_plots=False, print_data=True)
 
     # unit test
-    for M, N, K in x_vals:
-        unitTest(M, N, K)
+    for M,N,K in x_vals:
+       unitTest(M,N,K)
+

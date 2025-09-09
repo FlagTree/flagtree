@@ -56,8 +56,7 @@ public:
         if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
             !srcMfmaEncoding.getIsTransposed() &&
             dyn_cast<triton::gpu::HCUMfmaEncodingAttr>(dstDotOp.getParent()) &&
-            dyn_cast<triton::gpu::HCUMfmaEncodingAttr>(dstDotOp.getParent())
-                .getInterleave())
+            dyn_cast<triton::gpu::HCUMfmaEncodingAttr>(dstDotOp.getParent()).getInterleave())
           return;
       }
       auto srcOrder = triton::gpu::getOrder(srcEncoding);

@@ -171,12 +171,9 @@ public:
       // computation, we will be able to maintain the Q tensor in the registers.
       auto dstType = cast<RankedTensorType>(op.getResult().getType());
       auto dstEnc = dstType.getEncoding();
-      if (!isa<ttg::SharedEncodingAttr>(dstEnc) &&
-          !isa<ttg::DotOperandEncodingAttr>(dstEnc))
-        return;
-      Operation *argOp = op.getOperand().getDefiningOp();
-      if (!argOp)
-        return;
+      if (!isa<ttg::SharedEncodingAttr>(dstEnc) && !isa<ttg::DotOperandEncodingAttr>(dstEnc)) return;
+      Operation* argOp = op.getOperand().getDefiningOp();
+      if (!argOp) return;
       op->moveAfter(argOp);
     });
 
@@ -189,7 +186,7 @@ public:
     SmallVector<Operation *> moveOps;
     // Move global loads early to prefetch. This may increase register pressure
     // but it enables issuing global loads early.
-    m.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+    // m.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
     // Move local_stores early if dependence distance greater than
     // one iteration.
     // Best perf on GEMM when these precede global loads.

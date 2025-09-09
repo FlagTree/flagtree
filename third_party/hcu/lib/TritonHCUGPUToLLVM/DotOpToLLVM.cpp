@@ -3,8 +3,8 @@
 
 using namespace mlir;
 
-using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::HCUWmmaEncodingAttr;
+using ::mlir::triton::gpu::getShapePerCTA;
 
 namespace mlir::triton::HCU {
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,

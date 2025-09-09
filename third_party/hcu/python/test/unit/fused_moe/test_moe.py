@@ -12,16 +12,18 @@ from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 from vllm import _custom_ops as ops
 from vllm.model_executor.layers.activation import SiluAndMul
 from vllm.model_executor.layers.fused_moe import fused_moe
-from vllm.model_executor.layers.fused_moe.fused_marlin_moe import (fused_marlin_moe, single_marlin_moe)
-from vllm.model_executor.layers.fused_moe.fused_moe import (fused_topk, moe_align_block_size)
-from vllm.model_executor.layers.quantization.utils.marlin_utils_test import (marlin_quantize)
+from vllm.model_executor.layers.fused_moe.fused_marlin_moe import (
+    fused_marlin_moe, single_marlin_moe)
+from vllm.model_executor.layers.fused_moe.fused_moe import (
+    fused_topk, moe_align_block_size)
+from vllm.model_executor.layers.quantization.utils.marlin_utils_test import (
+    marlin_quantize)
 from vllm.model_executor.models.mixtral import MixtralMoE
 from vllm.scalar_type import scalar_types
 from vllm.utils import seed_everything
 from vllm.utils import is_hip
 
 torch_version = torch.__version__
-
 
 def torch_moe(a, w1, w2, score, topk):
     B, D = a.shape
@@ -34,8 +36,10 @@ def torch_moe(a, w1, w2, score, topk):
     for i in range(w1.shape[0]):
         mask = topk_ids == i
         if mask.sum():
-            out[mask] = SiluAndMul()(a[mask] @ w1[i].transpose(0, 1)) @ w2[i].transpose(0, 1)
-    return (out.view(B, -1, w2.shape[1]) * topk_weight.view(B, -1, 1).to(out.dtype)).sum(dim=1)
+            out[mask] = SiluAndMul()(
+                a[mask] @ w1[i].transpose(0, 1)) @ w2[i].transpose(0, 1)
+    return (out.view(B, -1, w2.shape[1]) *
+            topk_weight.view(B, -1, 1).to(out.dtype)).sum(dim=1)
 
 
 def torch_moe_single(a, w, score, topk):
@@ -81,7 +85,8 @@ def test_fused_moe(
         print(f"PyTorch version {torch_version} is not specifically handled.")
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("dtype",
+                         [torch.float32, torch.float16, torch.bfloat16])
 @torch.inference_mode()
 def test_mixtral_moe(dtype: torch.dtype):
     """Make sure our Mixtral MoE implementation agrees with the one from
@@ -102,7 +107,8 @@ def test_mixtral_moe(dtype: torch.dtype):
     # Load the weights
     vllm_moe.gate.weight.data[:] = hf_moe.gate.weight.data
     for i in range(config.num_local_experts):
-        weights = (hf_moe.experts[i].w1.weight.data, hf_moe.experts[i].w3.weight.data)
+        weights = (hf_moe.experts[i].w1.weight.data,
+                   hf_moe.experts[i].w3.weight.data)
         vllm_moe.experts.w13_weight[i][:] = torch.cat(weights, dim=0)
         vllm_moe.experts.w2_weight[i][:] = hf_moe.experts[i].w2.weight.data
 
@@ -121,11 +127,15 @@ def test_mixtral_moe(dtype: torch.dtype):
         torch.bfloat16: 1e-2,
     }
     if torch_version.startswith("2.3"):
-        assert torch.allclose(hf_states.flatten(0, 1), vllm_states, rtol=mixtral_moe_tol[dtype],
-                              atol=mixtral_moe_tol[dtype])
+            assert torch.allclose(hf_states.flatten(0, 1),
+                          vllm_states,
+                          rtol=mixtral_moe_tol[dtype],
+                          atol=mixtral_moe_tol[dtype])
     elif torch_version.startswith("2.4"):
-        torch.testing.assert_close(hf_states.flatten(0, 1), vllm_states, rtol=mixtral_moe_tol[dtype],
-                                   atol=mixtral_moe_tol[dtype])
+        torch.testing.assert_close(hf_states.flatten(0, 1),
+                                vllm_states,
+                                rtol=mixtral_moe_tol[dtype],
+                                atol=mixtral_moe_tol[dtype])
     else:
         print(f"PyTorch version {torch_version} is not specifically handled.")
 
@@ -136,10 +146,12 @@ def stack_and_dev(tensors: List[torch.Tensor]):
 
 
 def compute_max_diff(output, output_ref):
-    return torch.mean(torch.abs(output - output_ref)) / torch.mean(torch.abs(output_ref))
+    return torch.mean(torch.abs(output - output_ref)) / torch.mean(
+        torch.abs(output_ref))
 
 
-@pytest.mark.skipif(is_hip(), reason="Currently, there is not supported on ROCm.")
+@pytest.mark.skipif(is_hip(),
+                    reason="Currently, there is not supported on ROCm.")
 @pytest.mark.parametrize("m", [64, 512, 222, 33, 1])
 @pytest.mark.parametrize("n", [128, 2048, 256, 1024])
 @pytest.mark.parametrize("k", [128, 1024, 512])
@@ -170,7 +182,8 @@ def test_fused_marlin_moe(
         if group_size in (k, n):
             return
 
-    quant_type = (scalar_types.uint4b8 if num_bits == 4 else scalar_types.uint8b128)
+    quant_type = (scalar_types.uint4b8
+                  if num_bits == 4 else scalar_types.uint8b128)
     dtype = torch.float16
     a = torch.randn((m, k), device="cuda", dtype=dtype) / 10
     w1 = torch.randn((e, 2 * n, k), device="cuda", dtype=dtype) / 10
@@ -184,8 +197,9 @@ def test_fused_marlin_moe(
 
     for i in range(w1.shape[0]):
         test_perm = torch.randperm(k)
-        w_ref1, qweight1, scales1, g_idx1, sort_indices1, _ = marlin_quantize(w1[i].transpose(1, 0), quant_type,
-                                                                              group_size, act_order, test_perm)
+        w_ref1, qweight1, scales1, g_idx1, sort_indices1, _ = marlin_quantize(
+            w1[i].transpose(1, 0), quant_type, group_size, act_order,
+            test_perm)
         w_ref1_l.append(w_ref1)
         qweight1_l.append(qweight1)
         scales1_l.append(scales1)
@@ -206,8 +220,9 @@ def test_fused_marlin_moe(
 
     for i in range(w2.shape[0]):
         test_perm = torch.randperm(n)
-        w_ref2, qweight2, scales2, g_idx2, sort_indices2, _ = marlin_quantize(w2[i].transpose(1, 0), quant_type,
-                                                                              group_size, act_order, test_perm)
+        w_ref2, qweight2, scales2, g_idx2, sort_indices2, _ = marlin_quantize(
+            w2[i].transpose(1, 0), quant_type, group_size, act_order,
+            test_perm)
         w_ref2_l.append(w_ref2)
         qweight2_l.append(qweight2)
         scales2_l.append(scales2)
@@ -251,7 +266,8 @@ def test_fused_marlin_moe(
     assert compute_max_diff(marlin_output, triton_output) < 4e-2
 
 
-@pytest.mark.skipif(is_hip(), reason="Currently, there is not supported on ROCm.")
+@pytest.mark.skipif(is_hip(),
+                    reason="Currently, there is not supported on ROCm.")
 @pytest.mark.skip("This test is here for the sake of debugging, "
                   "don't run it in automated tests.")
 @pytest.mark.parametrize("m", [64, 512, 222, 33, 1])
@@ -282,7 +298,8 @@ def test_single_marlin_moe_multiply(
         if group_size == k:
             return
 
-    quant_type = (scalar_types.uint4b8 if num_bits == 4 else scalar_types.uint8b128)
+    quant_type = (scalar_types.uint4b8
+                  if num_bits == 4 else scalar_types.uint8b128)
     dtype = torch.float16
     a = torch.randn((m, k), device="cuda", dtype=dtype) / 10
     w = torch.randn((e, n, k), device="cuda", dtype=dtype) / 10
@@ -295,8 +312,8 @@ def test_single_marlin_moe_multiply(
 
     for i in range(w.shape[0]):
         test_perm = torch.randperm(k)
-        w_ref, qweight, scales, g_idx, sort_indices, _ = marlin_quantize(w[i].transpose(1, 0), quant_type, group_size,
-                                                                         act_order, test_perm)
+        w_ref, qweight, scales, g_idx, sort_indices, _ = marlin_quantize(
+            w[i].transpose(1, 0), quant_type, group_size, act_order, test_perm)
         w_ref_l.append(w_ref)
         qweights_l.append(qweight)
         scales_l.append(scales)
@@ -310,8 +327,16 @@ def test_single_marlin_moe_multiply(
     sort_indices = stack_and_dev(sort_indices_l)
 
     score = torch.randn((m, e), device="cuda", dtype=dtype)
-    marlin_output = single_marlin_moe(a, qweight, scales, score, g_idx, sort_indices, topk, renormalize=False,
+    marlin_output = single_marlin_moe(a,
+                                      qweight,
+                                      scales,
+                                      score,
+                                      g_idx,
+                                      sort_indices,
+                                      topk,
+                                      renormalize=False,
                                       num_bits=num_bits)
     torch_output = torch_moe_single(a, w_ref.transpose(1, 2), score, topk)
 
     assert compute_max_diff(marlin_output, torch_output) < 1e-2
+

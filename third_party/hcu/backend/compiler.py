@@ -140,7 +140,7 @@ class HIPBackend(BaseBackend):
         lld = Path("/opt/dtk/llvm/bin/ld.lld")
         if lld.is_file():
             return lld
-        lld = Path(os.getenv("ROCM_PATH") + "/llvm/bin/ld.lld")
+        lld = Path(os.getenv("ROCM_PATH")+"/llvm/bin/ld.lld")
         if lld.is_file():
             return lld
         lld = Path("/usr/bin/ld.lld")
@@ -176,11 +176,10 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        hcu.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack,
-                                                 options.num_ldmatrixes, options.enable_mmacfuse)
+        hcu.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack, options.num_ldmatrixes, options.enable_mmacfuse)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         hcu.passes.ttgpuir.add_hcu_accelerate_flash_attention(pm)
-        if options.reorder_instr != 0:
+        if options.reorder_instr!= 0:
             hcu.passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         # if options.arch == "gfx936" or options.arch == "gfx928":
@@ -261,7 +260,7 @@ class HIPBackend(BaseBackend):
         ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
         ##    For now it is used as a controller for developers only.
         __HIP_FTZ = True
-        if (options.num_stages >= 2):
+        if(options.num_stages >= 2):
             hcu.passes.ttgpuir.add_move_load_tofront_dot(pm)
             # hcu.passes.ttgpuir.add_control_fa_fwd_bufferload_cnt(pm, 0)
         hcu.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)

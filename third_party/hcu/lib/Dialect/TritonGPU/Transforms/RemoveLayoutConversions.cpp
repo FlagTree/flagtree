@@ -786,7 +786,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-          ConvertLayoutOp /*, nvidia_gpu::WarpGroupDotWaitOp*/>(op)) {
+          ConvertLayoutOp/*, nvidia_gpu::WarpGroupDotWaitOp*/>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {

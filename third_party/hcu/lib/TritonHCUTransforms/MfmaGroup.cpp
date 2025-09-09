@@ -184,32 +184,25 @@ auto getMfmaInsnGroupAttrMap = []() -> const MfmaInsnGroupMap & {
       // // fp8 * bf8
       // // mfma_f32_32x32x16_FP8_FP8
       // {{32, 32, MfmaTypeId::Fp8Fp8TyId, 3},
-      //  {32, 32, 16, 8,
-      //  ROCDL::mfma_f32_32x32x16_fp8_fp8::getOperationName()}},
+      //  {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_fp8_fp8::getOperationName()}},
       // // mfma_f32_16x16x32_FP8_FP8
       // {{16, 16, MfmaTypeId::Fp8Fp8TyId, 3},
-      //  {16, 16, 32, 8,
-      //  ROCDL::mfma_f32_16x16x32_fp8_fp8::getOperationName()}},
+      //  {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_fp8_fp8::getOperationName()}},
       // // mfma_f32_32x32x16_FP8_BF8
       // {{32, 32, MfmaTypeId::Fp8Bf8TyId, 3},
-      //  {32, 32, 16, 8,
-      //  ROCDL::mfma_f32_32x32x16_fp8_bf8::getOperationName()}},
+      //  {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_fp8_bf8::getOperationName()}},
       // // mfma_f32_16x16x32_FP8_BF8
       // {{16, 16, MfmaTypeId::Fp8Bf8TyId, 3},
-      //  {16, 16, 32, 8,
-      //  ROCDL::mfma_f32_16x16x32_fp8_bf8::getOperationName()}},
+      //  {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_fp8_bf8::getOperationName()}},
       // // mfma_f32_32x32x16_BF8_FP8
       // {{32, 32, MfmaTypeId::Bf8Fp8TyId, 3},
-      //  {32, 32, 16, 8,
-      //  ROCDL::mfma_f32_32x32x16_bf8_fp8::getOperationName()}},
+      //  {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_fp8::getOperationName()}},
       // // mfma_f32_16x16x32_BF8_FP8
       // {{16, 16, MfmaTypeId::Bf8Fp8TyId, 3},
-      //  {16, 16, 32, 8,
-      //  ROCDL::mfma_f32_16x16x32_bf8_fp8::getOperationName()}},
+      //  {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_bf8_fp8::getOperationName()}},
       // // mfma_f32_32x32x16_BF8_BF8
       // {{32, 32, MfmaTypeId::Bf8Bf8TyId, 3},
-      //  {32, 32, 16, 8,
-      //  ROCDL::mfma_f32_32x32x16_bf8_bf8::getOperationName()}},
+      //  {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_bf8::getOperationName()}},
       // // mfma_f32_16x16x32_BF8_BF8
       // {{16, 16, MfmaTypeId::Bf8Bf8TyId, 3},
       //  {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_bf8_bf8::getOperationName()}}
@@ -250,7 +243,8 @@ auto getMfmaInsnGroupAttrMap = []() -> const MfmaInsnGroupMap & {
       {{32, 32, 0, MfmaTypeId::I8TyId, 2},
        {32, 32, 32, 8, ROCDL::mmac_i32_16x16x32i8::getOperationName()}},
       {{16, 16, 0, MfmaTypeId::I8TyId, 2},
-       {16, 16, 32, 8, ROCDL::mmac_i32_16x16x32u8::getOperationName()}}};
+       {16, 16, 32, 8, ROCDL::mmac_i32_16x16x32u8::getOperationName()}}
+       };
   return MfmaInsnMap;
 };
 
@@ -284,9 +278,9 @@ std::pair<mlir::Type, mlir::Type> TypesFromMfmaId(mlir::MLIRContext *ctx,
   assert(false && "unsupported MfmaTypeId");
 }
 
-FailureOr<MfmaInsn> MfmaInsn::selectMfma(unsigned mDim, unsigned nDim,
-                                         unsigned kDim, Type elementTypeA,
-                                         Type elementTypeB, int mfmaVersion) {
+FailureOr<MfmaInsn> MfmaInsn::selectMfma(unsigned mDim, unsigned nDim, unsigned kDim,
+                                         Type elementTypeA, Type elementTypeB,
+                                         int mfmaVersion) {
   auto mfmaInsnAttrMap = getMfmaInsnGroupAttrMap();
   MfmaTypeId mfmaId = chooseAppropriateMfmaId(elementTypeA, elementTypeB);
   MfmaInsnGroupSelectKey key = {mDim, nDim, kDim, mfmaId, mfmaVersion};

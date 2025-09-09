@@ -32,7 +32,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-// namespace ttng = mlir::triton::nvidia_gpu;
+//namespace ttng = mlir::triton::nvidia_gpu;
 
 // TODO: We can extra some helpers into common utilities once we add more
 // schedules.
@@ -490,10 +490,8 @@ assignMemoryLayouts(llvm::SmallVector<std::tuple<Operation *, int, Operation *>>
 
     if (auto loadOp = dyn_cast<tt::LoadOp>(op))
       if (auto tensorTy = dyn_cast<RankedTensorType>(loadOp.getPtr().getType()))
-        if (auto sliceEnc =
-                dyn_cast<ttg::SliceEncodingAttr>(tensorTy.getEncoding()))
-          if (sliceEnc.getDim() == 0 &&
-              isa<ttg::HCUMfmaEncodingAttr>(sliceEnc.getParent()))
+        if (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(tensorTy.getEncoding()))
+          if (sliceEnc.getDim() == 0 && isa<ttg::HCUMfmaEncodingAttr>(sliceEnc.getParent()))
             continue;
 
     // If we still don't have a shared encoding, try a "generic" shared

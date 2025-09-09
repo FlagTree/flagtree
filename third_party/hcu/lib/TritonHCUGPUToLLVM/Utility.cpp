@@ -1,5 +1,5 @@
-#include "Utility.h"
 #include "BufferOpsEmitter.h"
+#include "Utility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
@@ -9,9 +9,10 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
-using mlir::LLVM::HCU::getBaseAndOffset;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::getFunctionType;
+using mlir::LLVM::HCU::getBaseAndOffset;
+
 
 namespace {
 struct BufferEmitterr {
@@ -33,13 +34,11 @@ struct BufferEmitterr {
     return data;
   }
 
-  void emitMaskedBufferLoadLds(Type type, Value basePtr, Value offset,
-                               Value ldsBase, Value pred, Value falseVal,
-                               bool nt = false) {
+  void emitMaskedBufferLoadLds(Type type, Value basePtr, Value offset, Value ldsBase, Value pred,
+                             Value falseVal, bool nt = false) {
     VectorType vecTy = cast<VectorType>(type);
     auto shape = vecTy.getShape();
-    auto numElems =
-        accumulate(shape.begin(), shape.end(), 1, std::multiplies<int64_t>());
+    auto numElems = accumulate(shape.begin(), shape.end(), 1, std::multiplies<int64_t>());
     auto numBits = numElems * vecTy.getElementType().getIntOrFloatBitWidth();
     SmallVector<Value, 6> args;
     fillBufferArgs(vecTy, basePtr, offset, pred, nt, args);
@@ -65,8 +64,8 @@ struct BufferEmitterr {
         bufferLoad = *builder.create("buffer_load_ushort");
       else
         bufferLoad = *builder.create("buffer_load_ubyte");
-      auto vaddr = builder.newOperand(args[1], "v"); // [vindex, voffset]
-      auto srsrc = builder.newOperand(args[0], "s");
+      auto vaddr = builder.newOperand(args[1], "v");  // [vindex, voffset]
+      auto srsrc = builder.newOperand(args[0], "s");  
       auto soffset = builder.newOperand(args[2], "s");
       // auto idxen = builder.newModifier("idxen", "");
       auto offen = builder.newModifier("offen", "");
@@ -74,23 +73,21 @@ struct BufferEmitterr {
       // auto glc = builder.newModifier("glc", ""); // todo cacheModifiers
       // auto slc = builder.newModifier("slc", "");
       auto lds = builder.newModifier("lds", "");
-      bufferLoad({vaddr, srsrc, soffset},
-                 {offen, offset12, lds}); // glc, slc, idxen,
-      builder.launch((mlir::ConversionPatternRewriter &)rewriter, loc,
-                     void_ty(rewriter.getContext()));
+      bufferLoad({vaddr, srsrc, soffset}, {offen, offset12, lds}); // glc, slc, idxen, 
+      builder.launch((mlir::ConversionPatternRewriter&)rewriter, loc, void_ty(rewriter.getContext()));
     }
   }
 
   void emitMaskedBufferAtomic(Value data, Value basePtr, Value offset,
-                              Value pred, bool nt = false) {
+                             Value pred, bool nt = false) {
     // We only support vector types. So the caller needs to ensure we have a
     // vector type here
     VectorType vecTy = cast<VectorType>(data.getType());
     Type bufferType = getBufferOpType(vecTy);
     SmallVector<Value, 6> args{data};
     fillBufferArgs(vecTy, basePtr, offset, pred, nt, args);
-    rewriter.create<ROCDL::RawPtrBufferAtomicFaddOp>(
-        loc, TypeRange{}, args, ArrayRef<NamedAttribute>());
+    rewriter.create<ROCDL::RawPtrBufferAtomicFaddOp>(loc, TypeRange{}, args,
+                                                 ArrayRef<NamedAttribute>());
   }
   // Emit a predicated rocdl.raw.ptr.buffer.store. `type` needs to be a
   // `VectorType`
@@ -147,6 +144,7 @@ private:
 
     return bufferType;
   }
+
 
   void fillBufferArgs(VectorType vecTy, Value basePtr, Value offset, Value pred,
                       bool nt, SmallVector<Value> &args) {
@@ -256,6 +254,7 @@ Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
   return maskVal;
 }
 } // namespace
+
 
 // Utility function to get the number of elements of a vector or a scalar
 int64_t getNumElements(Type ty) {
@@ -388,14 +387,12 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, int64_t alignmentBytes,
-             triton::CacheModifier cm) {
+             Value pred, Value falseVal, int64_t alignmentBytes, triton::CacheModifier cm) {
 
   // Try to emit llvm.intr.masked.load if we can. In theory the backend should
   // be happier because we emit less branchy code to optimize. The backend will
   // lower it down however it wants at some point.
-  if (alignmentBytes &&
-      (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE)) {
+  if (alignmentBytes && (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE)) {
     // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we need
     // to bitcast to `vector<1xelemTy>` (and back)
     int64_t vecSize = getNumElements(elemTy);
@@ -439,9 +436,9 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llLoadLds(RewriterBase &rewriter, Location loc,
-               triton::HCU::TargetInfo targetInfo, Value ptr, Type elemTy,
-               Value pred, Value falseVal, SharedMemoryObject smemObj,
-               triton::CacheModifier cm) {
+             triton::HCU::TargetInfo targetInfo, Value ptr, Type elemTy,
+             Value pred, Value falseVal, SharedMemoryObject smemObj,
+             triton::CacheModifier cm) {
   auto maybeBaseAndOffset = getBaseAndOffset(ptr);
   if (!failed(maybeBaseAndOffset)) {
     BufferEmitterr bufferEmitter(rewriter, loc, targetInfo);
@@ -450,8 +447,9 @@ void llLoadLds(RewriterBase &rewriter, Location loc,
     Type vecType = castToVectorType(elemTy);
     falseVal = bitcast(falseVal, vecType);
     bool nt = (cm == triton::CacheModifier::CG);
-    bufferEmitter.emitMaskedBufferLoadLds(vecType, basePtr, offset,
-                                          smemObj.base, pred, falseVal, nt);
+    bufferEmitter.emitMaskedBufferLoadLds(
+        vecType, basePtr, offset, smemObj.base, pred, falseVal, nt);
+
   }
 }
 

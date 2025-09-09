@@ -27,7 +27,7 @@ using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-// namespace ttng = ::mlir::triton::nvidia_gpu;
+//namespace ttng = ::mlir::triton::nvidia_gpu;
 
 namespace mlir::triton {
 class ReduceOp;

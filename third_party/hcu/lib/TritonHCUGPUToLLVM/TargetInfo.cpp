@@ -1,8 +1,8 @@
 #include "TargetInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/GCNAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/GCNAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton::HCU {

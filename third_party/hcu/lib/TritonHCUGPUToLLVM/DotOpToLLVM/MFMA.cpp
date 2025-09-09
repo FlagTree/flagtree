@@ -33,8 +33,8 @@ using namespace mlir::triton;
 namespace {
 
 using ::mlir::LLVM::HCU::shuffleXor;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::HCUMfmaEncodingAttr;
+using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
@@ -70,15 +70,14 @@ struct DotOpMFMAConversionHelper {
     if (mfmaInsnName.compare("rocdl.mmac.f32.16x16x4f32") == 0) {
       Value zeroFlag = i32_val(0);
       loweredOp.addOperands({valA, valB, valC, zeroFlag});
-    } else {
+    }else{
       loweredOp.addOperands({valA, valB, valC});
     }
     return rewriter.create(loweredOp)->getResult(0);
   }
 
   int getNumSubmatrices(Type elementType, int mDim, int nDim) const {
-    if ((mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) ||
-        (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64))
+    if ((mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64))
       return 1;
     assert(mDim == nDim);
     switch (mDim) {
@@ -178,8 +177,7 @@ struct DotOpMFMAConversionHelper {
 
     auto mfmaVersion = mfmaLayout.getVersionMajor();
     assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
-           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) ||
-           (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
+           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
 
     Value a = op.getA();
     Value b = op.getB();
@@ -189,12 +187,9 @@ struct DotOpMFMAConversionHelper {
     auto dTensorTy = cast<RankedTensorType>(d.getType());
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
-    if (mDim == 16 && nDim == 16 && mfmaLayout.getKDim() == 32 &&
-        ((elemTyA.isF16() && elemTyB.isF16()) ||
-         (elemTyA.isBF16() && elemTyB.isBF16()))) {
+    if(mDim == 16 && nDim ==16 && mfmaLayout.getKDim() == 32 && ((elemTyA.isF16() && elemTyB.isF16()) || (elemTyA.isBF16() && elemTyB.isBF16()))){
       kDim = 32;
-    } else if (mDim == 16 && nDim == 16 && mfmaLayout.getKDim() == 64 &&
-               ((elemTyA.isInteger(8) && elemTyB.isInteger(8)))) {
+    }else if(mDim == 16 && nDim ==16 && mfmaLayout.getKDim() == 64 && ((elemTyA.isInteger(8) && elemTyB.isInteger(8)))){
       kDim = 64;
     }
     StringRef mfmaInsnName;
@@ -244,8 +239,7 @@ struct DotOpMFMAConversionHelper {
     const int subBlocks =
         getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
-    if ((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32) ||
-        (mDim == 16 && nDim == 64)) {
+    if((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32)|| (mDim == 16 && nDim == 64)){
       elemsPerVec = 4; // for DS_READ_M* instruction
     }
     rewriter.create<ROCDL::SetPrioOp>(loc, 1);
@@ -256,14 +250,14 @@ struct DotOpMFMAConversionHelper {
           SmallVector<Value> accList(numRepM);
           for (int k = 0; k < numRepK; k++) {
             for (int m = 0; m < numRepM; ++m) {
-              for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
-                if (k == 0) {
+              for (int kPack = 0; kPack < kWidth / kBase; ++kPack){
+                if(k == 0){
                   Value acc = undef(vecTy);
                   for (unsigned v = 0; v < elemsPerVec; ++v) {
                     acc = insert_element(
                         vecTy, acc,
                         fc[b * numRepM * numRepN * elemsPerVec +
-                           m * numRepN * elemsPerVec + n * elemsPerVec + v],
+                          m * numRepN * elemsPerVec + n * elemsPerVec + v],
                         i32_val(v));
                   }
                   acc = zeroAuxiliarBlocks(subBlocks, acc);
@@ -271,27 +265,26 @@ struct DotOpMFMAConversionHelper {
                   accList[m] = acc;
                 }
                 rewriter.create<ROCDL::SchedBarrier>(op->getLoc(), 0);
-                accList[m] = mfmaLayout.getIsTransposed()
-                                 ? generateMFMAOp(
-                                       mfmaInsnName, operandB[kPack][{b, n, k}],
-                                       operandA[kPack][{b, m, k}], accList[m])
-                                 : generateMFMAOp(
-                                       mfmaInsnName, operandA[kPack][{b, m, k}],
-                                       operandB[kPack][{b, n, k}], accList[m]);
+                accList[m] =
+                    mfmaLayout.getIsTransposed()
+                        ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
+                                        operandA[kPack][{b, m, k}], accList[m])
+                        : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
+                                        operandB[kPack][{b, n, k}], accList[m]);
               }
             }
           }
-          for (int m = 0; m < accList.size(); m++) {
-            accList[m] = reduceSubBlocks(subBlocks, accList[m]);
-            for (unsigned v = 0; v < elemsPerVec; ++v) {
-              fc[b * numRepM * numRepN * elemsPerVec +
-                 m * numRepN * elemsPerVec + n * elemsPerVec + v] =
-                  extract_element(dstElemTy, accList[m], i32_val(v));
-            }
+          for(int m = 0; m < accList.size(); m++){
+              accList[m] = reduceSubBlocks(subBlocks, accList[m]);
+              for (unsigned v = 0; v < elemsPerVec; ++v) {
+                fc[b * numRepM * numRepN * elemsPerVec + m * numRepN * elemsPerVec +
+                  n * elemsPerVec + v] =
+                    extract_element(dstElemTy, accList[m], i32_val(v));
+              }
           }
         }
       }
-    } else {
+    }else{
       for (int b = 0; b < numRepB; ++b) {
         for (int m = 0; m < numRepM; ++m) {
           for (int n = 0; n < numRepN; ++n) {
@@ -300,24 +293,23 @@ struct DotOpMFMAConversionHelper {
               acc = insert_element(
                   vecTy, acc,
                   fc[b * numRepM * numRepN * elemsPerVec +
-                     m * numRepN * elemsPerVec + n * elemsPerVec + v],
+                    m * numRepN * elemsPerVec + n * elemsPerVec + v],
                   i32_val(v));
             }
             acc = zeroAuxiliarBlocks(subBlocks, acc);
             for (int k = 0; k < numRepK; k++) {
               for (int kPack = 0; kPack < kWidth / kBase; ++kPack)
-                acc = mfmaLayout.getIsTransposed()
-                          ? generateMFMAOp(mfmaInsnName,
-                                           operandB[kPack][{b, n, k}],
-                                           operandA[kPack][{b, m, k}], acc)
-                          : generateMFMAOp(mfmaInsnName,
-                                           operandA[kPack][{b, m, k}],
-                                           operandB[kPack][{b, n, k}], acc);
+                acc =
+                    mfmaLayout.getIsTransposed()
+                        ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
+                                        operandA[kPack][{b, m, k}], acc)
+                        : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
+                                        operandB[kPack][{b, n, k}], acc);
             }
             acc = reduceSubBlocks(subBlocks, acc);
             for (unsigned v = 0; v < elemsPerVec; ++v) {
-              fc[b * numRepM * numRepN * elemsPerVec +
-                 m * numRepN * elemsPerVec + n * elemsPerVec + v] =
+              fc[b * numRepM * numRepN * elemsPerVec + m * numRepN * elemsPerVec +
+                n * elemsPerVec + v] =
                   extract_element(dstElemTy, acc, i32_val(v));
             }
           }
@@ -414,7 +406,7 @@ struct DotOpMFMAConversionHelper {
           SmallVector<Value> vals;
           if (type.isF32()) {
             vals = extractOperands(rawElems, kWidth, kBase, f32_ty);
-          } else if (type.getIntOrFloatBitWidth() == 8) {
+          }else if (type.getIntOrFloatBitWidth() == 8) {
             vals = extractOperands(rawElems, kWidth, kBase, i8_ty);
           } else if (type.isBF16()) {
             vals = extractOperands(rawElems, kWidth, kBase, bf16_ty);

@@ -1,10 +1,11 @@
+#include "triton/Dialect/TritonHCUGPU/IR/Dialect.h"
 #include "TritonHCUGPUToLLVM/Passes.h"
 #include "TritonHCUGPUToLLVM/TargetUtils.h"
+#include "TritonHCUTransforms/Passes.h"
 #include "TritonHCUTransforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
-#include "triton/Dialect/TritonHCUGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -62,9 +63,9 @@ void init_triton_hcu_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_hcu_accelerate_flash_attention",
                      mlir::createTritonHCUAccelerateFlashAttentionPass);
   ADD_PASS_WRAPPER_0("add_global_copy_local_swizzle",
-                     mlir::createTritonHCUGlobalToLocalSwizzlePass);
+                    mlir::createTritonHCUGlobalToLocalSwizzlePass);
   ADD_PASS_WRAPPER_0("add_move_load_tofront_dot",
-                     mlir::createTritonHCUMoveLoadToFrontOfDOTPass);
+                    mlir::createTritonHCUMoveLoadToFrontOfDOTPass);
   ADD_PASS_WRAPPER_5("add_accelerate_matmul",
                      mlir::createTritonHCUGPUAccelerateMatmulPass,
                      const std::string, int, int, int, int);
@@ -81,14 +82,13 @@ void init_triton_hcu_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
                      mlir::createTritonHCUGPUStreamPipelineV2Pass, int);
   ADD_PASS_WRAPPER_4("add_hcu_stream_pipeline",
-                     mlir::createTritonHCUStreamPipelinePass, int, int, int,
-                     bool);
+                     mlir::createTritonHCUStreamPipelinePass, int, int, int, bool);   
   ADD_PASS_WRAPPER_1("add_control_fa_fwd_bufferload_cnt",
                      mlir::createTritonHCUFaFwdControlCntPass, int);
   ADD_PASS_WRAPPER_1("add_fa_fwd_insert_wait",
-                     mlir::createTritonHCUFaFwdWaitPass, int);
+                    mlir::createTritonHCUFaFwdWaitPass, int);
   ADD_PASS_WRAPPER_0("add_update_async_wait_count",
-                     mlir::createTritonHCUUpdateAsyncWaitCountPass);
+                    mlir::createTritonHCUUpdateAsyncWaitCountPass);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,

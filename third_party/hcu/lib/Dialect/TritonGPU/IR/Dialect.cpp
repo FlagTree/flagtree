@@ -768,11 +768,10 @@ HCUMfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   auto elemsPerThreadPerTile = (mDim == 16 ? 4 : 16);
   unsigned betaRow = 1;
   unsigned betaCol = 1;
-  if ((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32) ||
-      (mDim == 16 && nDim == 64)) {
+  if((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64)){
     elemsPerThreadPerTile = 4;
-    betaRow = mDim / 16;
-    betaCol = nDim / 16;
+    betaRow = mDim/16;
+    betaCol = nDim/16;
   }
 
   if (rank == 3)
@@ -1340,19 +1339,19 @@ void HCUMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
-LogicalResult HCUMfmaEncodingAttr::verify(
-    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned versionMajor,
-    unsigned versionMinor, llvm::ArrayRef<unsigned int> warpsPerCTA,
-    unsigned mDim, unsigned nDim, unsigned kDim, bool isTransposed,
-    bool interleave, mlir::triton::gpu::CTALayoutAttr) {
+LogicalResult
+HCUMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
+                            unsigned versionMajor, unsigned versionMinor,
+                            llvm::ArrayRef<unsigned int> warpsPerCTA,
+                            unsigned mDim, unsigned nDim, unsigned kDim, bool isTransposed, bool interleave,
+                            mlir::triton::gpu::CTALayoutAttr) {
   if (!(versionMajor >= 0 && versionMajor <= 3)) {
     return emitError() << "major version must be in the [0, 3] range";
   }
   if (versionMinor != 0) {
     return emitError() << "minor version must be 0";
   }
-  if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16) ||
-        (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64))) {
+  if (!((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 16) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64))) {
     return emitError()
            << "(M, N) cases other than (32, 32) or (16, 16) unimplemented";
   }
@@ -1563,7 +1562,7 @@ SmallVector<unsigned> HCUMfmaEncodingAttr::getThreadsPerWarp() const {
   unsigned rows, cols;
   auto rank = ::getOrder(*this).size();
   SmallVector<unsigned> res(rank, 1);
-  if (getMDim() == 32 && getNDim() == 32) {
+  if(getMDim() == 32 && getNDim() == 32){
     cols = 16;
     rows = 4;
   } else if (getMDim() == 32) {
@@ -1591,13 +1590,13 @@ SmallVector<unsigned> HCUMfmaEncodingAttr::getSizePerThread() const {
   if (getMDim() == 32 && getNDim() == 32) {
     rows = 2;
     cols = 8;
-  } else if (getMDim() == 16 && getNDim() == 32) {
+  }else if (getMDim() == 16 && getNDim() == 32) {
     rows = 1;
     cols = 8;
-  } else if (getMDim() == 16 && getNDim() == 64) {
+  }else if (getMDim() == 16 && getNDim() == 64) {
     rows = 1;
     cols = 16;
-  } else if (getMDim() == 32) {
+  }else if (getMDim() == 32) {
     rows = 16;
     cols = 1;
   } else if (getMDim() == 16) {
@@ -1621,14 +1620,12 @@ HCUMfmaEncodingAttr::getMFMAInstrShapeForOperands(int kWidth, int opIdx) const {
   unsigned mDim = getMDim();
   unsigned nDim = getNDim();
   assert((mDim == nDim) && (mDim == 32 || mDim == 16 || mDim == 4) ||
-         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) ||
-         (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
+         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
   constexpr int warpSize = 64; // MFMA is always based on the 64-wide warps.
   int kGroups = -1;
-  if ((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32) ||
-      (mDim == 16 && nDim == 64)) {
+  if((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64)){
     kGroups = 4;
-  } else if (mDim == nDim) {
+  }else if (mDim == nDim){
     kGroups = warpSize / mDim;
   }
 
@@ -1650,60 +1647,51 @@ HCUMfmaEncodingAttr::getMFMARepForOperands(ArrayRef<int64_t> operandShape,
   auto warpsPerCTA = getWarpsPerCTA();
   int numRepBatch =
       rank == 3 ? std::max<int64_t>(1, operandShape[0] / warpsPerCTA[0]) : 1;
-  if ((getMDim() == 32 && getNDim() == 32) ||
-      (getMDim() == 16 && getNDim() == 32) ||
-      (getMDim() == 16 && getNDim() == 64)) {
+  if((getMDim() == 32 && getNDim() == 32) || (getMDim() == 16 && getNDim() == 32) || (getMDim() == 16 && getNDim() == 64)){
     int64_t minNonKValue = 1;
     int64_t minKValue = 1;
-    if (getMDim() == 32 && getNDim() == 32) {
+    if(getMDim() == 32 && getNDim() == 32){
       minNonKValue = 2;
-    } else if (opIdx == 1) {
-      if (getNDim() == 64)
-        minNonKValue = 4;
-      else
-        minNonKValue = 2;
+    }else if(opIdx == 1){
+      if(getNDim() == 64) minNonKValue = 4;
+      else minNonKValue = 2;
+    }if(getMDim() == 16 && getNDim() == 64){
+      minKValue = 2;  // 16x64x32
     }
-    if (getMDim() == 16 && getNDim() == 64) {
-      minKValue = 2; // 16x64x32
+    // mdims=32&&ndims=32 or mdims=16&&ndims=32 for DS_READ_M* instruction, However, the actual calculation instructions are still mmac16x16x16 or mmac16x16x32
+    SmallVector<int> actualOpTileShape = {16, 16, 4 * kWidth}; 
+    if (opIdx == 0){
+      return {
+          numRepBatch,
+          std::max<int64_t>(minNonKValue, operandShape[rank - 2] /
+                                  (actualOpTileShape[0] * warpsPerCTA[rank - 2])),
+          std::max<int64_t>(minKValue, operandShape[rank - 1] / actualOpTileShape[2])};
     }
-    // mdims=32&&ndims=32 or mdims=16&&ndims=32 for DS_READ_M* instruction,
-    // However, the actual calculation instructions are still mmac16x16x16 or
-    // mmac16x16x32
-    SmallVector<int> actualOpTileShape = {16, 16, 4 * kWidth};
-    if (opIdx == 0) {
-      return {numRepBatch,
-              std::max<int64_t>(minNonKValue, operandShape[rank - 2] /
-                                                  (actualOpTileShape[0] *
-                                                   warpsPerCTA[rank - 2])),
-              std::max<int64_t>(minKValue,
-                                operandShape[rank - 1] / actualOpTileShape[2])};
-    } else {
+    else {
       assert(opIdx == 1);
-      return {numRepBatch,
-              std::max<int64_t>(minKValue,
-                                operandShape[rank - 2] / actualOpTileShape[2]),
-              std::max<int64_t>(minNonKValue, operandShape[rank - 1] /
-                                                  (actualOpTileShape[1] *
-                                                   warpsPerCTA[rank - 1]))};
+      return {
+          numRepBatch,
+          std::max<int64_t>(minKValue, operandShape[rank - 2] / actualOpTileShape[2]),
+          std::max<int64_t>(minNonKValue, operandShape[rank - 1] / (actualOpTileShape[1] *
+                                                        warpsPerCTA[rank - 1]))};
     }
-  } else {
+  }else{
     if (opIdx == 0)
       return {
           numRepBatch,
-          std::max<int64_t>(1,
-                            operandShape[rank - 2] /
-                                (operandTileShape[0] * warpsPerCTA[rank - 2])),
+          std::max<int64_t>(1, operandShape[rank - 2] /
+                                  (operandTileShape[0] * warpsPerCTA[rank - 2])),
           std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
     else {
       assert(opIdx == 1);
       return {
           numRepBatch,
           std::max<int64_t>(1, operandShape[rank - 2] / operandTileShape[0]),
-          std::max<int64_t>(1,
-                            operandShape[rank - 1] /
-                                (operandTileShape[1] * warpsPerCTA[rank - 1]))};
+          std::max<int64_t>(1, operandShape[rank - 1] / (operandTileShape[1] *
+                                                        warpsPerCTA[rank - 1]))};
     }
   }
+
 }
 
 unsigned HCUMfmaEncodingAttr::getTotalElemsPerThreadForOperands(

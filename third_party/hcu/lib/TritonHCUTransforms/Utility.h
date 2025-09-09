@@ -16,4 +16,5 @@ using namespace mlir;
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              llvm::function_ref<int(Operation *)> countFunc);
 
+
 #endif

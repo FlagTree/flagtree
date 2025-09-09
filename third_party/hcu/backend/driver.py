@@ -10,7 +10,7 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
-include_dir = [os.path.join(dirname, "../hcu", "include")]
+include_dir = [os.path.join(dirname, "../hcu","include")]
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
