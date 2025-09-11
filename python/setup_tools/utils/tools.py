@@ -258,11 +258,3 @@ class OfflineBuildManager:
         else:
             self.handle_triton_origin_toolkits()
         return True
-
-
-downloader = DownloadManager()
-downloader.download(
-    url=
-    "https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz",
-    path="/tmp/iluvatarTritonPlugin", file_name="iluvatarTritonPlugin")
-print(NetConfig.headers)
