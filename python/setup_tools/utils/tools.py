@@ -6,6 +6,9 @@ import zipfile
 from io import BytesIO
 import urllib.request
 from dataclasses import dataclass
+import json
+from build_helpers import get_base_dir
+import platform
 
 flagtree_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 flagtree_submodule_dir = os.path.join(flagtree_root_dir, "third_party")
@@ -206,7 +209,23 @@ class OfflineBuildManager:
             kargs['post_hock'](self.src)
 
     def handle_triton_origin_toolkits(self):
-        triton_origin_toolkits = ["ptxas", "nvdisasm", "cuobjdump", "cudacrt", " cudart", "pybind11", "json"]
+
+        # detect system/arch/version, the same with setup.py
+        system = platform.system()
+        arch = platform.machine()
+        arch = {"arm64": "sbsa", "aarch64": "sbsa"}.get(arch, arch)
+        supported = {"Linux": "linux", "Darwin": "linux"}
+        system = supported[system]
+        nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
+        with open(nvidia_version_path, "r") as nvidia_version_file:
+            # parse this json file to get the version of the nvidia toolchain
+            NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
+
+        ptxas_cache_path = os.path.join("nvidia/nvcc", f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas']}-archive")
+        ptxas_blackwell_cache_path = os.path.join("nvidia/nvcc", f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas-blackwell']}-archive")
+        cudacrt_cache_path = os.path.join("nvidia/nvcc", f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['cudacrt']}-archive")
+        triton_origin_toolkits = [ptxas_cache_path, ptxas_blackwell_cache_path, cudacrt_cache_path, "nvidia/nvdisasm",
+                                  "nvidia/cuobjdump", "nvidia/cudart", "nvidia/cupti", "json"]
         for toolkit in triton_origin_toolkits:
             toolkit_cache_path = os.path.join(self.triton_cache_path, toolkit)
             if os.path.exists(toolkit_cache_path):
