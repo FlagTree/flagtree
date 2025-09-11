@@ -2,7 +2,7 @@ from pathlib import Path
 import importlib.util
 import os
 from . import tools, default, xpu
-from .tools import flagtree_submoduel_dir, download_module, OfflineBuildManager, is_skip_cuda_toolkits
+from .tools import flagtree_submoduel_dir, OfflineBuildManager, is_skip_cuda_toolkits
 
 flagtree_submoduels = {
     "triton_shared":
@@ -27,6 +27,6 @@ def activate(backend, suffix=".py"):
 
 
 __all__ = [
-    "default", "tsingmicro", "xpu", "tools", "flagtree_submoduels", "activate", "download_module",
-    "OfflineBuildManager", "is_skip_cuda_toolkits"
+    "default", "tsingmicro", "xpu", "tools", "flagtree_submoduels", "activate", "OfflineBuildManager",
+    "is_skip_cuda_toolkits"
 ]
