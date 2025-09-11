@@ -8,11 +8,11 @@
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/hcu/include/triton/Dialect/TritonHCUGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
@@ -76,7 +76,6 @@ struct ConvertTritonHCUGPUToLLVM
     registry.insert<LLVM::LLVMDialect, NVVM::NVVMDialect,
                     mlir::ROCDL::ROCDLDialect>();
   }
-
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -206,7 +205,8 @@ struct ConvertTritonHCUGPUToLLVM
     HCU::populateSPMDOpToLLVMPattern(typeConverter, patterns, HCUBenefit);
 
     // mlir::triton::HCU::populateTritonHCUGPUToLLVMPatterns(typeConverter,
-    //                                                       patterns, HCUBenefit);
+    //                                                       patterns,
+    //                                                       HCUBenefit);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns

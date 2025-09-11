@@ -24,10 +24,10 @@
 #include "SharedToDotOperandHelper.h"
 #include "Utility.h"
 
-using ::mlir::triton::gpu::HCUMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::HCUMfmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace SharedToDotOperandMFMA {
@@ -101,15 +101,18 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
           laneHOffset = i32_val(0);
         } else {
           assert(iKDim * iNonKDim / numOfElems == 64 &&
-                "seems no all threads in warp contain unique elements");
+                 "seems no all threads in warp contain unique elements");
           laneHOffset = mul(udiv(laneId, nonKDim), i32_val(numOfElems));
         }
       }
-    } else laneHOffset = udiv(laneId, nonKDim);
+    } else
+      laneHOffset = udiv(laneId, nonKDim);
 
     for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
       Value elemVOffset = _0;
-      Value elemHOffset = interleave ? i32_val(loadId * loadVecSize * iNonKDim / numOfElems) : i32_val(loadId * loadVecSize);
+      Value elemHOffset =
+          interleave ? i32_val(loadId * loadVecSize * iNonKDim / numOfElems)
+                     : i32_val(loadId * loadVecSize);
 
       Value sliceVOffset =
           add(add(add(tileVOffset, laneVOffset), elemVOffset), warpVOffset);
@@ -128,22 +131,29 @@ bool hasSwizzleEnabled(const SharedEncodingAttr &srcEncoding) {
   return srcEncoding.getMaxPhase() > 1;
 }
 
-bool useDsReadMat(const HCUMfmaEncodingAttr &mfmaLayout, int bitWidth, int opIdx) {
+bool useDsReadMat(const HCUMfmaEncodingAttr &mfmaLayout, int bitWidth,
+                  int opIdx) {
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
-  if((mDim == 32 && nDim == 32) && (bitWidth == 16 || bitWidth == 8))
+  if ((mDim == 32 && nDim == 32) && (bitWidth == 16 || bitWidth == 8))
     return true;
-  if((mDim == 16 && nDim == 32) && (bitWidth == 16 || bitWidth == 8) && (opIdx == 1))
+  if ((mDim == 16 && nDim == 32) && (bitWidth == 16 || bitWidth == 8) &&
+      (opIdx == 1))
     return true;
   return false;
 }
 
-bool useMmacFuse(const HCUMfmaEncodingAttr &mfmaLayout, int bitWidth, int opIdx) {
+bool useMmacFuse(const HCUMfmaEncodingAttr &mfmaLayout, int bitWidth,
+                 int opIdx) {
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
   auto kDim = mfmaLayout.getKDim();
-  if((((mDim == 16 && nDim == 64) || (mDim == 16 && nDim == 16 && kDim == 32)) && (bitWidth == 16)) ||
-      (((mDim == 16 && nDim == 16 && kDim == 64) || (mDim == 16 && nDim == 64 && kDim == 64)) && bitWidth == 8))
+  if ((((mDim == 16 && nDim == 64) ||
+        (mDim == 16 && nDim == 16 && kDim == 32)) &&
+       (bitWidth == 16)) ||
+      (((mDim == 16 && nDim == 16 && kDim == 64) ||
+        (mDim == 16 && nDim == 64 && kDim == 64)) &&
+       bitWidth == 8))
     return true;
   return false;
 }
@@ -163,7 +173,8 @@ llvm::SmallVector<Value>
 fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
                        const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
                        Value laneId, int warpsPerBlock, int numOfElems,
-                       ArrayRef<int64_t> reps, Value cSwizzleOffset, bool interleave) {
+                       ArrayRef<int64_t> reps, Value cSwizzleOffset,
+                       bool interleave) {
   auto numK = reps[1];
   auto numN = reps[2];
   SmallVector<Value> offsets(numK * numN * numOfElems);
@@ -203,7 +214,8 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
           rowOffset = add(i32_val(elem * lineSize), halfOffset);
         } else {
           Value halfOffset = mul(udiv(laneId, _nonKDim), i32_val(lineSize));
-          rowOffset = add(i32_val(elem * lineSize * iNonKDim / numOfElems), halfOffset);
+          rowOffset =
+              add(i32_val(elem * lineSize * iNonKDim / numOfElems), halfOffset);
         }
         Value elemOffset = add(rowOffset, colOffset);
         Value offset =
@@ -215,11 +227,11 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
   return offsets;
 }
 
-llvm::SmallVector<Value>
-dsReadMatComputeOffsets(ConversionPatternRewriter &rewriter, Location loc, SharedEncodingAttr sharedLayout,
-                       const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
-                       Value laneId, int warpsPerBlock, int totolElemsPerThread,
-                       ArrayRef<int64_t> reps, Value nonKStrides, int interleave) {
+llvm::SmallVector<Value> dsReadMatComputeOffsets(
+    ConversionPatternRewriter &rewriter, Location loc,
+    SharedEncodingAttr sharedLayout, const ArrayRef<int64_t> &elemsPerInstr,
+    Value waveId, Value laneId, int warpsPerBlock, int totolElemsPerThread,
+    ArrayRef<int64_t> reps, Value nonKStrides, int interleave) {
   auto numK = reps[1];
   auto numN = reps[2];
   SmallVector<Value> offsets(numK * numN);
@@ -228,7 +240,10 @@ dsReadMatComputeOffsets(ConversionPatternRewriter &rewriter, Location loc, Share
   Value lineSize = nonKStrides;
   Value _nonKDim = i32_val(iNonKDim);
   Value waveOffset = mul(waveId, i32_val(iNonKDim));
-  int numOfThreadsNonK = 32/*magic number*/ / totolElemsPerThread; // threadLayout in warps: 32x2 for ds_read_m32x32b8; 16x4 for ds_read_m32x16b16
+  int numOfThreadsNonK =
+      32 /*magic number*/ /
+      totolElemsPerThread; // threadLayout in warps: 32x2 for ds_read_m32x32b8;
+                           // 16x4 for ds_read_m32x16b16
   int vecSize = sharedLayout.getVec();
   int swizzleWidth = numOfThreadsNonK * totolElemsPerThread;
   auto vec = i32_val(sharedLayout.getVec());
@@ -240,18 +255,23 @@ dsReadMatComputeOffsets(ConversionPatternRewriter &rewriter, Location loc, Share
     for (int tile = 0; tile < numK; ++tile) {
       Value tileOffset = mul(i32_val(tile * iKDim), lineSize);
       {
-        // ds_read_m32x32b8: (v0&2)*16+(v0/2)*MT or ds_read_m32x16b16: (v0&3)*8+(v0/4)*MT
+        // ds_read_m32x32b8: (v0&2)*16+(v0/2)*MT or ds_read_m32x16b16:
+        // (v0&3)*8+(v0/4)*MT
         Value colOrdered;
-        Value row = udiv(laneId, i32_val(numOfThreadsNonK));  // (rowid / 4) + (rowid % 4) * 4
-        if(interleave){ // FA secondDot OPT PASS
-          row = add(udiv(row, i32_val(4)), mul(urem(row, i32_val(4)), i32_val(4)));
+        Value row = udiv(
+            laneId, i32_val(numOfThreadsNonK)); // (rowid / 4) + (rowid % 4) * 4
+        if (interleave) {                       // FA secondDot OPT PASS
+          row = add(udiv(row, i32_val(4)),
+                    mul(urem(row, i32_val(4)), i32_val(4)));
         }
         Value colStart = add(waveOffset, blockOffset);
-        Value col = add(colStart, mul(urem(laneId, i32_val(numOfThreadsNonK)), i32_val(totolElemsPerThread)));
+        Value col = add(colStart, mul(urem(laneId, i32_val(numOfThreadsNonK)),
+                                      i32_val(totolElemsPerThread)));
         if (vecSize < swizzleWidth)
           colOrdered = urem(col, vec);
         else
-          colOrdered = mul(urem(laneId, i32_val(numOfThreadsNonK)), i32_val(totolElemsPerThread));
+          colOrdered = mul(urem(laneId, i32_val(numOfThreadsNonK)),
+                           i32_val(totolElemsPerThread));
         auto phase = urem(udiv(row, perPhase), maxPhase);
         auto colOffSwizzled = mul(xor_(udiv(col, vec), phase), vec);
         auto colOffset = add(colOffSwizzled, colOrdered);
@@ -264,15 +284,15 @@ dsReadMatComputeOffsets(ConversionPatternRewriter &rewriter, Location loc, Share
   return offsets;
 }
 
-llvm::SmallVector<Value>
-mmacFuseComputeOffsets(ConversionPatternRewriter &rewriter, Location loc, SharedEncodingAttr sharedLayout,
-                       const ArrayRef<int64_t> &elemsPerInstr, Value waveId,
-                       Value laneId, int warpsPerBlock, int numOfElems,
-                       ArrayRef<int64_t> reps, Value nonKStrides, int interleave, int kWidth) {
+llvm::SmallVector<Value> mmacFuseComputeOffsets(
+    ConversionPatternRewriter &rewriter, Location loc,
+    SharedEncodingAttr sharedLayout, const ArrayRef<int64_t> &elemsPerInstr,
+    Value waveId, Value laneId, int warpsPerBlock, int numOfElems,
+    ArrayRef<int64_t> reps, Value nonKStrides, int interleave, int kWidth) {
 
   auto iNonKDim = elemsPerInstr[0];
   auto iKDim = elemsPerInstr[1];
-  auto iterNum = elemsPerInstr[0] / 16 ;
+  auto iterNum = elemsPerInstr[0] / 16;
   auto numN = reps[1] / iterNum;
   auto numK = reps[2] / 2;
   SmallVector<Value> offsets(numK * numN * iterNum);
@@ -287,14 +307,19 @@ mmacFuseComputeOffsets(ConversionPatternRewriter &rewriter, Location loc, Shared
 
   for (int block = 0; block < numN; ++block) {
     Value blockOffset_row = i32_val(block * iNonKDim * warpsPerBlock);
-    for(int n = 0; n < iterNum; n++){
+    for (int n = 0; n < iterNum; n++) {
       for (int tile = 0; tile < numK; ++tile) {
         Value tileOffset_col = i32_val(tile * iKDim);
         Value row_1 = urem(laneId, i32_val(16));
-        Value row = add(add(add(mul(row_1, i32_val(iterNum)), i32_val(n)), waveOffset), blockOffset_row);
-        auto colOffset = add(mul(udiv(laneId, i32_val(16)), i32_val(kWidth * 2)), tileOffset_col);
+        Value row =
+            add(add(add(mul(row_1, i32_val(iterNum)), i32_val(n)), waveOffset),
+                blockOffset_row);
+        auto colOffset =
+            add(mul(udiv(laneId, i32_val(16)), i32_val(kWidth * 2)),
+                tileOffset_col);
         auto phase = urem(udiv(row, perPhase), maxPhase);
-        auto colOffSwizzled = mul(xor_(udiv(colOffset, vec), phase), vec);  // zhenggf TODO
+        auto colOffSwizzled =
+            mul(xor_(udiv(colOffset, vec), phase), vec); // zhenggf TODO
         auto rowOffset = mul(row, lineSize);
         Value elemOffset = add(rowOffset, colOffSwizzled);
         offsets[block * iterNum * numK + n * numK + tile] = elemOffset;
@@ -309,7 +334,9 @@ bool isColMajor(::llvm::ArrayRef<unsigned> order) {
   return order[0] == (rank - 2);
 }
 
-Value generateDsReadM32x16B16Op(ConversionPatternRewriter &rewriter, Location loc, Value addr, Value offset, Value valVec) {
+Value generateDsReadM32x16B16Op(ConversionPatternRewriter &rewriter,
+                                Location loc, Value addr, Value offset,
+                                Value valVec) {
   StringRef dsReadName = "rocdl.ds.read.m32x16b16";
   auto resType = valVec.getType();
   OperationState loweredOp(loc, dsReadName);
@@ -318,7 +345,9 @@ Value generateDsReadM32x16B16Op(ConversionPatternRewriter &rewriter, Location lo
   return rewriter.create(loweredOp)->getResult(0);
 }
 
-Value generateDsReadM32x32B8Op(ConversionPatternRewriter &rewriter, Location loc, Value addr, Value offset, Value valVec) {
+Value generateDsReadM32x32B8Op(ConversionPatternRewriter &rewriter,
+                               Location loc, Value addr, Value offset,
+                               Value valVec) {
   StringRef dsReadName = "rocdl.ds.read.m32x32b8";
   auto resType = valVec.getType();
   OperationState loweredOp(loc, dsReadName);
@@ -327,22 +356,25 @@ Value generateDsReadM32x32B8Op(ConversionPatternRewriter &rewriter, Location loc
   return rewriter.create(loweredOp)->getResult(0);
 }
 
-SmallVector<Value> loadX4(ConversionPatternRewriter &rewriter, Location loc, Value ptrs, Value offset, Type elemType) {
+SmallVector<Value> loadX4(ConversionPatternRewriter &rewriter, Location loc,
+                          Value ptrs, Value offset, Type elemType) {
   // The struct should have exactly the same element types.
-  
+
   auto vecTy = vec_ty(i32_ty, 4);
   Value valVec = undef(vecTy);
 
   Value resV4i32;
-  if(elemType.isBF16() || elemType.isF16()){
+  if (elemType.isBF16() || elemType.isF16()) {
     resV4i32 = generateDsReadM32x16B16Op(rewriter, loc, ptrs, offset, valVec);
-  }else if(elemType.isInteger(8)){
+  } else if (elemType.isInteger(8)) {
     resV4i32 = generateDsReadM32x32B8Op(rewriter, loc, ptrs, offset, valVec);
-  }else
+  } else
     llvm::report_fatal_error("ds_read_m* data type not supported");
 
-  return {extract_element(i32_ty, resV4i32, i32_val(0)), extract_element(i32_ty, resV4i32, i32_val(1)),
-          extract_element(i32_ty, resV4i32, i32_val(2)), extract_element(i32_ty, resV4i32, i32_val(3))};                        
+  return {extract_element(i32_ty, resV4i32, i32_val(0)),
+          extract_element(i32_ty, resV4i32, i32_val(1)),
+          extract_element(i32_ty, resV4i32, i32_val(2)),
+          extract_element(i32_ty, resV4i32, i32_val(3))};
 }
 
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
@@ -360,7 +392,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
-         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
+         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) ||
+         (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
@@ -375,8 +408,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto kWidth = encoding.getKWidth();
   auto elemsPerInstr = mfmaLayout.getMFMAInstrShapeForOperands(kWidth, opIdx);
   bool isMmacFuse = useMmacFuse(mfmaLayout, bitWidth, opIdx);
-  if(isMmacFuse)
-    elemsPerInstr = mfmaLayout.getMFMAInstrShapeForOperands(kWidth*2, opIdx);
+  if (isMmacFuse)
+    elemsPerInstr = mfmaLayout.getMFMAInstrShapeForOperands(kWidth * 2, opIdx);
   bool isDsReadMat = useDsReadMat(mfmaLayout, bitWidth, opIdx);
 
   int64_t mfmaInstrNonK;
@@ -398,8 +431,9 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   // TODO(Lixun): make it simpler
   // getMFMARepForOperands always returns a 3D vector
   if (rank == 2) {
-    if(isDsReadMat){
-      numReps[nonKDimIdx + 1] = std::max(numReps[nonKDimIdx + 1] / 2, (int64_t)1);
+    if (isDsReadMat) {
+      numReps[nonKDimIdx + 1] =
+          std::max(numReps[nonKDimIdx + 1] / 2, (int64_t)1);
     }
     numRepNonK = numReps[nonKDimIdx + 1];
     numRepK = numReps[kDimIdx + 1];
@@ -444,56 +478,63 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     // TODO (zhanglx): later when we enable vector access to LDS for non k-major
     // tensors, we'll refactor the scope of fast and normal path
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
-    if (opIdx == 0) {  //矩阵A
-      if (isColMajor(order)) {  // 转置
+    if (opIdx == 0) {          // 矩阵A
+      if (isColMajor(order)) { // 转置
         SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
         SmallVector<int64_t> reps{numReps[0], numReps[2], numReps[1]};
 
-        if(isDsReadMat){
-          offsets = dsReadMatComputeOffsets(rewriter, loc, sharedLayout, elemsPerInstr,
-                                          spatialWarpId, lane, warpsPerBlockNonK,
-                                          totolElemsPerThread, reps, nonKStrides, interleave);
-        }else if(isMmacFuse){
-          offsets = HCU::computeOffsetsAType(rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
-                                            spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-                                            sharedLayout, mDim, mfmaInstrK, interleave);
+        if (isDsReadMat) {
+          offsets = dsReadMatComputeOffsets(
+              rewriter, loc, sharedLayout, elemsPerInstr, spatialWarpId, lane,
+              warpsPerBlockNonK, totolElemsPerThread, reps, nonKStrides,
+              interleave);
+        } else if (isMmacFuse) {
+          offsets = HCU::computeOffsetsAType(
+              rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
+              spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps,
+              smemObj, sharedLayout, mDim, mfmaInstrK, interleave);
+        } else {
+          offsets = fastPathComputeOffsets(
+              rewriter, loc, elemsPerInstr, spatialWarpId, lane,
+              warpsPerBlockNonK, numOfElems, reps, cSwizzleOffset, interleave);
         }
-        else{
-          offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
-                                          spatialWarpId, lane, warpsPerBlockNonK,
-                                          numOfElems, reps, cSwizzleOffset, interleave);
-        }
-      } else {  // 不转置
-        if(isMmacFuse){
-          offsets = mmacFuseComputeOffsets(rewriter, loc, sharedLayout, elemsPerInstr,
-                                          spatialWarpId, lane, warpsPerBlockNonK,
-                                          numOfElems, numReps, nonKStrides, interleave, kWidth);
-        }else
-        llvm_unreachable(
-            "row major operand A should be handled in the normal path");
+      } else { // 不转置
+        if (isMmacFuse) {
+          offsets = mmacFuseComputeOffsets(
+              rewriter, loc, sharedLayout, elemsPerInstr, spatialWarpId, lane,
+              warpsPerBlockNonK, numOfElems, numReps, nonKStrides, interleave,
+              kWidth);
+        } else
+          llvm_unreachable(
+              "row major operand A should be handled in the normal path");
       }
-    } else {  // 矩阵B
+    } else { // 矩阵B
       if (isColMajor(order)) {
         // SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
         SmallVector<int64_t> elemsPerInstr{mfmaInstrNonK, mfmaInstrK};
         SmallVector<int64_t> reps{numReps[0], numReps[2], numReps[1]};
-        if(isMmacFuse){
-          offsets = mmacFuseComputeOffsets(rewriter, loc, sharedLayout, elemsPerInstr,
-                                          spatialWarpId, lane, warpsPerBlockNonK,
-                                          numOfElems, reps, nonKStrides, interleave, kWidth);
-        }else
-          llvm_unreachable("col major operand B should be handled in the normal path");
+        if (isMmacFuse) {
+          offsets = mmacFuseComputeOffsets(rewriter, loc, sharedLayout,
+                                           elemsPerInstr, spatialWarpId, lane,
+                                           warpsPerBlockNonK, numOfElems, reps,
+                                           nonKStrides, interleave, kWidth);
+        } else
+          llvm_unreachable(
+              "col major operand B should be handled in the normal path");
       } else {
-        if(isMmacFuse){
-            llvm_unreachable("row major operand B should be handled in the normal path");
-        }else if(isDsReadMat){
-          offsets = dsReadMatComputeOffsets(rewriter, loc, sharedLayout, elemsPerInstr,
-                                          spatialWarpId, lane, warpsPerBlockNonK,
-                                          totolElemsPerThread, numReps, nonKStrides, interleave);
-        }else {
+        if (isMmacFuse) {
+          llvm_unreachable(
+              "row major operand B should be handled in the normal path");
+        } else if (isDsReadMat) {
+          offsets = dsReadMatComputeOffsets(
+              rewriter, loc, sharedLayout, elemsPerInstr, spatialWarpId, lane,
+              warpsPerBlockNonK, totolElemsPerThread, numReps, nonKStrides,
+              interleave);
+        } else {
           offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
-                                         spatialWarpId, lane, warpsPerBlockNonK,
-                                         numOfElems, numReps, cSwizzleOffset, interleave);
+                                           spatialWarpId, lane,
+                                           warpsPerBlockNonK, numOfElems,
+                                           numReps, cSwizzleOffset, interleave);
         }
       }
     }
@@ -523,19 +564,20 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
-  if(isDsReadMat) {
-    
-    int mmacNumElemsPerThread = numOfElems / 2;
-    int numUnPackRegToElems = 32/*register bit width*/ / bitWidth;
-    loadedValues.resize(numRepNonK * numRepK * totolElemsPerThread); 
+  if (isDsReadMat) {
 
-    for(int nonK = 0; nonK < numRepNonK; ++nonK){
-      for(int k=0; k < numRepK; ++k){
+    int mmacNumElemsPerThread = numOfElems / 2;
+    int numUnPackRegToElems = 32 /*register bit width*/ / bitWidth;
+    loadedValues.resize(numRepNonK * numRepK * totolElemsPerThread);
+
+    for (int nonK = 0; nonK < numRepNonK; ++nonK) {
+      for (int k = 0; k < numRepK; ++k) {
 
         auto loadVecTy = vec_ty(elemTy, 1);
         Value loadOffset;
         loadOffset = offsets[nonK * numRepK + k];
-        Value nonKStridesBytes = mul(i32_val(bitWidth/8), i32_val(shape[nonKDimIdx]));
+        Value nonKStridesBytes =
+            mul(i32_val(bitWidth / 8), i32_val(shape[nonKDimIdx]));
         Value tileOffset = mul(i32_val(k * mfmaInstrK), nonKStridesBytes);
         Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
         SmallVector<Value> result;
@@ -545,39 +587,46 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
           Value valVec0 = undef(vecTy0);
           auto vecTy1 = vec_ty(resElemTy, mmacNumElemsPerThread);
           Value valVec1 = undef(vecTy1);
-          for(int n=0; n<2; ++n){
+          for (int n = 0; n < 2; ++n) {
             Value regValue = result[n];
-            auto vecTy = vec_ty(resElemTy, numUnPackRegToElems); 
-            auto valTy = bitcast(regValue, vecTy); 
-            for(int i=0; i<numUnPackRegToElems; ++i){
+            auto vecTy = vec_ty(resElemTy, numUnPackRegToElems);
+            auto valTy = bitcast(regValue, vecTy);
+            for (int i = 0; i < numUnPackRegToElems; ++i) {
               auto val0 = extract_element(resElemTy, valTy, i32_val(i));
-              valVec0 = insert_element(vecTy0, valVec0, val0, i32_val(n * numUnPackRegToElems + i));
+              valVec0 = insert_element(vecTy0, valVec0, val0,
+                                       i32_val(n * numUnPackRegToElems + i));
             }
           }
-          for(int n=0; n<2; ++n){
-            Value regValue = result[n+2];
-            auto vecTy = vec_ty(resElemTy, numUnPackRegToElems); 
-            auto valTy = bitcast(regValue, vecTy); 
-            for(int i=0; i<numUnPackRegToElems; ++i){
+          for (int n = 0; n < 2; ++n) {
+            Value regValue = result[n + 2];
+            auto vecTy = vec_ty(resElemTy, numUnPackRegToElems);
+            auto valTy = bitcast(regValue, vecTy);
+            for (int i = 0; i < numUnPackRegToElems; ++i) {
               auto val1 = extract_element(resElemTy, valTy, i32_val(i));
-              valVec1 = insert_element(vecTy1, valVec1, val1, i32_val(n * numUnPackRegToElems + i));
+              valVec1 = insert_element(vecTy1, valVec1, val1,
+                                       i32_val(n * numUnPackRegToElems + i));
             }
           }
 
-          for(int i=0; i<mmacNumElemsPerThread; i++){
-            loadedValues[(2 * nonK) * numRepK * mmacNumElemsPerThread + k * mmacNumElemsPerThread + i] =  extract_element(resElemTy, valVec0, i32_val(i));
-            loadedValues[(2 * nonK + 1) * numRepK * mmacNumElemsPerThread + k * mmacNumElemsPerThread + i] = extract_element(resElemTy, valVec1, i32_val(i));
+          for (int i = 0; i < mmacNumElemsPerThread; i++) {
+            loadedValues[(2 * nonK) * numRepK * mmacNumElemsPerThread +
+                         k * mmacNumElemsPerThread + i] =
+                extract_element(resElemTy, valVec0, i32_val(i));
+            loadedValues[(2 * nonK + 1) * numRepK * mmacNumElemsPerThread +
+                         k * mmacNumElemsPerThread + i] =
+                extract_element(resElemTy, valVec1, i32_val(i));
           }
         }
       }
     }
-  }else if(isMmacFuse) {
+  } else if (isMmacFuse) {
     SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
-    if(opIdx == 1) numRepNonK = numRepNonK / 4 > 0 ? numRepNonK / 4: 1;
+    if (opIdx == 1)
+      numRepNonK = numRepNonK / 4 > 0 ? numRepNonK / 4 : 1;
     numRepK = numRepK / 2;
-    int loadsPerThread = offsets.size() / numRepK / numRepNonK;  //4
-    int elemsPerLoad = kWidth * 2;  // 4
-    numOfElems = loadsPerThread * elemsPerLoad;  //16
+    int loadsPerThread = offsets.size() / numRepK / numRepNonK; // 4
+    int elemsPerLoad = kWidth * 2;                              // 4
+    numOfElems = loadsPerThread * elemsPerLoad;                 // 16
     assert(numOfElems % loadsPerThread == 0);
 
     for (int b = 0; b < repB; ++b) {
@@ -593,7 +642,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
             auto loadVecTy = vec_ty(elemTy, elemsPerLoad);
             Value loadOffset;
             loadOffset = offsets[nonK * loadsPerThread * numRepK +
-                                k * loadsPerThread + loadId];
+                                 k * loadsPerThread + loadId];
             loadOffset = add(loadOffset, batchOffset);
             Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
             Value loadedValue = load(loadVecTy, loadAddress);
@@ -606,8 +655,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
         }
       }
     }
-  }else{
-    
+  } else {
+
     int loadsPerThread = offsets.size() / numRepK / numRepNonK;
     int elemsPerLoad = numOfElems / loadsPerThread;
     assert(numOfElems % loadsPerThread == 0);
@@ -625,7 +674,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
             auto loadVecTy = vec_ty(elemTy, elemsPerLoad);
             Value loadOffset;
             loadOffset = offsets[nonK * loadsPerThread * numRepK +
-                                k * loadsPerThread + loadId];
+                                 k * loadsPerThread + loadId];
             loadOffset = add(loadOffset, batchOffset);
             Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
             Value loadedValue = load(loadVecTy, loadAddress);

@@ -401,11 +401,11 @@ using LLVM::getMultiDimIndex;
 using LLVM::SharedMemoryObject;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::SharedMemoryObject;
-using ::mlir::triton::gpu::HCUMfmaEncodingAttr;
-using ::mlir::triton::gpu::HCUWmmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::HCUMfmaEncodingAttr;
+using ::mlir::triton::gpu::HCUWmmaEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
@@ -769,7 +769,8 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   unsigned mDim = mfmaLayout.getMDim();
   unsigned nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
-         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
+         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) ||
+         (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
 
   Value threadId = getThreadId(rewriter, loc);
   Value warpSize = i32_val(triton::gpu::getWarpSize(mfmaLayout));
@@ -798,30 +799,29 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   Value offWarp0 = mul(multiDimWarpId[rank - 2], i32_val(mDim));
   Value offWarp1 = mul(multiDimWarpId[rank - 1], i32_val(nDim));
   bool isMmacFuse = false;
-  if((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32)){
+  if ((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32)) {
     mDim = 16; // real m/nDim
     nDim = 16;
-  }else if (mDim == 16 && nDim == 64){
+  } else if (mDim == 16 && nDim == 64) {
     mDim = 16; // real m/nDim
     nDim = 16;
     isMmacFuse = true;
   }
   SmallVector<Value> multiDimBase(rank);
   if (!mfmaLayout.getIsTransposed()) {
-    if(isMmacFuse) {
-      multiDimBase[rank - 1] = add(mul(udiv(laneId, i32_val(mDim)), i32_val(4)), offWarp1);
-    }else{
+    if (isMmacFuse) {
       multiDimBase[rank - 1] =
-        add(udiv(laneId, i32_val(mDim)), offWarp1);
+          add(mul(udiv(laneId, i32_val(mDim)), i32_val(4)), offWarp1);
+    } else {
+      multiDimBase[rank - 1] = add(udiv(laneId, i32_val(mDim)), offWarp1);
     }
     multiDimBase[rank - 2] = add(urem(laneId, i32_val(mDim)), offWarp0);
   } else {
-    if(isMmacFuse) {
+    if (isMmacFuse) {
       multiDimBase[rank - 2] =
-        add(mul(udiv(laneId, i32_val(nDim)), i32_val(4)), offWarp0);
-    }else{
-      multiDimBase[rank - 2] =
-        add(udiv(laneId, i32_val(nDim)), offWarp0);
+          add(mul(udiv(laneId, i32_val(nDim)), i32_val(4)), offWarp0);
+    } else {
+      multiDimBase[rank - 2] = add(udiv(laneId, i32_val(nDim)), offWarp0);
     }
     multiDimBase[rank - 1] = add(urem(laneId, i32_val(nDim)), offWarp1);
   }
@@ -841,19 +841,20 @@ inline void emitMfmaOffsetForCTA(const HCUMfmaEncodingAttr &mfmaLayout,
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
-         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) || (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64) );
+         (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64) ||
+         (mDim == 16 && nDim == 32) || (mDim == 16 && nDim == 64));
   // MFMA output tile consists of repeated "dot operand B" layout groups along
   // row axis. This variable defines number of these groups.
   DenseMap<int, int> groups{{4, 1}, {16, 1}, {32, 4}};
   unsigned numGroups = groups.at(std::min(mDim, nDim));
   unsigned elemsPerThreadPerGroup = 4;
   bool isMmacFuse = false;
-  if((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32)){
-    numGroups = mDim/16;
+  if ((mDim == 32 && nDim == 32) || (mDim == 16 && nDim == 32)) {
+    numGroups = mDim / 16;
     elemsPerThreadPerGroup = 8;
-  }else if(mDim == 16 && nDim == 64){
+  } else if (mDim == 16 && nDim == 64) {
     isMmacFuse = true;
-    numGroups = mDim/16;
+    numGroups = mDim / 16;
     elemsPerThreadPerGroup = 16;
   }
   auto warpSize = getWarpSize(mfmaLayout);
@@ -867,17 +868,17 @@ inline void emitMfmaOffsetForCTA(const HCUMfmaEncodingAttr &mfmaLayout,
     for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
       if (!mfmaLayout.getIsTransposed()) {
         elemOff[rank - 2] = ctaOffsetX * shapePerCta[rank - 2] + rowOrColOffset;
-        if (isMmacFuse){
-          elemOff[rank - 1] = ctaOffsetY * shapePerCta[rank - 1] + (elem%4)*16+elem/4 ;
-        }else
-        elemOff[rank - 1] =
-            ctaOffsetY * shapePerCta[rank - 1] + elem*4;
+        if (isMmacFuse) {
+          elemOff[rank - 1] =
+              ctaOffsetY * shapePerCta[rank - 1] + (elem % 4) * 16 + elem / 4;
+        } else
+          elemOff[rank - 1] = ctaOffsetY * shapePerCta[rank - 1] + elem * 4;
       } else {
-        if (isMmacFuse){
-          elemOff[rank - 2] = ctaOffsetX * shapePerCta[rank - 2] + (elem%4)*16+elem/4  ;
-        }else
-        elemOff[rank - 2] =
-            ctaOffsetX * shapePerCta[rank - 2] + elem*4;
+        if (isMmacFuse) {
+          elemOff[rank - 2] =
+              ctaOffsetX * shapePerCta[rank - 2] + (elem % 4) * 16 + elem / 4;
+        } else
+          elemOff[rank - 2] = ctaOffsetX * shapePerCta[rank - 2] + elem * 4;
         elemOff[rank - 1] = ctaOffsetY * shapePerCta[rank - 1] + rowOrColOffset;
       }
       if (rank == 3)

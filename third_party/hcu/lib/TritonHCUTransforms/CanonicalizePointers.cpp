@@ -1,32 +1,32 @@
+#include "TritonHCUTransforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LogicalResult.h"
 #include <utility>
-#include "mlir/IR/Attributes.h"
-#include "mlir/IR/Block.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
-#include "TritonHCUTransforms/Passes.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/IR/OperationSupport.h"
 #define GEN_PASS_CLASSES
 #include "TritonHCUTransforms/Passes.h.inc"
 
@@ -453,7 +453,7 @@ Value PointerCanonicalizer::createTensorPointer(FatPtr fatPtr, Location loc) {
   // ArrayRef<int64_t> offsetShape = offsetType.getShape();
   // Splat the scalar pointer
   auto tensorPtrType = RankedTensorType::get(offsetShape, basePtr.getType(),
-                                              tensorType.getEncoding());
+                                             tensorType.getEncoding());
   if (fatPtr.canNarrow)
     offset = narrow64bitOffsetTo32bits(rewriter, loc, offset);
 
@@ -561,8 +561,8 @@ LogicalResult PointerCanonicalizer::rewriteAddPtrOp(triton::AddPtrOp addPtrOp,
       decomposeOffsetFromExpr(curLoc, offset, bitness);
 
   // Scalar pointer update (if any): bump the scalar pointer
-    newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
-                                               uniformOffset);
+  newPtr = rewriter.create<triton::AddPtrOp>(curLoc, newPtr.getType(), newPtr,
+                                             uniformOffset);
 
   // Vector offset update (if any): bump the tensor offset
   Value fatPtrOffset = fatPtr.offset;
@@ -972,7 +972,7 @@ LogicalResult PointerCanonicalizer::rewriteFunction(triton::FuncOp funcOp) {
     if (IntegerAttr pointerRangeAttr =
             funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
       bitness = pointerRangeAttr.getInt();
-      // llvm::dbgs()<<"region.getArguments():"<<idx<<"bitness"<<bitness<<"\n";
+    // llvm::dbgs()<<"region.getArguments():"<<idx<<"bitness"<<bitness<<"\n";
     rewriter.setInsertionPointToStart(&region.front());
     Value zeroOffset =
         rewriter.create<arith::ConstantIntOp>(region.getLoc(), 0, bitness);

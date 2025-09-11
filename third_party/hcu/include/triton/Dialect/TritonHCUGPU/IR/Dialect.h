@@ -23,12 +23,12 @@
 
 #ifndef TRITON_DIALECT_HCUGPU_IR_DIALECT_H_
 #define TRITON_DIALECT_HCUGPU_IR_DIALECT_H_
-#include "triton/Dialect/Triton/IR/Traits.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/PatternMatch.h"
+#include "triton/Dialect/Triton/IR/Traits.h"
 // clang-format off
 #include "hcu/include/triton/Dialect/TritonHCUGPU/IR/Dialect.h.inc"
 // clang-format on

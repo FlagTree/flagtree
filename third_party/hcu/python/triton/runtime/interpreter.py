@@ -1034,7 +1034,9 @@ def _implicit_cvt(arg):
 interpreter_builder = InterpreterBuilder()
 
 # These keywords are not supported by the interpreter
-RESERVED_KWS = ["num_warps", "num_stages", "num_ctas", "num_ldmatrixes","enable_mmacfuse", "enable_fp_fusion", "grid", "maxnreg"]
+RESERVED_KWS = [
+    "num_warps", "num_stages", "num_ctas", "num_ldmatrixes", "enable_mmacfuse", "enable_fp_fusion", "grid", "maxnreg"
+]
 
 
 class GridExecutor:

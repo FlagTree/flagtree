@@ -12,7 +12,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
-
 """
 Memory-efficient attention for decoding.
 It supports page size = 1.
@@ -32,13 +31,15 @@ def tanh(x):
     return 2 * tl.sigmoid(2 * x) - 1
 
 
-@triton.jit(do_not_specialize=["Req_to_tokens", "B_req_idx", "B_Start_Loc", "B_Seqlen", "stride_req_to_tokens_b", "att_stride_h"])
+@triton.jit(do_not_specialize=[
+    "Req_to_tokens", "B_req_idx", "B_Start_Loc", "B_Seqlen", "stride_req_to_tokens_b", "att_stride_h"
+])
 def _fwd_kernel_stage1(
     Q,
     K_Buffer,
     K_Scales_Buffer,  # New argument for K scales
     k_gamas,
-    quant_group_size: tl.constexpr, # quant_group_size
+    quant_group_size: tl.constexpr,  # quant_group_size
     sm_scale,
     Req_to_tokens,
     B_req_idx,
@@ -51,9 +52,9 @@ def _fwd_kernel_stage1(
     stride_buf_kbs,
     stride_buf_kh,
     stride_scales_buf_kbs,  # New stride for K scales bs
-    stride_scales_buf_kh,   # New stride for K scales head
+    stride_scales_buf_kh,  # New stride for K scales head
     stride_gamas_buf_kh,  # New stride for K scales bs
-    stride_gamas_buf_kd,   # New stride for K scales head
+    stride_gamas_buf_kd,  # New stride for K scales head
     att_stride_h,
     kv_group_num: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -96,11 +97,7 @@ def _fwd_kernel_stage1(
             mask=offs_n_new < cur_batch_end_index,
             other=0,
         )
-        offs_buf_k = (
-            k_loc[:, None] * stride_buf_kbs
-            + cur_kv_head * stride_buf_kh
-            + offs_d_kv[None, :]
-        )
+        offs_buf_k = (k_loc[:, None] * stride_buf_kbs + cur_kv_head * stride_buf_kh + offs_d_kv[None, :])
         k_int8_tmp = tl.load(
             K_Buffer + offs_buf_k,
             mask=(offs_n_new[:, None] < cur_batch_end_index) & (offs_d_kv[None, :] < Lk),
@@ -113,19 +110,15 @@ def _fwd_kernel_stage1(
         k_int8 = tl.interleave(k_int8_low, k_int8_high)
 
         # Load K scales and dequantize
-        offs_scales_k = (
-            k_loc[:, None] * stride_scales_buf_kbs
-            + cur_kv_head * stride_scales_buf_kh
-            + offs_d_s[None, :]
-        )
-        k_scales = tl.load(
-            K_Scales_Buffer + offs_scales_k, mask=offs_n_new[:, None] < cur_batch_end_index, other=1.0
-        )
-        k_zeros = tl.load(
-            K_Scales_Buffer + offs_scales_k + BLOCK_DMODEL * 2 // quant_group_size, mask=offs_n_new[:, None] < cur_batch_end_index, other=0.0
-        )
-        k_int8_reshape = k_int8.to(tl.float32).reshape(k_int8.shape[0], k_int8.shape[1] // quant_group_size, quant_group_size)
-        k_tmp = (k_int8_reshape - k_zeros.to(tl.float32).reshape(k_zeros.shape[0], k_zeros.shape[1], 1)).to(scales_dtype) * k_scales.reshape(k_scales.shape[0], k_scales.shape[1], 1)  # Dequantize K
+        offs_scales_k = (k_loc[:, None] * stride_scales_buf_kbs + cur_kv_head * stride_scales_buf_kh +
+                         offs_d_s[None, :])
+        k_scales = tl.load(K_Scales_Buffer + offs_scales_k, mask=offs_n_new[:, None] < cur_batch_end_index, other=1.0)
+        k_zeros = tl.load(K_Scales_Buffer + offs_scales_k + BLOCK_DMODEL * 2 // quant_group_size,
+                          mask=offs_n_new[:, None] < cur_batch_end_index, other=0.0)
+        k_int8_reshape = k_int8.to(tl.float32).reshape(k_int8.shape[0], k_int8.shape[1] // quant_group_size,
+                                                       quant_group_size)
+        k_tmp = (k_int8_reshape - k_zeros.to(tl.float32).reshape(k_zeros.shape[0], k_zeros.shape[1], 1)
+                 ).to(scales_dtype) * k_scales.reshape(k_scales.shape[0], k_scales.shape[1], 1)  # Dequantize K
         k_gama = k_tmp.reshape(k_tmp.shape[0], k_tmp.shape[1] * k_tmp.shape[2]).to(reduce_dtype)
         k = k_gama * gamas
 
@@ -139,12 +132,14 @@ def _fwd_kernel_stage1(
         tl.store(Att_Out + off_o, att_value, mask=offs_n_new < cur_batch_end_index)
 
 
-@triton.jit(do_not_specialize=["Req_to_tokens", "B_req_idx", "B_Start_Loc", "B_Seqlen", "stride_logic_h", "stride_req_to_token_b"])
+@triton.jit(do_not_specialize=[
+    "Req_to_tokens", "B_req_idx", "B_Start_Loc", "B_Seqlen", "stride_logic_h", "stride_req_to_token_b"
+])
 def _fwd_kernel_stage2(
     logits,
     V_Buffer,
     V_Scales_Buffer,  # New argument for V scales
-    quant_group_size: tl.constexpr, # quant_group_size
+    quant_group_size: tl.constexpr,  # quant_group_size
     Out,
     Req_to_tokens,
     B_req_idx,
@@ -154,7 +149,7 @@ def _fwd_kernel_stage2(
     stride_buf_vbs,
     stride_buf_vh,
     stride_scales_buf_vbs,  # New stride for V scales bs
-    stride_scales_buf_vh,   # New stride for V scales head
+    stride_scales_buf_vh,  # New stride for V scales head
     stride_obs,
     stride_oh,
     stride_req_to_token_b,
@@ -188,17 +183,13 @@ def _fwd_kernel_stage2(
     for start_n in range(0, cur_batch_seq_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         v_index = tl.load(
-            Req_to_tokens
-            + cur_batch_req_idx * stride_req_to_token_b
-            + (start_n + offs_n),
+            Req_to_tokens + cur_batch_req_idx * stride_req_to_token_b + (start_n + offs_n),
             mask=(start_n + offs_n) < cur_batch_seq_len,
             other=0,
         )
 
         qk = tl.load(
-            logits
-            + cur_head * stride_logic_h
-            + (cur_batch_start_loc + start_n + offs_n),
+            logits + cur_head * stride_logic_h + (cur_batch_start_loc + start_n + offs_n),
             mask=start_n + offs_n < cur_batch_seq_len,
             other=float("-inf"),
         )
@@ -207,9 +198,7 @@ def _fwd_kernel_stage2(
         old_scale = tl.exp(e_max - n_e_max)
         p = tl.exp(qk - n_e_max)
         e_sum = e_sum * old_scale + tl.sum(p, 0)
-        v_int8_tmp = tl.load(
-            v_ptrs + v_index[:, None] * stride_buf_vbs, mask=(offs_d[None, :] < Lv)
-        )
+        v_int8_tmp = tl.load(v_ptrs + v_index[:, None] * stride_buf_vbs, mask=(offs_d[None, :] < Lv))
 
         # split int8 into two int4 values
         v_int8_low = (v_int8_tmp & 0xF).to(tl.int8)
@@ -217,20 +206,16 @@ def _fwd_kernel_stage2(
         v_int8 = tl.interleave(v_int8_low, v_int8_high)
 
         # Load V scales and dequantize
-        offs_scales_v = (
-            v_index[:, None] * stride_scales_buf_vbs
-            + cur_kv_head * stride_scales_buf_vh
-            + offs_d_s[None, :]
-        )
+        offs_scales_v = (v_index[:, None] * stride_scales_buf_vbs + cur_kv_head * stride_scales_buf_vh +
+                         offs_d_s[None, :])
         mask_n = start_n + offs_n < cur_batch_seq_len
-        v_scales = tl.load(
-            V_Scales_Buffer + offs_scales_v, mask=mask_n[:, None], other=1.0
-        )
-        v_zeros = tl.load(
-            V_Scales_Buffer + offs_scales_v + BLOCK_DMODEL * 2 // quant_group_size, mask=mask_n[:, None], other=0.0
-        )
-        v_int8_reshape = v_int8.to(tl.float32).reshape(v_int8.shape[0], v_int8.shape[1] // quant_group_size, quant_group_size)
-        v_tmp = (v_int8_reshape - v_zeros.to(tl.float32).reshape(v_zeros.shape[0], v_zeros.shape[1], 1)).to(scales_dtype) * v_scales.reshape(v_scales.shape[0], v_scales.shape[1], 1)  # Dequantize V
+        v_scales = tl.load(V_Scales_Buffer + offs_scales_v, mask=mask_n[:, None], other=1.0)
+        v_zeros = tl.load(V_Scales_Buffer + offs_scales_v + BLOCK_DMODEL * 2 // quant_group_size, mask=mask_n[:, None],
+                          other=0.0)
+        v_int8_reshape = v_int8.to(tl.float32).reshape(v_int8.shape[0], v_int8.shape[1] // quant_group_size,
+                                                       quant_group_size)
+        v_tmp = (v_int8_reshape - v_zeros.to(tl.float32).reshape(v_zeros.shape[0], v_zeros.shape[1], 1)
+                 ).to(scales_dtype) * v_scales.reshape(v_scales.shape[0], v_scales.shape[1], 1)  # Dequantize V
         v = v_tmp.reshape(v_tmp.shape[0], v_tmp.shape[1] * v_tmp.shape[2])
 
         p = p.to(v.dtype)
@@ -357,12 +342,14 @@ def _decode_softmax_reducev_fwd(
     )
 
 
-@triton.jit(do_not_specialize=["Req_to_tokens", "B_req_idx", "B_Start_Loc", "B_Seqlen", "stride_req_to_tokens_b", "att_stride_h"])
+@triton.jit(do_not_specialize=[
+    "Req_to_tokens", "B_req_idx", "B_Start_Loc", "B_Seqlen", "stride_req_to_tokens_b", "att_stride_h"
+])
 def _fwd_grouped_kernel_stage1(
     Q,
     K_Buffer,
     K_Scales_Buffer,  # New argument for K scales
-    quant_group_size: tl.constexpr, # quant_group_size
+    quant_group_size: tl.constexpr,  # quant_group_size
     sm_scale,
     Req_to_tokens,
     B_req_idx,
@@ -375,7 +362,7 @@ def _fwd_grouped_kernel_stage1(
     stride_buf_kbs,
     stride_buf_kh,
     stride_scales_buf_kbs,  # New stride for K scales bs
-    stride_scales_buf_kh,   # New stride for K scales head
+    stride_scales_buf_kh,  # New stride for K scales head
     att_stride_h,
     kv_group_num: tl.constexpr,
     q_head_num: tl.constexpr,
@@ -414,20 +401,14 @@ def _fwd_grouped_kernel_stage1(
     block_mask = tl.where(block_stard_index < cur_batch_seq_len, 1, 0)
 
     for start_mark in range(0, block_mask, 1):
-        q = tl.load(
-            Q + offs_q + start_mark, mask=(mask_h[:, None]) & (offs_d_q[None, :] < Lk * 2)
-        ).to(reduce_dtype)
+        q = tl.load(Q + offs_q + start_mark, mask=(mask_h[:, None]) & (offs_d_q[None, :] < Lk * 2)).to(reduce_dtype)
         offs_n_new = cur_batch_start_index + offs_n
         k_loc = tl.load(
             Req_to_tokens + stride_req_to_tokens_b * cur_batch_req_idx + offs_n_new,
             mask=offs_n_new < cur_batch_end_index,
             other=0,
         )
-        offs_buf_k = (
-            k_loc[None, :] * stride_buf_kbs
-            + cur_kv_head * stride_buf_kh
-            + offs_d_kv[:, None]
-        )
+        offs_buf_k = (k_loc[None, :] * stride_buf_kbs + cur_kv_head * stride_buf_kh + offs_d_kv[:, None])
         k_int8_tmp = tl.load(
             K_Buffer + offs_buf_k,
             mask=(offs_n_new[None, :] < cur_batch_end_index) & (offs_d_kv[:, None] < Lk),
@@ -440,19 +421,15 @@ def _fwd_grouped_kernel_stage1(
         k_int8 = tl.trans(tl.interleave(k_int8_low, k_int8_high))
 
         # Load K scales and dequantize
-        offs_scales_k = (
-            k_loc[None, :] * stride_scales_buf_kbs
-            + cur_kv_head * stride_scales_buf_kh
-            + offs_d_s[:, None]
-        )
-        k_scales = tl.load(
-            K_Scales_Buffer + offs_scales_k, mask=offs_n_new[None, :] < cur_batch_end_index, other=1.0
-        )
-        k_zeros = tl.load(
-            K_Scales_Buffer + offs_scales_k + BLOCK_DMODEL * 2 // quant_group_size, mask=offs_n_new[None, :] < cur_batch_end_index, other=0.0
-        )
-        k_int8_reshape = k_int8.to(tl.float32).reshape(k_int8.shape[0] // quant_group_size, quant_group_size, k_int8.shape[1])
-        k_tmp = (k_int8_reshape - k_zeros.to(tl.float32).reshape(k_zeros.shape[0], 1, k_zeros.shape[1])).to(scales_dtype) * k_scales.reshape(k_scales.shape[0], 1, k_scales.shape[1])  # Dequantize K
+        offs_scales_k = (k_loc[None, :] * stride_scales_buf_kbs + cur_kv_head * stride_scales_buf_kh +
+                         offs_d_s[:, None])
+        k_scales = tl.load(K_Scales_Buffer + offs_scales_k, mask=offs_n_new[None, :] < cur_batch_end_index, other=1.0)
+        k_zeros = tl.load(K_Scales_Buffer + offs_scales_k + BLOCK_DMODEL * 2 // quant_group_size,
+                          mask=offs_n_new[None, :] < cur_batch_end_index, other=0.0)
+        k_int8_reshape = k_int8.to(tl.float32).reshape(k_int8.shape[0] // quant_group_size, quant_group_size,
+                                                       k_int8.shape[1])
+        k_tmp = (k_int8_reshape - k_zeros.to(tl.float32).reshape(k_zeros.shape[0], 1, k_zeros.shape[1])
+                 ).to(scales_dtype) * k_scales.reshape(k_scales.shape[0], 1, k_scales.shape[1])  # Dequantize K
         k = k_tmp.reshape(k_tmp.shape[0] * k_tmp.shape[1], k_tmp.shape[2]).to(reduce_dtype)
 
         qk = tl.dot(q, k)
@@ -461,9 +438,7 @@ def _fwd_grouped_kernel_stage1(
         if logit_cap > 0:
             qk = logit_cap * tanh(qk / logit_cap)
 
-        offs_o = cur_head[:, None] * att_stride_h + (
-            cur_batch_in_all_start_index + offs_n[None, :]
-        )
+        offs_o = cur_head[:, None] * att_stride_h + (cur_batch_in_all_start_index + offs_n[None, :])
 
         tl.store(
             Att_Out + offs_o,
@@ -472,12 +447,14 @@ def _fwd_grouped_kernel_stage1(
         )
 
 
-@triton.jit(do_not_specialize=["Req_to_tokens", "B_req_idx", "B_Start_Loc", "B_Seqlen", "stride_logic_h", "stride_req_to_token_b"])
+@triton.jit(do_not_specialize=[
+    "Req_to_tokens", "B_req_idx", "B_Start_Loc", "B_Seqlen", "stride_logic_h", "stride_req_to_token_b"
+])
 def _fwd_grouped_kernel_stage2(
     logits,
     V_Buffer,
     V_Scales_Buffer,  # New argument for K scales
-    quant_group_size: tl.constexpr, # quant_group_size
+    quant_group_size: tl.constexpr,  # quant_group_size
     Out,
     Req_to_tokens,
     B_req_idx,
@@ -487,7 +464,7 @@ def _fwd_grouped_kernel_stage2(
     stride_buf_vbs,
     stride_buf_vh,
     stride_scales_buf_vbs,  # New stride for V scales bs
-    stride_scales_buf_vh,   # New stride for V scales head
+    stride_scales_buf_vh,  # New stride for V scales head
     stride_obs,
     stride_oh,
     stride_req_to_token_b,
@@ -525,16 +502,12 @@ def _fwd_grouped_kernel_stage2(
     for start_n in range(0, cur_batch_seq_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         v_index = tl.load(
-            Req_to_tokens
-            + cur_batch_req_idx * stride_req_to_token_b
-            + (start_n + offs_n),
+            Req_to_tokens + cur_batch_req_idx * stride_req_to_token_b + (start_n + offs_n),
             mask=(start_n + offs_n) < cur_batch_seq_len,
             other=0,
         )
 
-        offs_qk = cur_head[:, None] * stride_logic_h + (
-            cur_batch_start_loc + start_n + offs_n[None, :]
-        )
+        offs_qk = cur_head[:, None] * stride_logic_h + (cur_batch_start_loc + start_n + offs_n[None, :])
 
         qk = tl.load(
             logits + offs_qk,
@@ -546,9 +519,7 @@ def _fwd_grouped_kernel_stage2(
         old_scale = tl.exp(e_max - n_e_max)
         p = tl.exp(qk - n_e_max[:, None])
         e_sum = e_sum * old_scale + tl.sum(p, 1)
-        v_int8_tmp = tl.load(
-            v_ptrs + v_index[:, None] * stride_buf_vbs, mask=(offs_d[None, :] < Lv)
-        )
+        v_int8_tmp = tl.load(v_ptrs + v_index[:, None] * stride_buf_vbs, mask=(offs_d[None, :] < Lv))
 
         # split int8 into two int4 values
         v_int8_low = (v_int8_tmp & 0xF).to(tl.int8)
@@ -556,22 +527,18 @@ def _fwd_grouped_kernel_stage2(
         v_int8 = tl.interleave(v_int8_low, v_int8_high)
 
         # Load V scales and dequantize
-        offs_scales_v = (
-            v_index[:, None] * stride_scales_buf_vbs
-            + cur_kv_head * stride_scales_buf_vh
-            + offs_d_s[None, :]
-        )
+        offs_scales_v = (v_index[:, None] * stride_scales_buf_vbs + cur_kv_head * stride_scales_buf_vh +
+                         offs_d_s[None, :])
         mask_n = start_n + offs_n < cur_batch_seq_len
-        v_scales = tl.load(
-            V_Scales_Buffer + offs_scales_v, mask=mask_n[:, None], other=1.0
-        )
-        v_zeros = tl.load(
-            V_Scales_Buffer + offs_scales_v + BLOCK_DMODEL * 2 // quant_group_size, mask=mask_n[:, None], other=0.0
-        )
-        v_int8_reshape = v_int8.to(tl.float32).reshape(v_int8.shape[0], v_int8.shape[1] // quant_group_size, quant_group_size)
-        v_tmp = (v_int8_reshape - v_zeros.to(tl.float32).reshape(v_zeros.shape[0], v_zeros.shape[1], 1)).to(scales_dtype) * v_scales.reshape(v_scales.shape[0], v_scales.shape[1], 1)  # Dequantize V
+        v_scales = tl.load(V_Scales_Buffer + offs_scales_v, mask=mask_n[:, None], other=1.0)
+        v_zeros = tl.load(V_Scales_Buffer + offs_scales_v + BLOCK_DMODEL * 2 // quant_group_size, mask=mask_n[:, None],
+                          other=0.0)
+        v_int8_reshape = v_int8.to(tl.float32).reshape(v_int8.shape[0], v_int8.shape[1] // quant_group_size,
+                                                       quant_group_size)
+        v_tmp = (v_int8_reshape - v_zeros.to(tl.float32).reshape(v_zeros.shape[0], v_zeros.shape[1], 1)
+                 ).to(scales_dtype) * v_scales.reshape(v_scales.shape[0], v_scales.shape[1], 1)  # Dequantize V
         v = v_tmp.reshape(v_tmp.shape[0], v_tmp.shape[1] * v_tmp.shape[2])
-        
+
         p = p.to(v.dtype)
         acc = acc * old_scale[:, None] + tl.dot(p, v)
         e_max = n_e_max
@@ -661,7 +628,7 @@ def _decode_grouped_softmax_reducev_fwd(
     quant_group_size,
     stage2_best_config,
 ):
-   
+
     batch, head_num = b_seq_len.shape[0], logits.shape[0]
     kv_group_num = logits.shape[0] // v_buffer.shape[1]
 
@@ -788,7 +755,6 @@ def decode_attention_fwd_int4kv(
         assert False
 
 
-
 @triton.jit
 def _bwd_kernel_destindex_dequantize_int4_kv(
     Quantized,
@@ -834,15 +800,18 @@ def _bwd_kernel_destindex_dequantize_int4_kv(
 
     # 加载反量化比例因子（scale）
     scale = tl.load(Scale + dest_index * stride_s_bs + cur_head * stride_s_h + offs_g, mask=offs_g < group_size)
-    zero = tl.load(Scale + dest_index * stride_s_bs + cur_head * stride_s_h + offs_g + BLOCK_GROUP_NUM, mask=offs_g < group_size)
+    zero = tl.load(Scale + dest_index * stride_s_bs + cur_head * stride_s_h + offs_g + BLOCK_GROUP_NUM, mask=offs_g
+                   < group_size)
 
     # 反量化
     dequant_data_0 = (src_data_0.to(tl.float32) - zero.to(tl.float32)[:, None]).to(scales_dtype) * scale[:, None]
     dequant_data_1 = (src_data_1.to(tl.float32) - zero.to(tl.float32)[:, None]).to(scales_dtype) * scale[:, None]
 
     # 存储反量化的 float 数据
-    o_ptrs_0 = Out + dest_index * stride_o_bs + cur_head * stride_o_h + offs_g[:, None] * stride_o_g + offs_d[None, :] * 2
-    o_ptrs_1 = Out + dest_index * stride_o_bs + cur_head * stride_o_h + offs_g[:, None] * stride_o_g + offs_d[None, :] * 2 + 1
+    o_ptrs_0 = Out + dest_index * stride_o_bs + cur_head * stride_o_h + offs_g[:,
+                                                                               None] * stride_o_g + offs_d[None, :] * 2
+    o_ptrs_1 = Out + dest_index * stride_o_bs + cur_head * stride_o_h + offs_g[:, None] * stride_o_g + offs_d[
+        None, :] * 2 + 1
 
     tl.store(o_ptrs_0, dequant_data_0, mask=offs_g[:, None] < group_size)
     tl.store(o_ptrs_1, dequant_data_1, mask=offs_g[:, None] < group_size)
@@ -863,9 +832,8 @@ def destindex_dequantize_int4kv(Quantized, Scale, Out, quant_group_dim):
 
     Quantized = Quantized.view((Quantized.shape[0], Quantized.shape[1], group_size, group_dim // 2))
     Scale = Scale.view((Scale.shape[0], Scale.shape[1], group_size * 2))
-    Out = Out.view(
-        Out.shape[0], Out.shape[1], group_size, group_dim
-    )  # Out 是 float16 类型，解压缩时需要两个 int4 恢复成 float16，所以 group_dim
+    Out = Out.view(Out.shape[0], Out.shape[1], group_size,
+                   group_dim)  # Out 是 float16 类型，解压缩时需要两个 int4 恢复成 float16，所以 group_dim
 
     _bwd_kernel_destindex_dequantize_int4_kv[grid](
         Quantized,
@@ -889,6 +857,7 @@ def destindex_dequantize_int4kv(Quantized, Scale, Out, quant_group_dim):
         num_stages=1,
     )
     return
+
 
 @triton.jit
 def _fwd_kernel_destindex_copy_quantize_int4_kv_init(
@@ -932,7 +901,7 @@ def _fwd_kernel_destindex_copy_quantize_int4_kv_init(
     ).to(tl.float32)
 
     # 计算量化因子并量化数据
-    min_data = tl.minimum(tl.min(src_data_0, axis=1), tl.min(src_data_1, axis=1))  
+    min_data = tl.minimum(tl.min(src_data_0, axis=1), tl.min(src_data_1, axis=1))
     max_data = tl.maximum(tl.max(src_data_0, axis=1), tl.max(src_data_1, axis=1))
 
     scale = (max_data - min_data) / 15.0
@@ -975,9 +944,8 @@ def destindex_copy_quantize_int4kv_init(K, Out, Out_scale, quant_group_dim):
     group_dim = quant_group_dim
 
     K = K.view((K.shape[0], K.shape[1], group_size, group_dim))
-    Out = Out.view(
-        Out.shape[0], Out.shape[1], group_size, group_dim // 2
-    )  # OUt 是 int8 类型， 两个int4组一个int8，所以 group_dim // 2
+    Out = Out.view(Out.shape[0], Out.shape[1], group_size,
+                   group_dim // 2)  # OUt 是 int8 类型， 两个int4组一个int8，所以 group_dim // 2
 
     _fwd_kernel_destindex_copy_quantize_int4_kv_init[grid](
         K,
@@ -1001,7 +969,6 @@ def destindex_copy_quantize_int4kv_init(K, Out, Out_scale, quant_group_dim):
         num_stages=1,
     )
     return
-
 
 
 @triton.jit
@@ -1039,7 +1006,6 @@ def _fwd_kernel_gama_int4kv_init(
     o_ptrs = K_G + offs_k
     tl.store(og_ptrs, gama_data, offs_d[:, None] < head_dim)
     tl.store(o_ptrs, out_data, offs_d[:, None] < head_dim)
-    
 
 
 @torch.no_grad()
@@ -1048,7 +1014,7 @@ def gama_int4kv_init(K, Gama, K_G, alpha=0.5):
     head_num = K.shape[1]
     head_dim = K.shape[2]
 
-    grid = (head_num,)
+    grid = (head_num, )
     num_warps = 4
 
     _fwd_kernel_gama_int4kv_init[grid](
@@ -1106,7 +1072,6 @@ def _fwd_kernel_degama_int4kv_init(
 
     o_ptrs = K + offs_k
     tl.store(o_ptrs, out_data, offs_d[:, None] < head_dim)
-    
 
 
 @torch.no_grad()
@@ -1115,7 +1080,7 @@ def degama_int4kv_init(K_G, Gama, K, alpha=0.5):
     head_num = K.shape[1]
     head_dim = K.shape[2]
 
-    grid = (head_num,)
+    grid = (head_num, )
     num_warps = 4
 
     _fwd_kernel_degama_int4kv_init[grid](

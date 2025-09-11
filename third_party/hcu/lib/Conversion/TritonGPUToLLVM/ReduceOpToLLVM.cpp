@@ -184,13 +184,15 @@ private:
       SmallVector<Value> shfl(acc.size());
       unsigned shuffleIdx = N;
       auto srcTy = op.getInputTypes()[0];
-      auto inmfma = dyn_cast<HCUMfmaEncodingAttr>(cast<RankedTensorType>(srcTy).getEncoding());
+      auto inmfma = dyn_cast<HCUMfmaEncodingAttr>(
+          cast<RankedTensorType>(srcTy).getEncoding());
       if (inmfma) {
         const int warpSize = 64;
         shuffleIdx = warpSize / N / 2;
       }
       for (unsigned i = 0; i < acc.size(); ++i) {
-        shfl[i] = targetInfo.shuffleXor(rewriter, loc, acc[i], shuffleIdx * interleave);
+        shfl[i] = targetInfo.shuffleXor(rewriter, loc, acc[i],
+                                        shuffleIdx * interleave);
       }
       accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
     }

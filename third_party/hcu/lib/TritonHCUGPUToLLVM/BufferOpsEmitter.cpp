@@ -1,3 +1,4 @@
+#include "BufferOpsEmitter.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
@@ -9,7 +10,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "BufferOpsEmitter.h"
 #include "llvm/Support/Casting.h"
 
 using mlir::triton::gpu::appendOrGetExternFuncOp;
@@ -79,7 +79,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               Value pred, Value falseVal) {
   SmallVector<Value, 6> args;
   fillCommonArgs(type, rsrcDesc, offset, pred, args);
-  Type bufferType = getBufferOpType(type,false);
+  Type bufferType = getBufferOpType(type, false);
   Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
       loc, bufferType, args, ArrayRef<NamedAttribute>());
   data = bitcast(data, type);
@@ -87,7 +87,6 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
     data = select(pred, data, falseVal);
   return data;
 }
-
 
 // Utility function to traverse a struct, get to the GEP contained
 // in the struct at position `pos` and extract its base pointer and offset
@@ -128,32 +127,32 @@ mlir::FailureOr<std::pair<Value, Value>> getBaseAndOffset(Value ptr,
 }
 
 void BufferEmitter::emitAtomic(RewriterBase &rewriter, Location loc,
-             triton::HCU::TargetInfo targetInfo, Value ptr, Value val,
-             Value pred,  bool useBufferOps) {
+                               triton::HCU::TargetInfo targetInfo, Value ptr,
+                               Value val, Value pred, bool useBufferOps) {
   // Use a predicated buffer store intrinsic if we can. This should be optimal,
   // since we don't have to emit any branch, ever.
-    auto maybeBaseAndOffset = getBaseAndOffset(ptr);
-    if (!failed(maybeBaseAndOffset)) {
-      Type elemTy = val.getType();
-      int64_t vecSize = getNumElements(elemTy);
-      Type vecType = castToVectorType(elemTy);
-      Value basePtr = maybeBaseAndOffset->first;
-      Value offset = maybeBaseAndOffset->second;
-      val = bitcast(val, vecType);
-      Type bufferType = getBufferOpType(vecType,true);
-      SmallVector<Value, 6> args{val};
-      Value rsrcDesc = createResourceDescriptor(basePtr);
-      fillCommonArgs(vecType, rsrcDesc, offset, pred, args);
-      rewriter.create<ROCDL::RawPtrBufferAtomicFaddOp>(loc, TypeRange{}, args,
-                                                 ArrayRef<NamedAttribute>());
-      return;
+  auto maybeBaseAndOffset = getBaseAndOffset(ptr);
+  if (!failed(maybeBaseAndOffset)) {
+    Type elemTy = val.getType();
+    int64_t vecSize = getNumElements(elemTy);
+    Type vecType = castToVectorType(elemTy);
+    Value basePtr = maybeBaseAndOffset->first;
+    Value offset = maybeBaseAndOffset->second;
+    val = bitcast(val, vecType);
+    Type bufferType = getBufferOpType(vecType, true);
+    SmallVector<Value, 6> args{val};
+    Value rsrcDesc = createResourceDescriptor(basePtr);
+    fillCommonArgs(vecType, rsrcDesc, offset, pred, args);
+    rewriter.create<ROCDL::RawPtrBufferAtomicFaddOp>(
+        loc, TypeRange{}, args, ArrayRef<NamedAttribute>());
+    return;
   }
 }
 
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
                               Value pred) {
   VectorType vecTy = cast<VectorType>(data.getType());
-  Type bufferType = getBufferOpType(vecTy,false);
+  Type bufferType = getBufferOpType(vecTy, false);
   if (vecTy != bufferType)
     data = bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
@@ -235,8 +234,5 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   args.push_back(sgprOffset);
   args.push_back(cacheModifiers);
 }
-
-
-
 
 } // namespace mlir::LLVM::HCU

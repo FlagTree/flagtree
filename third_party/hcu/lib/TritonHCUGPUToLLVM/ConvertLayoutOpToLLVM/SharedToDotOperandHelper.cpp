@@ -116,12 +116,14 @@ bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
          blockSizeNonK % swizzlePatternSizeNonK == 0;
 }
 
-llvm::SmallVector<Value> computeOffsetsAType(
-    ConversionPatternRewriter &rewriter, Location loc,
-    computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
-    Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
-    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-    SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim, bool interleave) {
+llvm::SmallVector<Value>
+computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
+                    computeTensorElemMappingInBlockT fn,
+                    const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
+                    Value laneId, int warpsPerBlock, int numOfElems,
+                    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
+                    SharedEncodingAttr srcLayout, unsigned nonKDim,
+                    unsigned kDim, bool interleave) {
   SmallVector<Value> strides = smemObj.getStrides();
   SmallVector<Value> offsets = smemObj.getOffsets();
   auto rank = offsets.size();
@@ -182,12 +184,14 @@ transposeSpatialDims(const Container &vec) {
   return res;
 }
 
-llvm::SmallVector<Value> computeOffsetsBType(
-    ConversionPatternRewriter &rewriter, Location loc,
-    computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
-    Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
-    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-    SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim, bool interleave) {
+llvm::SmallVector<Value>
+computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
+                    computeTensorElemMappingInBlockT fn,
+                    const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
+                    Value laneId, int warpsPerBlock, int numOfElems,
+                    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
+                    SharedEncodingAttr srcLayout, unsigned nonKDim,
+                    unsigned kDim, bool interleave) {
   // transpose reps and offsets, because operand B has layout equal to
   // transposed operand A layout
   // this unifies axis order, so non-K dim is 0, k dim is 1

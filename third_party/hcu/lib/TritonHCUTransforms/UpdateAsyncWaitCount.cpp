@@ -1,3 +1,4 @@
+// clang-format off
 #include <iterator>
 #include <utility>
 #include <limits>
@@ -17,20 +18,22 @@
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "third_party/hcu/lib/TritonHCUTransforms/Utility.h"
 #include "llvm/Support/Debug.h"
-
+// clang-format on
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
-int getNumberOfLoadInstructions(RankedTensorType srcTy,
-                                tt::MemDescType dstTy) {
+int getNumberOfLoadInstructions(RankedTensorType srcTy, tt::MemDescType dstTy) {
   auto shape = srcTy.getShape();
-//   LinearLayout srcLayout = tt::gpu::toLinearLayout(shape, srcTy.getEncoding());
-//   LinearLayout sharedLayout =
-//       tt::gpu::toLinearLayout(shape, dstTy.getEncoding());
-  std::optional<LinearLayout> srcLayout = tt::gpu::toLinearLayout(shape, srcTy.getEncoding());
-  std::optional<LinearLayout> sharedLayout = tt::gpu::toLinearLayout(shape, dstTy.getEncoding());
-  LinearLayout srcToSharedLayout = srcLayout.value().invertAndCompose(sharedLayout.value());
+  //   LinearLayout srcLayout = tt::gpu::toLinearLayout(shape,
+  //   srcTy.getEncoding()); LinearLayout sharedLayout =
+  //       tt::gpu::toLinearLayout(shape, dstTy.getEncoding());
+  std::optional<LinearLayout> srcLayout =
+      tt::gpu::toLinearLayout(shape, srcTy.getEncoding());
+  std::optional<LinearLayout> sharedLayout =
+      tt::gpu::toLinearLayout(shape, dstTy.getEncoding());
+  LinearLayout srcToSharedLayout =
+      srcLayout.value().invertAndCompose(sharedLayout.value());
 
   // On GFX9 we cannot split direct to lds loads into multiple ones because we
   // need coalesced writes. So we can divide the number of registers by the
@@ -69,51 +72,41 @@ int getNumberOfLoadInstructions(Operation *op) {
 }
 
 void updateWaitCount(ttg::AsyncWaitOp waitOp) {
-    int waitCnt = std::numeric_limits<int>::max();
-    for (auto token : waitOp.getOperands()) {
-        // Traverse def chain from waitOp to the producer of the token and count
-        // the minumum number of vmcnt instructions
-        auto tokenWaitCnt =
-            deduceMinCountOnDefChain(token, waitOp, [](Operation *op) {
-            return getNumberOfLoadInstructions(op);
-            });
-        waitCnt = std::min(waitCnt, tokenWaitCnt);
-    }
-    if (waitCnt == std::numeric_limits<int>::max() || waitOp.getNum() == waitCnt)
-        return;
-    waitOp.setNum(waitCnt);
+  int waitCnt = std::numeric_limits<int>::max();
+  for (auto token : waitOp.getOperands()) {
+    // Traverse def chain from waitOp to the producer of the token and count
+    // the minumum number of vmcnt instructions
+    auto tokenWaitCnt =
+        deduceMinCountOnDefChain(token, waitOp, [](Operation *op) {
+          return getNumberOfLoadInstructions(op);
+        });
+    waitCnt = std::min(waitCnt, tokenWaitCnt);
+  }
+  if (waitCnt == std::numeric_limits<int>::max() || waitOp.getNum() == waitCnt)
+    return;
+  waitOp.setNum(waitCnt);
 }
-
-
 
 #define GEN_PASS_CLASSES
 #include "TritonHCUTransforms/Passes.h"
 
 struct TritonHCUUpdateAsyncWaitCountPass
     : public TritonHCUUpdateAsyncWaitCountBase<
-        TritonHCUUpdateAsyncWaitCountPass> {
-    
-    TritonHCUUpdateAsyncWaitCountPass() {}
+          TritonHCUUpdateAsyncWaitCountPass> {
 
-    void runOnOperation() override {
-        ModuleOp m = getOperation();
-        SmallVector<ttg::AsyncWaitOp> waitOps;
-        getOperation()->walk(
-                [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
+  TritonHCUUpdateAsyncWaitCountPass() {}
 
-        for (auto waitOp : waitOps)
-            updateWaitCount(waitOp);
-    }
+  void runOnOperation() override {
+    ModuleOp m = getOperation();
+    SmallVector<ttg::AsyncWaitOp> waitOps;
+    getOperation()->walk(
+        [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
+
+    for (auto waitOp : waitOps)
+      updateWaitCount(waitOp);
+  }
 };
 
 std::unique_ptr<Pass> mlir::createTritonHCUUpdateAsyncWaitCountPass() {
-    return std::make_unique<TritonHCUUpdateAsyncWaitCountPass>();
+  return std::make_unique<TritonHCUUpdateAsyncWaitCountPass>();
 }
-
-
-
-
-
-
-
-

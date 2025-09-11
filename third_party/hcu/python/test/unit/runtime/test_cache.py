@@ -423,6 +423,7 @@ def test_jit_warmup_cache(device) -> None:
     kernel_add.warmup(*args, grid=(1, ))
     assert len(kernel_add.device_caches[device][0]) == 1
 
+
 def test_jit_debug(device) -> None:
 
     @triton.jit
@@ -438,6 +439,7 @@ def test_jit_debug(device) -> None:
     assert len(kernel.device_caches[device][0]) == 2
     bins = list(kernel.device_caches[device][0].values())
     assert bins[0].asm['ttir'] != bins[1].asm['ttir']
+
 
 @triton.jit
 def add_fn(a, b, o, N: tl.constexpr):

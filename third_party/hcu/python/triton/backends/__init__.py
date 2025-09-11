@@ -34,7 +34,7 @@ class Backend:
 
 def _discover_backends():
     backends = dict()
-    name='hcu'
+    name = 'hcu'
     root = os.path.dirname(__file__)
     if os.path.isdir(os.path.join(root, name)):
         compiler = _load_module(name, os.path.join(root, name, 'compiler.py'))

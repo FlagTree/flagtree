@@ -160,13 +160,14 @@ os.environ["MLIR_ENABLE_DUMP"] = "1"
 # os.environ["LLVM_IR_ENABLE_DUMP"] = "1"
 # os.environ["HCUGCN_ENABLE_DUMP"] = "1"
 
+
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
 def is_hip_mi200():
     target = triton.runtime.driver.active.get_current_target()
-    return target.backend == 'hip' # and target.arch == 'gfx90a'
+    return target.backend == 'hip'  # and target.arch == 'gfx90a'
 
 
 def get_cuda_autotune_config():
@@ -546,6 +547,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #loc53 = loc(callsite(#loc5 at #loc26))
 """
 
+
 def matmul(a, b, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
@@ -569,15 +571,19 @@ def matmul(a, b, activation=""):
     import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as ttgir:
         ttgir.write(matmul_kernel_ttgir)
-        ttgir.flush()        
+        ttgir.flush()
         matmul_ttgir_kernel = triton.compile(ttgir.name)
 
     META = {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 1, 'waves_per_eu': 0}
     matmul_ttgir_kernel = triton.compile(ttgir)
     grid = (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), 1, 1)
     matmul_ttgir_kernel[grid](
-        a, b, c,  #
-        M, N, K,  #
+        a,
+        b,
+        c,  #
+        M,
+        N,
+        K,  #
         a.stride(0),
         b.stride(0),
         c.stride(0),
@@ -598,7 +604,6 @@ triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output_with_fp16_inputs={triton_output}")
 print(f"torch_output_with_fp16_inputs={torch_output}")
-
 
 rtol = 1e-2 if is_hip_mi200() else 0
 if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):

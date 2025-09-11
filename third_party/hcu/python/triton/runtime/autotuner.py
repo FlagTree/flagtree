@@ -91,7 +91,7 @@ class Autotuner(KernelInterface):
         self.num_warmups = warmup
         self.num_reps = rep
         # import torch
-        self.use_cuda_graph = use_cuda_graph 
+        self.use_cuda_graph = use_cuda_graph
         # self.use_cuda_graph = use_cuda_graph and torch.cuda.is_available()
 
     def _bench(self, *args, config, **meta):
@@ -228,7 +228,8 @@ class Config:
                     function are args.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, num_ldmatrixes=0, enable_mmacfuse=0, maxnreg=None, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=2, num_ctas=1, num_ldmatrixes=0, enable_mmacfuse=0, maxnreg=None,
+                 pre_hook=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ldmatrixes = num_ldmatrixes

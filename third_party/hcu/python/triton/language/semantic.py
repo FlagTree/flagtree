@@ -70,8 +70,9 @@ def computation_type_impl(a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_i
             if div_or_mod and (tensor_ty in (tl.float16, tl.bfloat16)):
                 return tl.float32
             if hasattr(scalar_ty, "int_bitwidth") and hasattr(tensor_ty, "int_bitwidth"):
-                if (scalar_ty.int_bitwidth > tensor_ty.int_bitwidth) and (scalar_ty.int_signedness == tensor_ty.int_signedness):
-                    return  scalar_ty
+                if (scalar_ty.int_bitwidth > tensor_ty.int_bitwidth) and (scalar_ty.int_signedness
+                                                                          == tensor_ty.int_signedness):
+                    return scalar_ty
             return tensor_ty
 
     # 1) if one operand is double, the other is implicitly
@@ -1476,7 +1477,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
         and rhs.shape[-1].value >= min_dot_size[1] * 2, \
             f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1] * 2} and K >= {min_dot_size[2]}"
-     # for DS_READ_M* instruction
+    # for DS_READ_M* instruction
     enable_mmacfuse = builder.options.enable_mmacfuse
     if enable_mmacfuse == 1:
         # print(f"zhenggf, M: {lhs.shape[-2].value}, K: {lhs.shape[-1].value}, N: {rhs.shape[-1].value}")

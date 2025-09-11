@@ -46,7 +46,6 @@ int deduceMinCountInBlock(Block &block,
   return deduceMinCountBetweeOps(&block.front(), &block.back(), countFunc);
 }
 
-
 } // namespace deduceMin
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
@@ -64,13 +63,13 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // Break recursion if we arrive at the producer updating the path based on the
   // ops between producer and consumer
   if (Operation *defOp = defValue.getDefiningOp()) {
-    //使用forOp的结果,修改剩余buffer vmcnt数
+    // 使用forOp的结果,修改剩余buffer vmcnt数
     if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
       auto valRes = dyn_cast<mlir::OpResult>(defValue);
       unsigned index = valRes.getResultNumber();
       Value incomingVal = forOp.getInitArgs()[index];
       pathSum += deduceMinCountOnDefChain(incomingVal, forOp, countFunc,
-                                                 pathSum, foundMin);
+                                          pathSum, foundMin);
     } else {
       pathSum +=
           deduceMinCountBetweeOps(defOp->getNextNode(), consumerOp, countFunc);

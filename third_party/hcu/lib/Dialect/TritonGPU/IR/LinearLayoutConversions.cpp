@@ -473,11 +473,13 @@ HCUMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   assert(((shape[mIndex] == 1 || shape[mIndex] >= getMDim()) &&
           (shape[nIndex] == 1 || shape[nIndex] >= getNDim())) &&
-         "Unsupported tensor shape for given mfma layout or suggest that N blocks in FA be greater than or equal to 32");
+         "Unsupported tensor shape for given mfma layout or suggest that N "
+         "blocks in FA be greater than or equal to 32");
 
   assert(((getMDim() == 32 && getNDim() == 32) ||
-          (getMDim() == 16 && getNDim() == 16) || (getMDim() == 16 && getNDim() == 32)
-          || (getMDim() == 16 && getNDim() == 64)) &&
+          (getMDim() == 16 && getNDim() == 16) ||
+          (getMDim() == 16 && getNDim() == 32) ||
+          (getMDim() == 16 && getNDim() == 64)) &&
          "Unsupported mfma type");
 
   MLIRContext *ctx = getContext();
@@ -486,37 +488,40 @@ HCUMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
 
-
   // We use the order from fastest varying to slowest varying. So each base
   // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
   SmallVector<unsigned> order = triton::gpu::getOrder(*this);
   auto tileLayout = LinearLayout::empty();
 
   if (getMDim() == 16 && getNDim() == 64) {
-    // For ldmatrix(a&&b)+mfma with 32x32 output, each of the 64 threads holds 16 elements.
+    // For ldmatrix(a&&b)+mfma with 32x32 output, each of the 64 threads holds
+    // 16 elements.
     //
     // For the register (i.e., element) dimension, these 8 elements are along
-    // the matrix C's N dimension, the remaining 8 elements are located 16 rows apart in the m direction.
+    // the matrix C's N dimension, the remaining 8 elements are located 16 rows
+    // apart in the m direction.
     //
     // For the lane (i.e., thread) dimension, these threads are along the
     // matrix C's N dimension, with 16 consecutive threads covering a whole
     // row and the next 16 threads start after a gap spanning 4 rows.
-      tileLayout = LinearLayout(
-         {{kRegister, {{16, 0}, {32, 0}, {1, 0}, /*gap*/ {2, 0}}},
-         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0} }}},
+    tileLayout = LinearLayout(
+        {{kRegister, {{16, 0}, {32, 0}, {1, 0}, /*gap*/ {2, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
   } else if (getMDim() == 32 && getNDim() == 32) {
-    // For ldmatrix(a&&b)+mfma with 32x32 output, each of the 64 threads holds 16 elements.
+    // For ldmatrix(a&&b)+mfma with 32x32 output, each of the 64 threads holds
+    // 16 elements.
     //
     // For the register (i.e., element) dimension, these 8 elements are along
-    // the matrix C's N dimension, the remaining 8 elements are located 16 rows apart in the m direction.
+    // the matrix C's N dimension, the remaining 8 elements are located 16 rows
+    // apart in the m direction.
     //
     // For the lane (i.e., thread) dimension, these threads are along the
     // matrix C's N dimension, with 16 consecutive threads covering a whole
     // row and the next 16 threads start after a gap spanning 4 rows.
-      tileLayout = LinearLayout(
-         {{kRegister, {{4, 0}, {8, 0}, {16, 0}, /*gap*/ {0, 16}}},
-         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {1, 0}, {2, 0} }}},
+    tileLayout = LinearLayout(
+        {{kRegister, {{4, 0}, {8, 0}, {16, 0}, /*gap*/ {0, 16}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {1, 0}, {2, 0}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
   } else if (getMDim() == 16 && getNDim() == 32) {
     // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
@@ -527,13 +532,13 @@ HCUMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     // For the lane (i.e., thread) dimension, these threads are along the
     // matrix C's N dimension, with 16 consecutive threads covering a whole
     // row and the next 16 threads start after a gap spanning 4 rows.
-      tileLayout = LinearLayout(
+    tileLayout = LinearLayout(
         // {{kRegister, {{0, 1}, {0, 2}}},
         //  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
         // {{kRegister, {{0, 4}, {0, 8}}},
         //  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8,0}, /*gap*/ {0,1}, {0,2} }}},
-         {{kRegister, {{4, 0}, {8, 0}, {16, 0}}},
-         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {1, 0}, {2, 0} }}},
+        {{kRegister, {{4, 0}, {8, 0}, {16, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {1, 0}, {2, 0}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
   } else if (getMDim() == 16 && getNDim() == 32) {
     // For mfma with 16x16 output, each of the 64 threads holds 4 elements.
@@ -544,13 +549,13 @@ HCUMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     // For the lane (i.e., thread) dimension, these threads are along the
     // matrix C's N dimension, with 16 consecutive threads covering a whole
     // row and the next 16 threads start after a gap spanning 4 rows.
-      tileLayout = LinearLayout(
+    tileLayout = LinearLayout(
         // {{kRegister, {{0, 1}, {0, 2}}},
         //  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
         // {{kRegister, {{0, 4}, {0, 8}}},
         //  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8,0}, /*gap*/ {0,1}, {0,2} }}},
-         {{kRegister, {{4, 0}, {8, 0}, {16, 0}}},
-         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {1, 0}, {2, 0} }}},
+        {{kRegister, {{4, 0}, {8, 0}, {16, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {1, 0}, {2, 0}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
   } else if (getMDim() == 32) {
     // For mfma with 32x32 output, each of the 64 threads holds 16 elements.
@@ -576,13 +581,13 @@ HCUMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     // For the lane (i.e., thread) dimension, these threads are along the
     // matrix C's N dimension, with 16 consecutive threads covering a whole
     // row and the next 16 threads start after a gap spanning 4 rows.
-      tileLayout = LinearLayout(
+    tileLayout = LinearLayout(
         // {{kRegister, {{0, 1}, {0, 2}}},
         //  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 4}, {0, 8}}}},
         // {{kRegister, {{0, 4}, {0, 8}}},
         //  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8,0}, /*gap*/ {0,1}, {0,2} }}},
-         {{kRegister, {{4, 0}, {8, 0}}},
-         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {1, 0}, {2, 0} }}},
+        {{kRegister, {{4, 0}, {8, 0}}},
+         {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {1, 0}, {2, 0}}}},
         {outDimNames[order[0]], outDimNames[order[1]]});
   }
   if (hasBatchDim) {
@@ -625,7 +630,6 @@ HCUWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
-
 
   // We use the order from fastest varying to slowest varying. So each base
   // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.

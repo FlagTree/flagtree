@@ -1,6 +1,6 @@
 #pragma once
-#include "hcu/include/triton/Dialect/TritonHCUGPU/IR/Dialect.h"
 #include "hcu/include/TritonHCUTransforms/Passes.h"
+#include "hcu/include/triton/Dialect/TritonHCUGPU/IR/Dialect.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -61,7 +61,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
                   mlir::arith::ArithDialect, mlir::scf::SCFDialect,
                   mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
 
-                  mlir::triton::hcugpu::,
+                  mlir::triton::hcugpu::TritonHCUGPUDialect,
                   mlir::ROCDL::ROCDLDialect>();
-
 }
