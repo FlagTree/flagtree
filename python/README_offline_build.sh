@@ -9,12 +9,35 @@ NC='\033[0m'
 echo -e " =================== Offline Build README ==================="
 
 # detect nvidia toolchain version requirement
-NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
+NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.json"
 if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
-    nv_toolchain_version=$(tr -d '\n' < "$NV_TOOLCHAIN_VERSION_FILE")
-    echo -e "Nvidia Toolchain Version Required: $nv_toolchain_version"
+    ptxas_blackwell_version=$(grep '"ptxas-blackwell"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"ptxas-blackwell": "([^"]+)".*/\1/')
+    ptxas_version=$(grep '"ptxas"' "$NV_TOOLCHAIN_VERSION_FILE" | grep -v "ptxas-blackwell" | sed -E 's/.*"ptxas": "([^"]+)".*/\1/')
+    cuobjdump_version=$(grep '"cuobjdump"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cuobjdump": "([^"]+)".*/\1/')
+    nvdisasm_version=$(grep '"nvdisasm"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"nvdisasm": "([^"]+)".*/\1/')
+    cudacrt_version=$(grep '"cudacrt"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudacrt": "([^"]+)".*/\1/')
+    cudart_version=$(grep '"cudart"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudart": "([^"]+)".*/\1/')
+    cupti_version=$(grep '"cupti"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cupti": "([^"]+)".*/\1/')
+    echo -e "Nvidia Toolchain Version Requirement:"
+    echo -e "   ptxas: $ptxas_version"
+    echo -e "   ptxas-blackwell: $ptxas_blackwell_version"
+    echo -e "   cuobjdump: $cuobjdump_version"
+    echo -e "   nvdisasm: $nvdisasm_version"
+    echo -e "   cudacrt: $cudacrt_version"
+    echo -e "   cudart: $cudart_version"
+    echo -e "   cupti: $cupti_version"
 else
     echo -e "${RED}Error: version file $NV_TOOLCHAIN_VERSION_FILE is not exist${NC}"
+    exit 1
+fi
+
+# detect json version requirement
+JSON_VERSION_FILE="../cmake/json-version.txt"
+if [ -f "$JSON_VERSION_FILE" ]; then
+    json_version=$(tr -d '\n' < "$JSON_VERSION_FILE")
+    echo -e "JSON Version Required: $json_version"
+else
+    echo -e "${RED}Error: version file $JSON_VERSION_FILE is not exist${NC}"
     exit 1
 fi
 
@@ -36,10 +59,10 @@ fi
 
 case "$arch" in
     x86_64)
-        arch="64"
+        arch="x86_64"
         ;;
     arm64|aarch64)
-        arch="aarch64"
+        arch="sbsa"
         ;;
     *)
         echo -e "${RED}Error: Unsupported system architecture '$arch'.${NC}"
@@ -50,6 +73,9 @@ case "$arch" in
 esac
 echo -e "Target System Arch for offline building: $arch"
 
+# Only support linux currently
+system="linux"
+
 echo -e ""
 echo -e "This is a guide for building FlagTree with default backend in an offline environment."
 echo -e ""
@@ -57,23 +83,27 @@ echo -e "${YELLOW}>>>>> Step-1${NC} Download the dependencies according to the f
 echo -e "You can choose three download methods:"
 echo -e ""
 echo -e "  ${BLUE}1. Manually download:${NC}"
-echo -e "      NVCC should be downloaded from: ${BLUE}https://anaconda.org/nvidia/cuda-nvcc/${nv_toolchain_version}/download/linux-${arch}/cuda-nvcc-${nv_toolchain_version}-0.tar.bz2${NC}"
-echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-nvcc-${nv_toolchain_version}-0.tar.bz2"
-echo -e "      CUOBJBDUMP should be downloaded from: ${BLUE}https://anaconda.org/nvidia/cuda-cuobjdump/${nv_toolchain_version}/download/linux-${arch}/cuda-cuobjdump-${nv_toolchain_version}-0.tar.bz2${NC}"
-echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-cuobjdump-${nv_toolchain_version}-0.tar.bz2"
-echo -e "      NVDISAM should be downloaded from: ${BLUE}https://anaconda.org/nvidia/cuda-nvdisasm/${nv_toolchain_version}/download/linux-${arch}/cuda-nvdisasm-${nv_toolchain_version}-0.tar.bz2${NC}"
-echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-nvdisasm-${nv_toolchain_version}-0.tar.bz2"
-echo -e "      CUDART should be downloaded from: ${BLUE}https://anaconda.org/nvidia/cuda-cudart-dev/${nv_toolchain_version}/download/linux-${arch}/cuda-cudart-dev-${nv_toolchain_version}-0.tar.bz2${NC}"
-echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-cudart-dev-${nv_toolchain_version}-0.tar.bz2"
-echo -e "      CUPTI should be downloaded from: ${BLUE}https://anaconda.org/nvidia/cuda-cupti/${nv_toolchain_version}/download/linux-${arch}/cuda-cupti-${nv_toolchain_version}-0.tar.bz2${NC}"
-echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-cupti-${nv_toolchain_version}-0.tar.bz2"
-echo -e "      JSON library should be downloaded from: ${BLUE}https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip${NC}"
+echo -e "      NVCC ptx should be downloaded from: ${BLUE}https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/${system}-${arch}/cuda_nvcc-${system}-${arch}-${ptxas_version}-archive.tar.xz${NC}"
+echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-nvcc-${ptxas_version}.tar.xz"
+echo -e "      NVCC ptx-blackwell should be downloaded from: ${BLUE}https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/${system}-${arch}/cuda_nvcc-${system}-${arch}-${ptxas_blackwell_version}-archive.tar.xz${NC}"
+echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-nvcc-${ptxas_blackwell_version}.tar.xz"
+echo -e "      NVCC cudacrt should be downloaded from: ${BLUE}https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/${system}-${arch}/cuda_nvcc-${system}-${arch}-${cudacrt_version}-archive.tar.xz${NC}"
+echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-nvcc-${cudacrt_version}.tar.xz"
+echo -e "      CUOBJBDUMP should be downloaded from: ${BLUE}https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/${system}-${arch}/cuda_cuobjdump-${system}-${arch}-${cuobjdump_version}-archive.tar.xz${NC}"
+echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-cuobjdump-${cuobjdump_version}.tar.xz"
+echo -e "      NVDISASM should be downloaded from: ${BLUE}https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/${system}-${arch}/cuda_nvdisasm-${system}-${arch}-${nvdisasm_version}-archive.tar.xz${NC}"
+echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-nvdisasm-${nvdisasm_version}.tar.xz"
+echo -e "      CUDART should be downloaded from: ${BLUE}https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/${system}-${arch}/cuda_cudart-${system}-${arch}-${cudart_version}-archive.tar.xz${NC}"
+echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-cudart-dev-${cudart_version}.tar.xz"
+echo -e "      CUPTI should be downloaded from: ${BLUE}https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/${system}-${arch}/cuda_cupti-${system}-${arch}-${cupti_version}-archive.tar.xz${NC}"
+echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/cuda-cupti-${cupti_version}.tar.xz"
+echo -e "      JSON library should be downloaded from: ${BLUE}https://github.com/nlohmann/json/releases/download/${json_version}/include.zip${NC}"
 echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/include.zip"
 echo -e "      GOOGLETEST should be downloaded from ${BLUE}https://github.com/google/googletest/archive/refs/tags/release-1.12.1.zip${NC}"
 echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/googletest-release-1.12.1.zip"
 echo -e "      (TRITON_SHARED is optional):"
-echo -e "      TRITON_SHARED should be downloaded from: ${BLUE}https://github.com/microsoft/triton-shared/archive/380b87122c88af131530903a702d5318ec59bb33.zip${NC}"
-echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
+echo -e "      TRITON_SHARED should be downloaded from: ${BLUE}https://github.com/microsoft/triton-shared/archive/5842469a16b261e45a2c67fbfc308057622b03ee.zip${NC}"
+echo -e "          and stored as: <YOUR_DOWNLOAD_DIR>/triton-shared-5842469a16b261e45a2c67fbfc308057622b03ee.zip"
 echo -e ""
 echo -e "  ${BLUE}2. Use the script to download.${NC} You can specify the directory the store the downloaded files into:"
 echo -e "          ${GREEN}$ sh scripts/offline_build_download.sh arch=<system arch> <YOUR_DOWNLOAD_DIR>${NC}"

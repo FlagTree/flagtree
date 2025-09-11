@@ -9,12 +9,35 @@ NC='\033[0m'
 echo -e " =================== Start Downloading Offline Build Files ==================="
 
 # detect nvidia toolchain version requirement
-NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
+NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.json"
 if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
-    nv_toolchain_version=$(tr -d '\n' < "$NV_TOOLCHAIN_VERSION_FILE")
-    echo -e "Nvidia Toolchain Version Required: $nv_toolchain_version"
+    ptxas_blackwell_version=$(grep '"ptxas-blackwell"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"ptxas-blackwell": "([^"]+)".*/\1/')
+    ptxas_version=$(grep '"ptxas"' "$NV_TOOLCHAIN_VERSION_FILE" | grep -v "ptxas-blackwell" | sed -E 's/.*"ptxas": "([^"]+)".*/\1/')
+    cuobjdump_version=$(grep '"cuobjdump"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cuobjdump": "([^"]+)".*/\1/')
+    nvdisasm_version=$(grep '"nvdisasm"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"nvdisasm": "([^"]+)".*/\1/')
+    cudacrt_version=$(grep '"cudacrt"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudacrt": "([^"]+)".*/\1/')
+    cudart_version=$(grep '"cudart"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudart": "([^"]+)".*/\1/')
+    cupti_version=$(grep '"cupti"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cupti": "([^"]+)".*/\1/')
+    echo -e "Nvidia Toolchain Version Requirement:"
+    echo -e "   ptxas: $ptxas_version"
+    echo -e "   ptxas-blackwell: $ptxas_blackwell_version"
+    echo -e "   cuobjdump: $cuobjdump_version"
+    echo -e "   nvdisasm: $nvdisasm_version"
+    echo -e "   cudacrt: $cudacrt_version"
+    echo -e "   cudart: $cudart_version"
+    echo -e "   cupti: $cupti_version"
 else
     echo -e "${RED}Error: version file $NV_TOOLCHAIN_VERSION_FILE is not exist${NC}"
+    exit 1
+fi
+
+# detect json version requirement
+JSON_VERSION_FILE="../cmake/json-version.txt"
+if [ -f "$JSON_VERSION_FILE" ]; then
+    json_version=$(tr -d '\n' < "$JSON_VERSION_FILE")
+    echo -e "JSON Version Required: $json_version"
+else
+    echo -e "${RED}Error: version file $JSON_VERSION_FILE is not exist${NC}"
     exit 1
 fi
 
@@ -36,10 +59,10 @@ fi
 
 case "$arch" in
     x86_64)
-        arch="64"
+        arch="x86_64"
         ;;
     arm64|aarch64)
-        arch="aarch64"
+        arch="sbsa"
         ;;
     *)
         echo -e "${RED}Error: Unsupported system architecture '$arch'.${NC}"
@@ -49,6 +72,9 @@ case "$arch" in
         ;;
 esac
 echo -e "Target System Arch for offline building: $arch"
+
+# Only support linux currently
+system="linux"
 
 check_download() {
     if [ $? -eq 0 ]; then
@@ -79,37 +105,49 @@ else
 fi
 echo -e ""
 
-nvcc_url=https://anaconda.org/nvidia/cuda-nvcc/${nv_toolchain_version}/download/linux-${arch}/cuda-nvcc-${nv_toolchain_version}-0.tar.bz2
-echo -e "Downloading NVCC from: ${BLUE}$nvcc_url${NC}"
-echo -e "wget $nvcc_url -O ${target_dir}/cuda-nvcc-${nv_toolchain_version}-0.tar.bz2"
-wget "$nvcc_url" -O ${target_dir}/cuda-nvcc-${nv_toolchain_version}-0.tar.bz2
+nvcc_ptxas_url=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/${system}-${arch}/cuda_nvcc-${system}-${arch}-${ptxas_version}-archive.tar.xz
+echo -e "Downloading NVCC ptxas from: ${BLUE}$nvcc_ptxas_url${NC}"
+echo -e "wget $nvcc_ptxas_url -O ${target_dir}/cuda-nvcc-${ptxas_version}.tar.xz"
+wget "$nvcc_ptxas_url" -O ${target_dir}/cuda-nvcc-${ptxas_version}.tar.xz
 check_download
 
-cuobjdump_url=https://anaconda.org/nvidia/cuda-cuobjdump/${nv_toolchain_version}/download/linux-${arch}/cuda-cuobjdump-${nv_toolchain_version}-0.tar.bz2
+nvcc_ptxas_blackwell_url=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/${system}-${arch}/cuda_nvcc-${system}-${arch}-${ptxas_blackwell_version}-archive.tar.xz
+echo -e "Downloading NVCC ptxas-blackwell from: ${BLUE}$nvcc_ptxas_blackwell_url${NC}"
+echo -e "wget $nvcc_ptxas_blackwell_url -O ${target_dir}/cuda-nvcc-${ptxas_blackwell_version}.tar.xz"
+wget "$nvcc_ptxas_blackwell_url" -O ${target_dir}/cuda-nvcc-${ptxas_blackwell_version}.tar.xz
+check_download
+
+nvcc_cudacrt_url=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/${system}-${arch}/cuda_nvcc-${system}-${arch}-${cudacrt_version}-archive.tar.xz
+echo -e "Downloading NVCC cudacrt from: ${BLUE}$nvcc_cudacrt_url${NC}"
+echo -e "wget $nvcc_cudacrt_url -O ${target_dir}/cuda-nvcc-${cudacrt_version}.tar.xz"
+wget "$nvcc_cudacrt_url" -O ${target_dir}/cuda-nvcc-${cudacrt_version}.tar.xz
+check_download
+
+cuobjdump_url=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/${system}-${arch}/cuda_cuobjdump-${system}-${arch}-${cuobjdump_version}-archive.tar.xz
 echo -e "Downloading CUOBJBDUMP from: ${BLUE}$cuobjdump_url${NC}"
-echo -e "wget $cuobjdump_url -O ${target_dir}/cuda-cuobjdump-${nv_toolchain_version}-0.tar.bz2"
-wget "$cuobjdump_url" -O ${target_dir}/cuda-cuobjdump-${nv_toolchain_version}-0.tar.bz2
+echo -e "wget $cuobjdump_url -O ${target_dir}/cuda-cuobjdump-${cuobjdump_version}.tar.xz"
+wget "$cuobjdump_url" -O ${target_dir}/cuda-cuobjdump-${cuobjdump_version}.tar.xz
 check_download
 
-nvdisam_url=https://anaconda.org/nvidia/cuda-nvdisasm/${nv_toolchain_version}/download/linux-${arch}/cuda-nvdisasm-${nv_toolchain_version}-0.tar.bz2
-echo -e "Downloading NVDISAM from: ${BLUE}$nvdisam_url${NC}"
-echo -e "wget $nvdisam_url -O ${target_dir}/cuda-nvdisasm-${nv_toolchain_version}-0.tar.bz2"
-wget "$nvdisam_url" -O ${target_dir}/cuda-nvdisasm-${nv_toolchain_version}-0.tar.bz2
+nvdisasm_url=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/${system}-${arch}/cuda_nvdisasm-${system}-${arch}-${nvdisasm_version}-archive.tar.xz
+echo -e "Downloading NVDISASM from: ${BLUE}$nvdisasm_url${NC}"
+echo -e "wget $nvdisasm_url -O ${target_dir}/cuda-nvdisasm-${nvdisasm_version}.tar.xz"
+wget "$nvdisasm_url" -O ${target_dir}/cuda-nvdisasm-${nvdisasm_version}.tar.xz
 check_download
 
-cudart_url=https://anaconda.org/nvidia/cuda-cudart-dev/${nv_toolchain_version}/download/linux-${arch}/cuda-cudart-dev-${nv_toolchain_version}-0.tar.bz2
+cudart_url=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/${system}-${arch}/cuda_cudart-${system}-${arch}-${cudart_version}-archive.tar.xz
 echo -e "Downloading CUDART from: ${BLUE}$cudart_url${NC}"
-echo -e "wget $cudart_url -O ${target_dir}/cuda-cudart-dev-${nv_toolchain_version}-0.tar.bz2"
-wget "$cudart_url" -O ${target_dir}/cuda-cudart-dev-${nv_toolchain_version}-0.tar.bz2
+echo -e "wget $cudart_url -O ${target_dir}/cuda-cudart-dev-${cudart_version}.tar.xz"
+wget "$cudart_url" -O ${target_dir}/cuda-cudart-dev-${cudart_version}.tar.xz
 check_download
 
-cupti_url=https://anaconda.org/nvidia/cuda-cupti/${nv_toolchain_version}/download/linux-${arch}/cuda-cupti-${nv_toolchain_version}-0.tar.bz2
+cupti_url=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/${system}-${arch}/cuda_cupti-${system}-${arch}-${cupti_version}-archive.tar.xz
 echo -e "Downloading CUPTI from: ${BLUE}$cupti_url${NC}"
-echo -e "wget $cupti_url -O ${target_dir}/cuda-cupti-${nv_toolchain_version}-0.tar.bz2"
-wget "$cupti_url" -O ${target_dir}/cuda-cupti-${nv_toolchain_version}-0.tar.bz2
+echo -e "wget $cupti_url -O ${target_dir}/cuda-cupti-${cupti_version}.tar.xz"
+wget "$cupti_url" -O ${target_dir}/cuda-cupti-${cupti_version}.tar.xz
 check_download
 
-json_url=https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip
+json_url=https://github.com/nlohmann/json/releases/download/${json_version}/include.zip
 echo -e "Downloading JSON library from: ${BLUE}$json_url${NC}"
 echo -e "wget $json_url -O ${target_dir}/include.zip"
 wget "$json_url" -O ${target_dir}/include.zip
@@ -121,10 +159,10 @@ echo -e "wget $googletest_url -O ${target_dir}/googletest-release-1.12.1.zip"
 wget "$googletest_url" -O ${target_dir}/googletest-release-1.12.1.zip
 check_download
 
-triton_shared_url=https://github.com/microsoft/triton-shared/archive/380b87122c88af131530903a702d5318ec59bb33.zip
+triton_shared_url=https://github.com/microsoft/triton-shared/archive/5842469a16b261e45a2c67fbfc308057622b03ee.zip
 echo -e "Downloading Triton_Shared from: ${BLUE}$triton_shared_url${NC}"
-echo -e "wget $triton_shared_url -O ${target_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
-wget "$triton_shared_url" -O ${target_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip
+echo -e "wget $triton_shared_url -O ${target_dir}/triton-shared-5842469a16b261e45a2c67fbfc308057622b03ee.zip"
+wget "$triton_shared_url" -O ${target_dir}/triton-shared-5842469a16b261e45a2c67fbfc308057622b03ee.zip
 check_download
 
 echo -e " =================== Done ==================="
