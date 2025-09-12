@@ -10,13 +10,33 @@ echo -e " =================== Start Unpacking Offline Build Dependencies =======
 echo -e ""
 
 # detect nvidia toolchain version requirement
-NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
+NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.json"
 if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
-    nv_toolchain_version=$(tr -d '\n' < "$NV_TOOLCHAIN_VERSION_FILE")
-    echo -e "Nvidia Toolchain Version Required: $nv_toolchain_version"
+    ptxas_version=$(grep '"ptxas"' "$NV_TOOLCHAIN_VERSION_FILE" | grep -v "ptxas-blackwell" | sed -E 's/.*"ptxas": "([^"]+)".*/\1/')
+    cuobjdump_version=$(grep '"cuobjdump"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cuobjdump": "([^"]+)".*/\1/')
+    nvdisasm_version=$(grep '"nvdisasm"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"nvdisasm": "([^"]+)".*/\1/')
+    cudacrt_version=$(grep '"cudacrt"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudacrt": "([^"]+)".*/\1/')
+    cudart_version=$(grep '"cudart"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudart": "([^"]+)".*/\1/')
+    cupti_version=$(grep '"cupti"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cupti": "([^"]+)".*/\1/')
+    echo -e "Nvidia Toolchain Version Requirement:"
+    echo -e "   ptxas: $ptxas_version"
+    echo -e "   cuobjdump: $cuobjdump_version"
+    echo -e "   nvdisasm: $nvdisasm_version"
+    echo -e "   cudacrt: $cudacrt_version"
+    echo -e "   cudart: $cudart_version"
+    echo -e "   cupti: $cupti_version"
 else
     echo -e "${RED}Error: version file $NV_TOOLCHAIN_VERSION_FILE is not exist${NC}"
     exit 1
+fi
+
+# detect json version requirement
+JSON_VERSION_FILE="../cmake/json-version.txt"
+if [ -f "$JSON_VERSION_FILE" ]; then
+    json_version=$(tr -d '\n' < "$JSON_VERSION_FILE")
+    echo -e "JSON Version Required: $json_version"
+else
+    echo -e "${RED}Error: version file $JSON_VERSION_FILE is not exist${NC}"
 fi
 
 # handle params
@@ -47,11 +67,12 @@ else
 fi
 echo -e ""
 
-nvcc_file="${output_dir}/cuda-nvcc-${nv_toolchain_version}-0.tar.bz2"
-cuobjdump_file="${output_dir}/cuda-cuobjdump-${nv_toolchain_version}-0.tar.bz2"
-nvdisam_file="${output_dir}/cuda-nvdisasm-${nv_toolchain_version}-0.tar.bz2"
-cudart_file="${output_dir}/cuda-cudart-dev-${nv_toolchain_version}-0.tar.bz2"
-cupti_file="${output_dir}/cuda-cupti-${nv_toolchain_version}-0.tar.bz2"
+ptxas_file=${output_dir}/cuda-ptxas-${ptxas_version}-0.tar.bz2
+cudacrt_file=${output_dir}/cuda-crt-${cudacrt_version}-0.tar.bz2
+cuobjdump_file="${output_dir}/cuda-cuobjdump-${cuobjdump_version}-0.tar.bz2"
+nvdisasm_file="${output_dir}/cuda-nvdisasm-${nvdisasm_version}-0.tar.bz2"
+cudart_file="${output_dir}/cuda-cudart-dev-${cudart_version}-0.tar.bz2"
+cupti_file="${output_dir}/cuda-cupti-${cupti_version}-0.tar.bz2"
 json_file="${output_dir}/include.zip"
 googletest_file="${output_dir}/googletest-release-1.12.1.zip"
 triton_shared_file="${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
@@ -72,8 +93,13 @@ mkdir "${output_dir}/nvidia"
 
 echo -e "Creating directory ${output_dir}/nvidia/ptxas ..."
 mkdir "${output_dir}/nvidia/ptxas"
-echo -e "Extracting $nvcc_file into ${output_dir}/nvidia/ptxas ..."
-tar -jxf $nvcc_file -C "${output_dir}/nvidia/ptxas"
+echo -e "Extracting $ptxas_file into ${output_dir}/nvidia/ptxas ..."
+tar -jxf $ptxas_file -C "${output_dir}/nvidia/ptxas"
+
+echo -e "Creating directory ${output_dir}/nvidia/cudacrt ..."
+mkdir "${output_dir}/nvidia/cudacrt"
+echo -e "Extracting $cudacrt_file into ${output_dir}/nvidia/cudacrt ..."
+tar -jxf $cudacrt_file -C "${output_dir}/nvidia/cudacrt"
 
 echo -e "Creating directory ${output_dir}/nvidia/cuobjdump ..."
 mkdir "${output_dir}/nvidia/cuobjdump"
@@ -82,13 +108,8 @@ tar -jxf $cuobjdump_file -C "${output_dir}/nvidia/cuobjdump"
 
 echo -e "Creating directory ${output_dir}/nvidia/nvdisasm ..."
 mkdir "${output_dir}/nvidia/nvdisasm"
-echo -e "Extracting $nvdisam_file into ${output_dir}/nvidia/nvdisasm ..."
-tar -jxf $nvdisam_file -C "${output_dir}/nvidia/nvdisasm"
-
-echo -e "Creating directory ${output_dir}/nvidia/cudacrt ..."
-mkdir "${output_dir}/nvidia/cudacrt"
-echo -e "Extracting $nvcc_file into ${output_dir}/nvidia/cudacrt ..."
-tar -jxf $nvcc_file -C "${output_dir}/nvidia/cudacrt"
+echo -e "Extracting $nvdisasm_file into ${output_dir}/nvidia/nvdisasm ..."
+tar -jxf $nvdisasm_file -C "${output_dir}/nvidia/nvdisasm"
 
 echo -e "Creating directory ${output_dir}/nvidia/cudart ..."
 mkdir "${output_dir}/nvidia/cudart"
@@ -117,12 +138,16 @@ else
 fi
 
 echo -e ""
-echo -e "Delete $nvcc_file"
-rm $nvcc_file
+echo -e "Delete $ptxas_file"
+rm $ptxas_file
+if [ -f "${cudacrt_file}" ]; then
+    echo -e "Delete $cudacrt_file"
+    rm $cudacrt_file
+fi
 echo -e "Delete $cuobjdump_file"
 rm $cuobjdump_file
-echo -e "Delete $nvdisam_file"
-rm $nvdisam_file
+echo -e "Delete $nvdisasm_file"
+rm $nvdisasm_file
 echo -e "Delete $cudart_file"
 rm $cudart_file
 echo -e "Delete $cupti_file"
