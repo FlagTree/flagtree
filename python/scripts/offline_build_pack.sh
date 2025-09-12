@@ -67,11 +67,11 @@ pybind11_file="pybind11-${pybind11_version}.tar.gz"
 googletest_file="googletest-release-1.12.1.zip"
 triton_shared_file="triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
-if [ ! -d "$input_dir" ]; then
-    echo -e "${RED}Error: offline build download directory $input_dir does not exist, run README_offline_build.sh for more information${NC}"
+if [ ! -d "$input_dir/$nvcc_file" ]; then
+    echo -e "${RED}Error: File $input_dir/$nvcc_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find ${nvcc_file}"
+echo -e "Find $input_dir/$nvcc_file"
 
 if [ ! -f "$input_dir/$cuobjdump_file" ]; then
     echo -e "${RED}Error: File $input_dir/$cuobjdump_file does not exist, run README_offline_build.sh for more information${NC}"
