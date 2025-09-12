@@ -155,7 +155,7 @@ cd ${YOUR_LLVM_DOWNLOAD_DIR}
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-10dc3a8e-ubuntu-x64.tar.gz
 tar zxvf llvm-10dc3a8e-ubuntu-x64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
-export LLVM_SYSPATH=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-10dc3a8e-ubuntu-x64
+export LLVM_SYSPATH=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-86b69c31-ubuntu-x64
 export LLVM_INCLUDE_DIRS=$LLVM_SYSPATH/include
 export LLVM_LIBRARY_DIR=$LLVM_SYSPATH/lib
 unset FLAGTREE_BACKEND
