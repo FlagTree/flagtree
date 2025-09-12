@@ -253,7 +253,7 @@ def get_thirdparty_packages(packages: list):
         version_file_path = os.path.join(package_dir, "version.txt")
         if p.syspath_var_name not in os.environ and\
            (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url) and\
-           not offline_build:
+           not is_offline_build():
             with contextlib.suppress(Exception):
                 shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
@@ -277,8 +277,6 @@ def get_thirdparty_packages(packages: list):
 
 
 def download_and_copy(name, src_path, dst_path, variable, version, url_func):
-    if is_offline_build():
-        return
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ or helper.utils.is_skip_cuda_toolkits():
         return
@@ -300,7 +298,7 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = download or curr_version != version
-    if download and not offline_build:
+    if download and not is_offline_build():
         print(f'downloading and extracting {url} ...')
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
         file.extractall(path=tmp_path)
