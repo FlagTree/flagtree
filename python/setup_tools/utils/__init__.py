@@ -29,8 +29,4 @@ def activate(backend, suffix=".py"):
     return module
 
 
-<<<<<<< HEAD
 __all__ = ["aipu", "default", "activate", "flagtree_submodules", "OfflineBuildManager", "tools"]
-=======
-__all__ = ["aipu", "default", "activate", "flagtree_submoduels", "download_module", "tools", "OfflineBuildManager"]
->>>>>>> 7093faa91 ([Build] Fix offline build BUGs for Triton-v3.3.x)
