@@ -24,8 +24,10 @@ class Module:
     commit_id: str = None
     dst_path: str = None
 
+
 def is_skip_cuda_toolkits():
     return flagtree_backend and (flagtree_backend not in use_cuda_toolkit)
+
 
 def dir_rollback(deep, base_path):
     while (deep):
@@ -116,6 +118,7 @@ def download_module(module, required=False):
     remove_triton_in_modules(module)
     return True
 
+
 def get_triton_cache_path():
     user_home = os.getenv("HOME") or os.getenv("USERPROFILE") or os.getenv("HOMEPATH") or None
     if not user_home:
@@ -165,12 +168,14 @@ class OfflineBuildManager:
 
         ptxas_cache_path = os.path.join("nvidia/nvcc",
                                         f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas']}-archive")
-        ptxas_blackwell_cache_path = os.path.join("nvidia/nvcc",
-                                                  f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas-blackwell']}-archive")
+        ptxas_blackwell_cache_path = os.path.join(
+            "nvidia/nvcc", f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas-blackwell']}-archive")
         cudacrt_cache_path = os.path.join("nvidia/nvcc",
                                           f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['cudacrt']}-archive")
-        triton_origin_toolkits = [ptxas_cache_path, ptxas_blackwell_cache_path, cudacrt_cache_path, "nvidia/nvdisasm",
-                                  "nvidia/cuobjdump", "nvidia/cudart", "nvidia/cupti", "json"]
+        triton_origin_toolkits = [
+            ptxas_cache_path, ptxas_blackwell_cache_path, cudacrt_cache_path, "nvidia/nvdisasm", "nvidia/cuobjdump",
+            "nvidia/cudart", "nvidia/cupti", "json"
+        ]
         for toolkit in triton_origin_toolkits:
             toolkit_cache_path = os.path.join(self.triton_cache_path, toolkit)
             if os.path.exists(toolkit_cache_path):
