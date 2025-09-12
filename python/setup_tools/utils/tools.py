@@ -6,6 +6,7 @@ from dataclasses import dataclass
 flagtree_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 flagtree_submoduel_dir = os.path.join(flagtree_root_dir, "third_party")
 flagtree_backend = os.environ.get("FLAGTREE_BACKEND")
+use_cuda_toolkit = ["aipu"]
 
 network_configs = {
     "MAX_RETRY_COUNT": 4,
@@ -19,6 +20,10 @@ class Module:
     url: str
     commit_id: str = None
     dst_path: str = None
+
+
+def is_skip_cuda_toolkits():
+    return flagtree_backend and (flagtree_backend not in use_cuda_toolkit)
 
 
 def dir_rollback(deep, base_path):
