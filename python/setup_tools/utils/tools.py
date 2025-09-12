@@ -31,6 +31,8 @@ class Module:
     commit_id: str = None
     dst_path: str = None
 
+def is_skip_cuda_toolkits():
+    return flagtree_backend and (flagtree_backend not in use_cuda_toolkit)
 
 def dir_rollback(deep, base_path):
     while (deep):
@@ -221,9 +223,12 @@ class OfflineBuildManager:
             # parse this json file to get the version of the nvidia toolchain
             NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
 
-        ptxas_cache_path = os.path.join("nvidia/nvcc", f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas']}-archive")
-        ptxas_blackwell_cache_path = os.path.join("nvidia/nvcc", f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas-blackwell']}-archive")
-        cudacrt_cache_path = os.path.join("nvidia/nvcc", f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['cudacrt']}-archive")
+        ptxas_cache_path = os.path.join("nvidia/nvcc",
+                                        f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas']}-archive")
+        ptxas_blackwell_cache_path = os.path.join("nvidia/nvcc",
+                                                  f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['ptxas-blackwell']}-archive")
+        cudacrt_cache_path = os.path.join("nvidia/nvcc",
+                                          f"cuda_nvcc-{system}-{arch}-{NVIDIA_TOOLCHAIN_VERSION['cudacrt']}-archive")
         triton_origin_toolkits = [ptxas_cache_path, ptxas_blackwell_cache_path, cudacrt_cache_path, "nvidia/nvdisasm",
                                   "nvidia/cuobjdump", "nvidia/cudart", "nvidia/cupti", "json"]
         for toolkit in triton_origin_toolkits:

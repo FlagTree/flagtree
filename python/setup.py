@@ -459,8 +459,7 @@ class CMakeBuild(build_ext):
         ]
         cmake_args += helper.get_backend_cmake_args(build_ext=self)
         if is_offline_build():
-            googletest_offline_path = os.path.join(offline_handler.offline_build_dir,
-                                                   "googletest-release-1.12.1")
+            googletest_offline_path = os.path.join(offline_handler.offline_build_dir, "googletest-release-1.12.1")
             print(f'[INFO] Offline Build: Using offline googletest from {googletest_offline_path}')
             cmake_args += ["-DGOOGLETEST_DIR=" + googletest_offline_path]
         if lit_dir is not None:
