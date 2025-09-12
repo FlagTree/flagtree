@@ -26,6 +26,8 @@ elseif(FLAGTREE_BACKEND STREQUAL "mthreads")
   set(CMAKE_C_COMPILER clang)
   set(CMAKE_CXX_COMPILER clang++)
   # set(ENV{FLAGTREE_PLUGIN} $ENV{FLAGTREE_BACKEND})
+elseif(FLAGTREE_BACKEND STREQUAL "hcu")
+  add_definitions(-D__HCU__)
 endif()
 set(FLAGTREE_PLUGIN "$ENV{FLAGTREE_PLUGIN}")
 if(FLAGTREE_PLUGIN)
@@ -81,6 +83,10 @@ set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17
 
 if(FLAGTREE_BACKEND STREQUAL "metax")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_MACA -DUSE_MACA_OPAQUE_PTR -DUSE_BUILTIN -Wno-unused-result -Wno-attributes")
+endif()
+
+if(FLAGTREE_BACKEND STREQUAL "hcu")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -Wno-error=return-type -std=gnu++17")
 endif()
 
 # #########
