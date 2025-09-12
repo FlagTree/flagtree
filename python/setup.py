@@ -235,6 +235,8 @@ if offline_handler.is_offline:
 else:
     print('[INFO] Offline Build: No offline build for triton origin toolkits')
     offline_build = False
+
+
 def get_triton_cache_path():
     user_home = os.getenv("TRITON_HOME")
     if not user_home:
