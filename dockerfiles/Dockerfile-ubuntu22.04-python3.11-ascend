@@ -1,4 +1,4 @@
-FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.2.rc1.alpha003-a3-ubuntu22.04-py3.11 as base
+FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.2.rc1.alpha003-a3-ubuntu22.04-py3.11 AS base
 
 ARG ASCEND_BASE=/usr/local/Ascend
 ENV LD_LIBRARY_PATH=\
@@ -20,7 +20,7 @@ RUN sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     pip install cmake modelscope ray[serve] && \
     pip cache purge
 
-FROM base as build
+FROM base AS build
 
 RUN apt update -y && apt install -y zlib1g-dev clang-15 lld-15 ccache && apt clean && \
     update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 20 && \
@@ -29,7 +29,7 @@ RUN apt update -y && apt install -y zlib1g-dev clang-15 lld-15 ccache && apt cle
     pip install ninja cmake wheel pybind11 && \
     pip install attrs==24.2.0 numpy==1.26.4 scipy==1.13.1 decorator==5.1.1 psutil==6.0.0 pytest==8.3.2 pytest-xdist==3.6.1 pyyaml torch==2.6.0 torch-npu==2.6.0rc1
 
-FROM build as build_triton
+FROM build AS build_triton
 
 RUN export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/Ascend/ascend-toolkit/latest/`uname -i`-linux/devlib && \
     source /usr/local/Ascend/ascend-toolkit/set_env.sh && \
