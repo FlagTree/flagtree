@@ -408,7 +408,8 @@ cache.store(
 cache.store(
     file="hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64",
     condition=("hcu" == flagtree_backend),
-    url="https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64_v0.3.0.tar.gz",
+    url=
+    "https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64_v0.3.0.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
