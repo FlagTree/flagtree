@@ -93,14 +93,30 @@ def download_module(module, required=False):
     if module is None:
         return
     if not os.path.exists(module.dst_path):
-        succ = clone_module(module)
+        # Try to copy from offline build dir if offline build is enabled.
+        module_offline_handler = OfflineBuildManager()
+        if module_offline_handler.is_offline:
+            src_path = os.path.join(module_offline_handler.offline_build_dir, module.name)
+            succ = os.path.exists(src_path)
+            if succ:
+                print(f"[INFO] Offline Build: Found {module.name} at {src_path}")
+                module_offline_handler.src = os.path.join(module_offline_handler.offline_build_dir, module.name)
+                module_offline_handler.copy_to_flagtree_project({"dst_path": module.dst_path})
+            else:
+                print(f"[INFO] Offline Build: {module.name} is not found in offline build directory.")
+        else:
+            # No offline build, clone from online source
+            succ = clone_module(module)
     else:
         print(f'Found third_party {module.name} at {module.dst_path}\n')
         return True
     if not succ and required:
         raise RuntimeError(
             f"[ERROR]: Failed to download {module.name} from {module.url}, It's most likely the network!")
+    if not succ and not required:
+        return False
     remove_triton_in_modules(module)
+    return True
 
 
 def get_triton_cache_path():
@@ -126,7 +142,10 @@ class OfflineBuildManager:
         src_path = self.src
         if not dst_path:
             return False
-        src_path = self.src
+        if not os.path.exists(dst_path):
+            dst = Path(dst_path)
+            dst.mkdir(parents=True, exist_ok=True)
+            print(f"[INFO] Creating directory {dst_path}")
         print(f"[INFO] Copying from {src_path} to {dst_path}")
         if os.path.isdir(src_path):
             shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
@@ -138,7 +157,10 @@ class OfflineBuildManager:
             kargs['post_hock'](self.src)
 
     def handle_triton_origin_toolkits(self):
-        triton_origin_toolkits = ["ptxas", "nvdisasm", "cuobjdump", "cudacrt", " cudart", "pybind11", "json"]
+        triton_origin_toolkits = [
+            "nvidia/ptxas", "nvidia/nvdisasm", "nvidia/cuobjdump", "nvidia/cudacrt", "nvidia/cudart", "nvidia/cupti",
+            "pybind11", "json"
+        ]
         for toolkit in triton_origin_toolkits:
             toolkit_cache_path = os.path.join(self.triton_cache_path, toolkit)
             if os.path.exists(toolkit_cache_path):

@@ -91,8 +91,10 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
         if enable_flagtree_third_party(name):
             submoduel = utils.flagtree_submoduels[name]
-            utils.download_module(submoduel, required)
-            if callable(hock):
+            succ = utils.download_module(submoduel, required)
+            if not succ:
+                print('[INFO] Download/Copy triton_shared failed. Skip appending triton_shared as default backend')
+            if callable(hock) and succ:
                 hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
                      default_backends=default_backends)
         else:
@@ -236,9 +238,19 @@ class FlagTreeCache:
               md5_digest=None, pre_hock=None, post_hock=None):
         if not condition or (pre_hock and pre_hock()):
             return
-        if self.offline_handler.single_build(src=file, dst_path=copy_dst_path, post_hock=post_hock, required=True,
-                                             url=url, md5_digest=md5_digest):
-            return
+        if files is not None:
+            offline_build_failed = False
+            for single_files in files:
+                if not self.offline_handler.single_build(src=os.path.join(
+                        copy_src_path, single_files), dst_path=copy_dst_path, post_hock=post_hock, required=True,
+                                                         url=url, md5_digest=md5_digest):
+                    offline_build_failed = True
+            if not offline_build_failed:
+                return
+        else:
+            if self.offline_handler.single_build(src=file, dst_path=copy_dst_path, post_hock=post_hock, required=True,
+                                                 url=url, md5_digest=md5_digest):
+                return
 
         is_url = False if url is None else True
         path = self.sub_dirs[flagtree_backend] if flagtree_backend else self.dir_path
