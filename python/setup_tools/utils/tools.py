@@ -210,7 +210,10 @@ class OfflineBuildManager:
         src_path = self.src
         if not dst_path:
             return False
-        src_path = self.src
+        if not os.path.exists(dst_path):
+            dst = Path(dst_path)
+            dst.mkdir(parents=True, exist_ok=True)
+            print(f"[INFO] Creating directory {dst_path}")
         print(f"[INFO] Copying from {src_path} to {dst_path}")
         if os.path.isdir(src_path):
             shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
