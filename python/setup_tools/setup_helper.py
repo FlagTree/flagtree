@@ -208,9 +208,18 @@ class FlagTreeCache:
               md5_digest=None, pre_hock=None, post_hock=None):
         if not condition or (pre_hock and pre_hock()):
             return
-        if self.offline_handler.single_build(src=file, dst_path=copy_dst_path, post_hock=post_hock, required=True,
+        if files is not None:
+            offline_build_failed=False
+            for single_files in files:
+                if not self.offline_handler.single_build(src=os.path.join(copy_src_path, single_files), dst_path=copy_dst_path, post_hock=post_hock, required=True,
+                                                         url=url, md5_digest=md5_digest):
+                    offline_build_failed=True
+            if not offline_build_failed:
+                return
+        else:
+            if self.offline_handler.single_build(src=file, dst_path=copy_dst_path, post_hock=post_hock, required=True,
                                              url=url, md5_digest=md5_digest):
-            return
+                return
 
         is_url = False if url is None else True
         path = self.sub_dirs[flagtree_backend] if flagtree_backend else self.dir_path
