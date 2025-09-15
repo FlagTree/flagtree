@@ -1,10 +1,8 @@
 import triton
 import numpy as np
 from mlir import ir
-from tvm import aipu
-from tvm.aipu import testing
-from tvm.aipu.utils import rand
-from triton.backends.aipu.codegen import AIPUModule, CodeGenerator
+from tvm.compass.dsl.testing import assert_allclose, rand
+from triton.backends.aipu.codegen import codegenAIPU
 from triton.backends.aipu import transform
 
 
@@ -65,11 +63,7 @@ def test_dma():
     mod = ir.Module.parse(mod_str, ctx)
     transform.binding_tid(mod, ctx)
 
-    cg = CodeGenerator(AIPUModule(mod))
-    cg.mod.walk_mod(cg.dispatch)
-
-    bm = aipu.tir.BuildManager()
-    ex = bm.build(cg.prim_func)
+    ex = codegenAIPU(mod)
 
     size = 4097
     BLOCKSIZE = 1024
@@ -86,7 +80,7 @@ def test_dma():
         tail_args[3] = i
         ex(*(np_args + tail_args))
 
-    testing.assert_allclose(aipu_out, a + b)
+    assert_allclose(aipu_out, a + b)
 
 
 if __name__ == "__main__":

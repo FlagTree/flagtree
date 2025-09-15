@@ -198,7 +198,7 @@ Tensor custom_empty_strided(c10::IntArrayRef size, c10::IntArrayRef stride,
 Tensor aipu_view(const Tensor &self, c10::IntArrayRef size) {
   IntArrayRef self_sizes = self.sizes();
   IntArrayRef self_strides = self.strides();
-  DimVector inferred_size = infer_size_dv(self_sizes, self.numel());
+  DimVector inferred_size = infer_size_dv(size, self.numel());
   std::optional<DimVector> stride =
       at::detail::computeStride(self_sizes, self_strides, inferred_size);
   TORCH_CHECK(
@@ -216,6 +216,96 @@ Tensor aipu_view(const Tensor &self, c10::IntArrayRef size) {
   return self_;
 }
 
+void aipu_contiguous_copy(const Tensor &self, const Tensor &dst,
+                          aipu_memcpy_kind_t kind) {
+  auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
+
+  if (self.storage_offset() == 0 && dst.storage_offset() == 0) {
+    auto status = aipu_memcpy(aipu_ctx_, dst.data_ptr(), self.data_ptr(),
+                              self.nbytes(), kind);
+    AIPU_DRIVER_HANDLE_ERROR(status);
+  } else {
+    auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
+    char *data_ptr = nullptr;
+    auto size = self.nbytes();
+    if (kind == AIPU_MEMCPY_DEVICE_TO_HOST) {
+      auto offset = self.storage_offset() * self.itemsize();
+      auto status = aipu_get_va(aipu_ctx_, self.data_ptr() - offset, &data_ptr);
+      AIPU_DRIVER_HANDLE_ERROR(status);
+      data_ptr += offset;
+
+      memcpy(dst.data_ptr(), data_ptr, size);
+    } else {
+      auto offset = dst.storage_offset() * dst.itemsize();
+      auto status = aipu_get_va(aipu_ctx_, dst.data_ptr() - offset, &data_ptr);
+      AIPU_DRIVER_HANDLE_ERROR(status);
+      data_ptr += offset;
+
+      memcpy(data_ptr, self.data_ptr(), size);
+    }
+  }
+}
+
+char *get_data_ptr(const Tensor &self) {
+  if (StrStartsWith(self.device().str(), "aipu")) {
+    auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
+    char *data_ptr = nullptr;
+    auto status = aipu_get_va(aipu_ctx_, self.data_ptr(), &data_ptr);
+    AIPU_DRIVER_HANDLE_ERROR(status);
+    return data_ptr;
+  } else {
+    return static_cast<char *>(self.data_ptr());
+  }
+}
+
+Tensor make_contiguous(const Tensor &self) {
+  if (self.is_contiguous()) {
+    return self;
+  }
+
+  Tensor result = at::empty_like(self);
+  const int64_t numel = self.numel();
+  const int64_t ndim = self.dim();
+
+  if (ndim == 0 || numel == 0) {
+    if (numel == 1) {
+      result.copy_(self);
+    }
+    return result;
+  }
+
+  char *self_data = get_data_ptr(self);
+  char *result_data = get_data_ptr(result);
+  const int64_t item_size = self.itemsize();
+  const auto shape = self.sizes();
+  const auto strides = self.strides();
+
+  std::vector<int64_t> contig_strides(ndim);
+  contig_strides[ndim - 1] = 1;
+  for (int i = ndim - 2; i >= 0; --i) {
+    contig_strides[i] = contig_strides[i + 1] * shape[i + 1];
+  }
+
+  for (int64_t linear_idx = 0; linear_idx < numel; ++linear_idx) {
+    int64_t offset = 0;
+    int64_t remaining = linear_idx;
+
+    for (int i = 0; i < ndim; ++i) {
+      const int64_t dim_index = remaining / contig_strides[i];
+      remaining %= contig_strides[i];
+      offset += dim_index * strides[i];
+    }
+
+    const int64_t src_offset = offset * item_size;
+    const int64_t dst_offset = linear_idx * item_size;
+    for (int64_t byte = 0; byte < item_size; ++byte) {
+      result_data[dst_offset + byte] = self_data[src_offset + byte];
+    }
+  }
+
+  return result;
+}
+
 Tensor aipu_copy_from(const Tensor &self, const Tensor &dst,
                       bool non_blocking = false) {
   auto kind = AIPU_MEMCPY_HOST_TO_DEVICE;
@@ -226,12 +316,19 @@ Tensor aipu_copy_from(const Tensor &self, const Tensor &dst,
     }
   }
 
-  auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
-  auto status = aipu_memcpy(aipu_ctx_, dst.data_ptr(), self.data_ptr(),
-                            self.nbytes(), kind);
-  AIPU_DRIVER_HANDLE_ERROR(status);
+  if (self.is_contiguous() && dst.is_contiguous()) {
+    aipu_contiguous_copy(self, dst, kind);
+  } else {
+    Tensor new_dst = dst.is_contiguous() ? dst : at::empty_like(dst);
+    Tensor new_src = make_contiguous(self);
+    aipu_contiguous_copy(new_src, new_dst, kind);
+    if (!new_dst.is_same(dst)) {
+      dst.copy_(new_dst);
+    }
+  }
   return dst;
 }
+
 Tensor aipu_copy_from_and_resize(const Tensor &self, const Tensor &dst) {
   if (self.sizes() != dst.sizes()) {
     auto new_dst =
@@ -253,17 +350,14 @@ Tensor aipu_copy_from_and_resize(const Tensor &self, const Tensor &dst) {
   }
   return aipu_copy_from(self, dst, false);
 }
+
 template <template <typename> class RND>
 Tensor &random_kernel(Tensor &self, double cond1, double cond2,
                       c10::optional<Generator> gen) {
   CPUGeneratorImpl *generator = get_generator_or_default<CPUGeneratorImpl>(
       gen, at::detail::getDefaultCPUGenerator());
   int64_t numel = self.numel();
-
-  auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
-  char *data_ptr = nullptr;
-  auto status = aipu_get_va(aipu_ctx_, self.data_ptr(), &data_ptr);
-  AIPU_DRIVER_HANDLE_ERROR(status);
+  char *data_ptr = get_data_ptr(self);
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
       self.scalar_type(), "random_kernel_aipu", [&]() {
@@ -285,11 +379,7 @@ Tensor &random_from_to_kernel(Tensor &self, int64_t from,
       gen, at::detail::getDefaultCPUGenerator());
   int64_t numel = self.numel();
   uint64_t range = static_cast<int64_t>(*to_opt) - static_cast<int64_t>(from);
-
-  auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
-  char *data_ptr = nullptr;
-  auto status = aipu_get_va(aipu_ctx_, self.data_ptr(), &data_ptr);
-  AIPU_DRIVER_HANDLE_ERROR(status);
+  char *data_ptr = get_data_ptr(self);
 
   AT_DISPATCH_ALL_TYPES_AND2(
       ScalarType::Bool, ScalarType::Half, self.scalar_type(),
@@ -308,8 +398,10 @@ Scalar _local_scalar_dense_aipu(const Tensor &self) {
   Scalar r;
   auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
   char *data_ptr = nullptr;
-  auto status = aipu_get_va(aipu_ctx_, self.data_ptr(), &data_ptr);
+  auto offset = self.storage_offset() * self.itemsize();
+  auto status = aipu_get_va(aipu_ctx_, self.data_ptr() - offset, &data_ptr);
   AIPU_DRIVER_HANDLE_ERROR(status);
+  data_ptr += offset;
 
   AT_DISPATCH_ALL_TYPES_AND2(
       ScalarType::Bool, ScalarType::Half, self.scalar_type(),
@@ -323,10 +415,7 @@ Scalar _local_scalar_dense_aipu(const Tensor &self) {
 
 Tensor &fill_scalar_aipu(Tensor &self, const Scalar &value) {
   int64_t numel = self.numel();
-  auto aipu_ctx_ = AIPUAllocator::aipu_ctx_;
-  char *data_ptr = nullptr;
-  auto status = aipu_get_va(aipu_ctx_, self.data_ptr(), &data_ptr);
-  AIPU_DRIVER_HANDLE_ERROR(status);
+  char *data_ptr = get_data_ptr(self);
 
   AT_DISPATCH_ALL_TYPES_AND2(
       ScalarType::Bool, ScalarType::Half, self.scalar_type(),
@@ -335,6 +424,12 @@ Tensor &fill_scalar_aipu(Tensor &self, const Scalar &value) {
         std::fill(data, data + numel, value.to<scalar_t>());
       });
   return self;
+}
+
+Tensor reshape_aipu(const Tensor &self, IntArrayRef shape) {
+  auto new_dst = custom_empty_symint(shape, self.scalar_type(), c10::nullopt,
+                                     c10::nullopt, c10::nullopt, c10::nullopt);
+  return aipu_copy_from(self, new_dst, false);
 }
 
 TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
@@ -350,6 +445,7 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m) {
          &random_from_to_kernel<uniform_int_from_to_distribution>);
   m.impl("aten::_local_scalar_dense", &_local_scalar_dense_aipu);
   m.impl("aten::fill_.Scalar", &fill_scalar_aipu);
+  m.impl("aten::reshape", &reshape_aipu);
 }
 
 void custom_cpu_fallback(const c10::OperatorHandle &op,
@@ -372,6 +468,22 @@ C10_REGISTER_GUARD_IMPL(PrivateUse1, c10::impl::AIPUGuardImpl)
 // Register the autograd dispatch key for operators that have no dispatches
 TORCH_LIBRARY_IMPL(aten, AutogradPrivateUse1, m) {
   m.impl("isfinite", torch::autograd::autogradNotImplementedFallback());
+  m.impl("reshape", torch::autograd::autogradNotImplementedFallback());
+  m.impl("isclose", torch::autograd::autogradNotImplementedFallback());
+  m.impl("tile", torch::autograd::autogradNotImplementedFallback());
+  m.impl("hstack", torch::autograd::autogradNotImplementedFallback());
+  m.impl("vstack", torch::autograd::autogradNotImplementedFallback());
+  m.impl("resolve_conj", torch::autograd::autogradNotImplementedFallback());
+  m.impl("resolve_neg", torch::autograd::autogradNotImplementedFallback());
+  m.impl("to.dtype", torch::autograd::autogradNotImplementedFallback());
+  m.impl("where.ScalarSelf", torch::autograd::autogradNotImplementedFallback());
+  m.impl("where.ScalarOther",
+         torch::autograd::autogradNotImplementedFallback());
+  m.impl("embedding_backward",
+         torch::autograd::autogradNotImplementedFallback());
+  m.impl("pad", torch::autograd::autogradNotImplementedFallback());
+  m.impl("repeat_interleave.self_Tensor",
+         torch::autograd::autogradNotImplementedFallback());
 }
 
 namespace aipu {

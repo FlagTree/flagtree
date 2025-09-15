@@ -6,7 +6,7 @@ DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
 @triton.jit()
-def test_kernel(
+def fmod_kernel(
     x_ptr,
     y_ptr,
     n_elements,
@@ -22,10 +22,11 @@ def test_kernel(
     tl.store(y_ptr + offsets, z, mask=mask)
 
 
-torch.manual_seed(0)
-size = 98432
-x = torch.rand(size, dtype=torch.float32, device=DEVICE)
-output_triton = torch.rand(size, device=DEVICE)
-n_elements = x.numel()
-grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-test_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
+def test_libdevice_fmod():
+    torch.manual_seed(0)
+    size = 98432
+    x = torch.rand(size, dtype=torch.float32, device=DEVICE)
+    output_triton = torch.rand(size, device=DEVICE)
+    n_elements = x.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+    fmod_kernel[grid](x, output_triton, n_elements, BLOCK_SIZE=1024)
