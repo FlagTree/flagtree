@@ -101,7 +101,7 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
             downloader.download(module=submoduel, required=required)
             if callable(hock):
                 hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
-                    default_backends=default_backends)
+                     default_backends=default_backends)
         else:
             print(f"\033[1;33m[Note] Skip downloading {name} since USE_{name.upper()} is set to OFF\033[0m")
 
@@ -209,16 +209,17 @@ class FlagTreeCache:
         if not condition or (pre_hock and pre_hock()):
             return
         if files is not None:
-            offline_build_failed=False
+            offline_build_failed = False
             for single_files in files:
-                if not self.offline_handler.single_build(src=os.path.join(copy_src_path, single_files), dst_path=copy_dst_path, post_hock=post_hock, required=True,
+                if not self.offline_handler.single_build(src=os.path.join(
+                        copy_src_path, single_files), dst_path=copy_dst_path, post_hock=post_hock, required=True,
                                                          url=url, md5_digest=md5_digest):
-                    offline_build_failed=True
+                    offline_build_failed = True
             if not offline_build_failed:
                 return
         else:
             if self.offline_handler.single_build(src=file, dst_path=copy_dst_path, post_hock=post_hock, required=True,
-                                             url=url, md5_digest=md5_digest):
+                                                 url=url, md5_digest=md5_digest):
                 return
 
         is_url = False if url is None else True
