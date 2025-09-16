@@ -179,6 +179,12 @@ echo -e "wget $googletest_url -O ${target_dir}/googletest-release-1.12.1.zip"
 wget "$googletest_url" -O ${target_dir}/googletest-release-1.12.1.zip
 check_download
 
+triton_ascend_url=https://gitee.com/ascend/triton-ascend/repository/archive/master.zip
+echo -e "Downloading Triton_Ascend from: ${BLUE}$triton_ascend_url${NC}"
+echo -e "wget $triton_ascend_url -O ${target_dir}/triton-ascend-master.zip"
+wget "$triton_ascend_url" -O ${target_dir}/triton-ascend-master.zip
+check_download
+
 triton_shared_url=https://github.com/microsoft/triton-shared/archive/380b87122c88af131530903a702d5318ec59bb33.zip
 echo -e "Downloading Triton_Shared from: ${BLUE}$triton_shared_url${NC}"
 echo -e "wget $triton_shared_url -O ${target_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
