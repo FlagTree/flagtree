@@ -63,4 +63,5 @@ jobs:
       - name: FlagTree Test on Hcu
         shell: bash
         run: |
-          python3 -m pytest -s third_party/hcu/python/test/unit
+          cd third_party/hcu/python/test/unit
+          sh test.sh
