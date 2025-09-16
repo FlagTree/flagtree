@@ -112,6 +112,7 @@ cudart_file="cuda-cudart-dev-${cudart_version}.tar.xz"
 cupti_file="cuda-cupti-${cupti_version}.tar.xz"
 json_file="include.zip"
 googletest_file="googletest-release-1.12.1.zip"
+flir_file="flir-main.zip"
 triton_shared_file="triton-shared-5842469a16b261e45a2c67fbfc308057622b03ee.zip"
 
 
@@ -167,6 +168,14 @@ unzip $output_dir/$json_file -d "${output_dir}/json" > /dev/null
 echo -e "Extracting $googletest_file into ${output_dir}/googletest-release-1.12.1 ..."
 unzip $output_dir/$googletest_file -d "${output_dir}" > /dev/null
 
+if [ -f "$output_dir/${flir_file}" ]; then
+    echo -e "Extracting $flir_file into ${output_dir}/flir ..."
+    unzip $output_dir/$flir_file -d "${output_dir}" > /dev/null
+    mv ${output_dir}/flir-main ${output_dir}/flir
+else
+    echo -e "${YELLOW}Warning: File $output_dir/$flir_file does not exist. This file is necessary for aipu backend, please check if you need it.${NC}"
+fi
+
 if [ -f "$output_dir/${triton_shared_file}" ]; then
     echo -e "Extracting $triton_shared_file into ${output_dir}/triton_shared ..."
     unzip $output_dir/$triton_shared_file -d "${output_dir}" > /dev/null
@@ -178,10 +187,14 @@ fi
 echo -e ""
 echo -e "Delete $output_dir/$nvcc_ptxas_file"
 rm $output_dir/$nvcc_ptxas_file
-echo -e "Delete $output_dir/$nvcc_ptxas_blackwell_file"
-rm $output_dir/$nvcc_ptxas_blackwell_file
-echo -e "Delete $output_dir/$nvcc_cudacrt_file"
-rm $output_dir/$nvcc_cudacrt_file
+if [ -f "$output_dir/$nvcc_ptxas_file" ]; then
+    echo -e "Delete $output_dir/$nvcc_ptxas_blackwell_file"
+    rm $output_dir/$nvcc_ptxas_blackwell_file
+fi
+if [ -f "$output_dir/$nvcc_ptxas_blackwell_file" ]; then
+    echo -e "Delete $output_dir/$nvcc_cudacrt_file"
+    rm $output_dir/$nvcc_cudacrt_file
+fi
 echo -e "Delete $output_dir/$cuobjdump_file"
 rm $output_dir/$cuobjdump_file
 echo -e "Delete $output_dir/$nvdisasm_file"
@@ -194,6 +207,10 @@ echo -e "Delete $output_dir/$json_file"
 rm $output_dir/$json_file
 echo -e "Delete $output_dir/$googletest_file"
 rm $output_dir/$googletest_file
+if [ -f "$output_dir/${flir_file}" ]; then
+    echo -e "Delete $output_dir/${flir_file}"
+    rm $output_dir/${flir_file}
+fi
 if [ -f "$output_dir/${triton_shared_file}" ]; then
     echo -e "Delete $output_dir/$triton_shared_file"
     rm $output_dir/$triton_shared_file

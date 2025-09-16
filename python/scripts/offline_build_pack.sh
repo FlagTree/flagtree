@@ -70,13 +70,26 @@ cudart_file="cuda-cudart-dev-${cudart_version}.tar.xz"
 cupti_file="cuda-cupti-${cupti_version}.tar.xz"
 json_file="include.zip"
 googletest_file="googletest-release-1.12.1.zip"
+flir_file="flir-main.zip"
 triton_shared_file="triton-shared-5842469a16b261e45a2c67fbfc308057622b03ee.zip"
 
-if [ ! -d "$input_dir" ]; then
-    echo -e "${RED}Error: offline build download directory $input_dir does not exist, run README_offline_build.sh for more information${NC}"
+if [ ! -f "$input_dir/$nvcc_ptxas_file" ]; then
+    echo -e "${RED}Error: File $input_dir/$nvcc_ptxas_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find ${nvcc_file}"
+echo -e "Find $input_dir/$nvcc_ptxas_file"
+
+if [ ! -f "$input_dir/$nvcc_ptxas_blackwell_file" ]; then
+    echo -e "${RED}Error: File $input_dir/$nvcc_ptxas_blackwell_file does not exist, run README_offline_build.sh for more information${NC}"
+    exit 1
+fi
+echo -e "Find $input_dir/$nvcc_ptxas_blackwell_file"
+
+if [ ! -f "$input_dir/$nvcc_cudacrt_file" ]; then
+    echo -e "${RED}Error: File $input_dir/$nvcc_cudacrt_file does not exist, run README_offline_build.sh for more information${NC}"
+    exit 1
+fi
+echo -e "Find $input_dir/$nvcc_cudacrt_file"
 
 if [ ! -f "$input_dir/$cuobjdump_file" ]; then
     echo -e "${RED}Error: File $input_dir/$cuobjdump_file does not exist, run README_offline_build.sh for more information${NC}"
@@ -114,6 +127,13 @@ if [ ! -f "$input_dir/$googletest_file" ]; then
 fi
 echo -e "Find $input_dir/$googletest_file"
 
+if [ ! -f "$input_dir/$flir_file" ]; then
+    echo -e "${YELLOW}Warning: File $input_dir/$flir_file does not exist. This file is necessary for aipu backend, please check if you need it.${NC}"
+    flir_file=""
+else
+    echo -e "Find $input_dir/$flir_file"
+fi
+
 if [ ! -f "$input_dir/$triton_shared_file" ]; then
     echo -e "${YELLOW}Warning: File $input_dir/$triton_shared_file does not exist. This file is optional, please check if you need it.${NC}"
     triton_shared_file=""
@@ -126,7 +146,7 @@ cd "$input_dir"
 
 echo -e "Compressing..."
 zip "$output_zip" "$nvcc_ptxas_file" "$nvcc_cudacrt_file" "$nvcc_ptxas_blackwell_file" "$cuobjdump_file" "$nvdisasm_file" "$cudart_file" \
-    "$cupti_file" "$json_file" "$googletest_file" "$triton_shared_file"
+    "$cupti_file" "$json_file" "$googletest_file" "$flir_file" "$triton_shared_file"
 
 echo -e "cd -"
 cd -
