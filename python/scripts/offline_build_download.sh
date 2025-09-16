@@ -180,9 +180,19 @@ wget "$googletest_url" -O ${target_dir}/googletest-release-1.12.1.zip
 check_download
 
 triton_ascend_url=https://gitee.com/ascend/triton-ascend/repository/archive/master.zip
+ascendnpu_ir_url=https://gitee.com/ascend/ascendnpu-ir/repository/archive/1922371c42749fda534d6395b7ed828b5c9f36d4.zip
+triton_url=https://github.com/triton-lang/triton/archive/9641643da6c52000c807b5eeed05edaec4402a67.zip
 echo -e "Downloading Triton_Ascend from: ${BLUE}$triton_ascend_url${NC}"
 echo -e "wget $triton_ascend_url -O ${target_dir}/triton-ascend-master.zip"
 wget "$triton_ascend_url" -O ${target_dir}/triton-ascend-master.zip
+check_download
+echo -e "Downloading AscendNPU IR for Triton_Ascend from: ${BLUE}$ascendnpu_ir_url${NC}"
+echo -e "wget $ascendnpu_ir_url -O ${target_dir}/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4.zip"
+wget "$ascendnpu_ir_url" -O ${target_dir}/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4.zip
+check_download
+echo -e "Downloading Triton for Triton_Ascend from: ${BLUE}$triton_url${NC}"
+echo -e "wget $triton_url -O ${target_dir}/triton-9641643da6c52000c807b5eeed05edaec4402a67.zip"
+wget "$triton_url" -O ${target_dir}/triton-9641643da6c52000c807b5eeed05edaec4402a67.zip
 check_download
 
 triton_shared_url=https://github.com/microsoft/triton-shared/archive/380b87122c88af131530903a702d5318ec59bb33.zip
