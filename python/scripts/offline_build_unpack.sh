@@ -139,9 +139,8 @@ if [ -f "${trtion_ascend_file}" ]; then
 
     if [ -f "${ascendnpu_ir_file}" ]; then
         echo -e "Extracting $ascendnpu_ir_file into ${output_dir}/ascend/third_party/ ..."
-        unzip $ascendnpu_ir_file -d "${output_dir}/ascend/third_party/" > /dev/null
-        rm -rf "${output_dir}/ascend/third_party/ascendnpu-ir"
-        mv "${output_dir}/ascend/third_party/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4" "${output_dir}/ascend/third_party/ascendnpu-ir"
+        unzip $ascendnpu_ir_file -d "${output_dir}" > /dev/null
+        mv "${output_dir}/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4" "${output_dir}/ascendnpu-ir"
     else
         echo -e "Warning: File $ascendnpu_ir_file does not exist. This file is necessary for ascend backend, please check if you need it."
     fi
