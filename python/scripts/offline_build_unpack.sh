@@ -76,6 +76,8 @@ cupti_file="${output_dir}/cuda-cupti-${cupti_version}-0.tar.bz2"
 json_file="${output_dir}/include.zip"
 googletest_file="${output_dir}/googletest-release-1.12.1.zip"
 trtion_ascend_file="${output_dir}/triton-ascend-master.zip"
+ascendnpu_ir_file="${output_dir}/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4.zip"
+triton_file="${output_dir}/triton-9641643da6c52000c807b5eeed05edaec4402a67.zip"
 triton_shared_file="${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
 
@@ -134,6 +136,25 @@ if [ -f "${trtion_ascend_file}" ]; then
     echo -e "Extracting $trtion_ascend_file into ${output_dir}/triton-ascend-master ..."
     unzip $trtion_ascend_file -d "${output_dir}" > /dev/null
     mv ${output_dir}/triton-ascend-master ${output_dir}/ascend
+
+    if [ -f "${ascendnpu_ir_file}" ]; then
+        echo -e "Extracting $ascendnpu_ir_file into ${output_dir}/ascend/third_party/ ..."
+        unzip $ascendnpu_ir_file -d "${output_dir}/ascend/third_party/" > /dev/null
+        rm -rf "${output_dir}/ascend/third_party/ascendnpu-ir"
+        mv "${output_dir}/ascend/third_party/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4" "${output_dir}/ascend/third_party/ascendnpu-ir"
+    else
+        echo -e "Warning: File $ascendnpu_ir_file does not exist. This file is necessary for ascend backend, please check if you need it."
+    fi
+
+    if [ -f "${triton_file}" ]; then
+        echo -e "Extracting $triton_file into ${output_dir}/ascend/third_party/ ..."
+        unzip $triton_file -d "${output_dir}/ascend/third_party/" > /dev/null
+        rm -rf "${output_dir}/ascend/third_party/triton"
+        mv "${output_dir}/ascend/third_party/triton-9641643da6c52000c807b5eeed05edaec4402a67" "${output_dir}/ascend/third_party/triton"
+    else
+        echo -e "Warning: File $ascendnpu_ir_file does not exist. This file is necessary for ascend backend, please check if you need it."
+    fi
+
 else
     echo -e "Warning: File $trtion_ascend_file does not exist. This file is necessary for ascend backend, please check if you need it."
 fi
@@ -168,6 +189,10 @@ rm $googletest_file
 if [ -f "${trtion_ascend_file}" ]; then
     echo -e "Delete $trtion_ascend_file"
     rm $trtion_ascend_file
+    echo -e "Delete $ascendnpu_ir_file"
+    rm $ascendnpu_ir_file
+    echo -e "Delete $triton_file"
+    rm $triton_file
 fi
 if [ -f "${triton_shared_file}" ]; then
     echo -e "Delete $triton_shared_file"
