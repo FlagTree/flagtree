@@ -74,8 +74,10 @@ def dir_rollback(deep, base_path):
 def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
         submoduel = utils.flagtree_submoduels[name]
-        utils.download_module(submoduel, required)
-        if callable(hock):
+        succ = utils.download_module(submoduel, required)
+        if not succ:
+            print(f'[INFO] Download/Copy {name} failed.')
+        if callable(hock) and succ:
             hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
                  default_backends=default_backends)
 

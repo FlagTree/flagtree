@@ -174,6 +174,10 @@ class Package:
 
 # json
 def get_json_package_info():
+    if is_offline_build():
+        triton_cache_path = get_triton_cache_path()
+        os.environ['JSON_SYSPATH'] = os.path.join(triton_cache_path, "json")
+        print(f"[INFO] FlagTree Offline build: set JSON_SYSPATH to {os.environ['JSON_SYSPATH']}")
     url = "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
     return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
 
@@ -250,6 +254,15 @@ def open_url(url):
 
 # ---- package data ---
 
+offline_handler = helper.utils.OfflineBuildManager()
+if offline_handler.is_offline:
+    print("[INFO] FlagTree Offline Build: Use offline build for triton origin toolkits")
+    offline_handler.handle_triton_origin_toolkits()
+    offline_build = True
+else:
+    print('[INFO] FlagTree Offline Build: No offline build for triton origin toolkits')
+    offline_build = False
+
 
 def get_triton_cache_path():
     user_home = os.getenv("TRITON_HOME")
@@ -318,8 +331,6 @@ def get_thirdparty_packages(packages: list):
 
 
 def download_and_copy(name, src_func, dst_path, variable, version, url_func):
-    if is_offline_build():
-        return
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
@@ -340,7 +351,7 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
         curr_version = re.search(r"V([.|\d]+)", curr_version)
         assert curr_version is not None, f"No version information for {dst_path}"
         download = download or curr_version.group(1) != version
-    if download:
+    if download and not is_offline_build():
         print(f'downloading and extracting {url} ...')
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
         file.extractall(path=tmp_path)
@@ -449,6 +460,10 @@ class CMakeBuild(build_ext):
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
         cmake_args += helper.get_backend_cmake_args(build_ext=self)
+        if is_offline_build():
+            googletest_offline_path = os.path.join(offline_handler.offline_build_dir, "googletest-release-1.12.1")
+            print(f'[INFO] Offline Build: Using offline googletest from {googletest_offline_path}')
+            cmake_args += ["-DGOOGLETEST_DIR=" + googletest_offline_path]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
