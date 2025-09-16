@@ -303,7 +303,7 @@ def handle_flagtree_backend():
         print(f"\033[1;32m[INFO] FlagtreeBackend is {flagtree_backend}\033[0m")
         display_name = "mlu" if flagtree_backend == "cambricon" else flagtree_backend
         extend_backends.append(display_name)
-        if "editable_wheel" in sys.argv and flagtree_backend not in ("ascend", "iluvatar", "hcu"):
+        if "editable_wheel" in sys.argv and flagtree_backend not in ("ascend", "iluvatar"):
             ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
 
 

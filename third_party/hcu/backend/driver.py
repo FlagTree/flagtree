@@ -10,7 +10,7 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
-include_dir = [os.path.join(dirname, "../hcu", "include")]
+include_dir = [os.path.join(dirname, "include")]
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
@@ -152,7 +152,7 @@ class HIPUtils(object):
 
     def __init__(self):
         libhip_path = _get_path_to_hip_runtime_dylib()
-        src = Path(os.path.join(dirname, "../hcu", "driver.c")).read_text()
+        src = Path(os.path.join(dirname, "driver.c")).read_text()
         # Just do a simple search and replace here instead of templates or format strings.
         # This way we don't need to escape-quote C code curly brackets and we can replace
         # exactly once.
