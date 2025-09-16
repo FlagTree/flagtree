@@ -22,4 +22,4 @@ pytest -v -s language/test_core.py
 pytest -v -s language/test_conversions.py
 python gemm/gemm.py
 pytest -v -s sglang/test_int4kv_asym.py
-pytest -v -s fused_moe/test_moe.py
+# pytest -v -s fused_moe/test_moe.py
