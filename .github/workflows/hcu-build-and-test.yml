@@ -64,4 +64,4 @@ jobs:
         shell: bash
         run: |
           cd third_party/hcu/python/test/unit
-          sh test.sh
+          sh flagtree_test.sh
