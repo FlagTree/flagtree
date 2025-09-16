@@ -20,7 +20,9 @@ class GPUDriver(DriverBase):
     def __init__(self):
         # TODO: support other frameworks than torch
         import torch
-        self.get_device_capability = torch.cuda.get_device_capability
+        if hasattr(torch, "cuda"):
+            if hasattr(torch.cuda, "get_device_capability"):
+                self.get_device_capability = torch.cuda.get_device_capability
         try:
             from torch._C import _cuda_getCurrentRawStream
             self.get_current_stream = _cuda_getCurrentRawStream

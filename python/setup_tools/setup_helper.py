@@ -2,10 +2,6 @@ import os
 import shutil
 import sys
 import functools
-import tarfile
-import zipfile
-from io import BytesIO
-import urllib.request
 from pathlib import Path
 import hashlib
 from distutils.sysconfig import get_python_lib
@@ -20,6 +16,7 @@ flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend", "cambricon": "mlu"}
 language_extra_backends = ['xpu', 'mthreads', "cambricon"]
 activated_module = utils.activate(flagtree_backend)
+downloader = utils.tools.DownloadManager()
 
 set_llvm_env = lambda path: set_env({
     'LLVM_INCLUDE_DIRS': os.path.join(path, "include"),
@@ -91,7 +88,7 @@ def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
         if enable_flagtree_third_party(name):
             submoduel = utils.flagtree_submoduels[name]
-            utils.download_module(submoduel, required)
+            downloader.download(module=submoduel, required=required)
             if callable(hock):
                 hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
                      default_backends=default_backends)
@@ -159,41 +156,6 @@ class FlagTreeCache:
                 md5_hash.update(chunk)
         return md5_hash.hexdigest()
 
-    def _download(self, url, path, file_name):
-        MAX_RETRY_COUNT = 4
-        user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0'
-        headers = {
-            'User-Agent': user_agent,
-        }
-        request = urllib.request.Request(url, None, headers)
-        retry_count = MAX_RETRY_COUNT
-        content = None
-        print(f'downloading {url} ...')
-        while (retry_count):
-            try:
-                with urllib.request.urlopen(request, timeout=300) as response:
-                    content = response.read()
-                    break
-            except Exception:
-                retry_count -= 1
-                print(f"\n[{MAX_RETRY_COUNT - retry_count}] retry to downloading and extracting {url}")
-
-        if retry_count == 0:
-            raise RuntimeError("The download failed, probably due to network problems")
-
-        print(f'extracting {url} ...')
-        file_bytes = BytesIO(content)
-        file_names = []
-        if url.endswith(".zip"):
-            with zipfile.ZipFile(file_bytes, "r") as file:
-                file.extractall(path=path)
-                file_names = file.namelist()
-        else:
-            with tarfile.open(fileobj=file_bytes, mode="r|*") as file:
-                file.extractall(path=path)
-                file_names = file.getnames()
-        os.rename(Path(path) / file_names[0], Path(path) / file_name)
-
     def check_file(self, file_name=None, url=None, path=None, md5_digest=None):
         origin_file_path = None
         if url is not None:
@@ -258,7 +220,7 @@ class FlagTreeCache:
                     return
 
         if is_url and not self.check_file(file_name=file, url=url, md5_digest=md5_digest):
-            self._download(url, path, file_name=file)
+            downloader.download(url=url, path=path, file_name=file)
 
         if copy_dst_path is not None:
             file_lists = [file] if files is None else list(files)
@@ -438,6 +400,16 @@ cache.store(
     condition=("tsingmicro" == flagtree_backend),
     url=
     "https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-x64.tar.gz",
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
+    post_hock=set_llvm_env,
+)
+
+# hcu
+cache.store(
+    file="hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64",
+    condition=("hcu" == flagtree_backend),
+    url=
+    "https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64_v0.3.0.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
