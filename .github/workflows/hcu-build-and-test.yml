@@ -1,5 +1,4 @@
-
-name: Xpu-Build-And-Test
+name: Hcu-Build-And-Test
 
 on:
   push:
