@@ -159,6 +159,12 @@ echo -e "wget $googletest_url -O ${target_dir}/googletest-release-1.12.1.zip"
 wget "$googletest_url" -O ${target_dir}/googletest-release-1.12.1.zip
 check_download
 
+flir_url="https://github.com/FlagTree/flir/archive/refs/heads/main.zip"
+echo -e "Downloading FLIR from: ${BLUE}$flir_url${NC}"
+echo -e "wget $flir_url -O ${target_dir}/flir-main.zip"
+wget "$flir_url" -O ${target_dir}/flir-main.zip
+check_download
+
 triton_shared_url=https://github.com/microsoft/triton-shared/archive/5842469a16b261e45a2c67fbfc308057622b03ee.zip
 echo -e "Downloading Triton_Shared from: ${BLUE}$triton_shared_url${NC}"
 echo -e "wget $triton_shared_url -O ${target_dir}/triton-shared-5842469a16b261e45a2c67fbfc308057622b03ee.zip"
