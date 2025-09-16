@@ -75,6 +75,7 @@ cudart_file="${output_dir}/cuda-cudart-dev-${cudart_version}-0.tar.bz2"
 cupti_file="${output_dir}/cuda-cupti-${cupti_version}-0.tar.bz2"
 json_file="${output_dir}/include.zip"
 googletest_file="${output_dir}/googletest-release-1.12.1.zip"
+trtion_ascend_file="${output_dir}/triton-ascend-master.zip"
 triton_shared_file="${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
 
@@ -129,6 +130,14 @@ unzip $json_file -d "${output_dir}/json" > /dev/null
 echo -e "Extracting $googletest_file into ${output_dir}/googletest-release-1.12.1 ..."
 unzip $googletest_file -d "${output_dir}" > /dev/null
 
+if [ -f "${trtion_ascend_file}" ]; then
+    echo -e "Extracting $trtion_ascend_file into ${output_dir}/triton-ascend-master ..."
+    unzip $trtion_ascend_file -d "${output_dir}" > /dev/null
+    mv ${output_dir}/triton-ascend-master ${output_dir}/ascend
+else
+    echo -e "Warning: File $trtion_ascend_file does not exist. This file is necessary for ascend backend, please check if you need it."
+fi
+
 if [ -f "${triton_shared_file}" ]; then
     echo -e "Extracting $triton_shared_file into ${output_dir}/triton_shared ..."
     unzip $triton_shared_file -d "${output_dir}" > /dev/null
@@ -156,6 +165,10 @@ echo -e "Delete $json_file"
 rm $json_file
 echo -e "Delete $googletest_file"
 rm $googletest_file
+if [ -f "${trtion_ascend_file}" ]; then
+    echo -e "Delete $trtion_ascend_file"
+    rm $trtion_ascend_file
+fi
 if [ -f "${triton_shared_file}" ]; then
     echo -e "Delete $triton_shared_file"
     rm $triton_shared_file

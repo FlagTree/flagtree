@@ -76,6 +76,7 @@ cudart_file="cuda-cudart-dev-${cudart_version}-0.tar.bz2"
 cupti_file="cuda-cupti-${cupti_version}-0.tar.bz2"
 json_file="include.zip"
 googletest_file="googletest-release-1.12.1.zip"
+triton_ascend_file="triton-ascend-master.zip"
 triton_shared_file="triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
 if [ ! -f "$input_dir/$ptxas_file" ]; then
@@ -126,8 +127,15 @@ if [ ! -f "$input_dir/$googletest_file" ]; then
 fi
 echo -e "Find $input_dir/$googletest_file"
 
+if [ ! -f "$input_dir/$triton_ascend_file" ]; then
+    echo -e "${YELLOW}Warning: File $input_dir/$triton_ascend_file does not exist. This file is necessary for ascend backend, please check if you need it.${NC}"
+    triton_ascend_file=""
+else
+    echo -e "Find $input_dir/$triton_ascend_file"
+fi
+
 if [ ! -f "$input_dir/$triton_shared_file" ]; then
-    echo -e "Warning: File $input_dir/$triton_shared_file does not exist. This file is optional, please check if you need it."
+    echo -e "${YELLOW}Warning: File $input_dir/$triton_shared_file does not exist. This file is optional, please check if you need it.${NC}"
     triton_shared_file=""
 else
     echo -e "Find $input_dir/$triton_shared_file"
@@ -138,7 +146,7 @@ cd "$input_dir"
 
 echo -e "Compressing..."
 zip "$output_zip" "$ptxas_file" "$cudacrt_file" "$cuobjdump_file" "$nvdisasm_file" "$cudart_file" "$cupti_file" \
-    "$json_file" "$googletest_file" "$triton_shared_file"
+    "$json_file" "$googletest_file" "$triton_ascend_file" "$triton_shared_file"
 
 echo -e "cd -"
 cd -
