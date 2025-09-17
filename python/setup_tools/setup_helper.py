@@ -73,10 +73,10 @@ def dir_rollback(deep, base_path):
 
 def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
-        submoduel = utils.flagtree_submoduels[name]
-        utils.download_module(submoduel, required)
+        submodule = utils.flagtree_submodules[name]
+        utils.download_module(submodule, required)
         if callable(hock):
-            hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel,
+            hock(third_party_base_dir=utils.flagtree_submodule_dir, backend=submodule,
                  default_backends=default_backends)
 
 
