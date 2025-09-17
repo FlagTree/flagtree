@@ -4,7 +4,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 flagtree_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-flagtree_submoduel_dir = os.path.join(flagtree_root_dir, "third_party")
+flagtree_submodule_dir = os.path.join(flagtree_root_dir, "third_party")
 
 network_configs = {
     "MAX_RETRY_COUNT": 4,
