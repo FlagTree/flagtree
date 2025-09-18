@@ -2,10 +2,10 @@
 
 class AipuUnifiedHardware : public mlir::flagtree::UnifiedHardware {
 public:
-  int getDMATag() override;
+  int getDMATag() const override;
 };
 
-int AipuUnifiedHardware::getDMATag() { return 11; }
+int AipuUnifiedHardware::getDMATag() const { return 11; }
 
 std::unique_ptr<mlir::flagtree::UnifiedHardware>
 mlir::flagtree::createUnifiedHardwareManager() {

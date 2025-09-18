@@ -3,7 +3,7 @@
 namespace mlir {
 namespace flagtree {
 
-bool UnifiedHardware::isRegistered() {
+bool UnifiedHardware::isRegistered() const {
 #ifdef FLAGTREE_BACKEND
   return true;
 #else
@@ -11,11 +11,15 @@ bool UnifiedHardware::isRegistered() {
 #endif
 }
 
-int UnifiedHardware::getDMATag() { return 0; }
+int UnifiedHardware::getDMATag() const { return 0; }
 
-int UnifiedHardware::getSharedMemoryTag() { return 0; }
+int UnifiedHardware::getSharedMemoryTag() const { return 0; }
 
-std::string UnifiedHardware::getFlagTreeBackend() { return "default"; }
+std::string UnifiedHardware::getReduceStrategy() const {
+  return "linalg_reduce";
+}
+
+std::string UnifiedHardware::getFlagTreeBackend() const { return "default"; }
 
 __attribute__((weak)) std::unique_ptr<UnifiedHardware>
 createUnifiedHardwareManager() {
