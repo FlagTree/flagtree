@@ -10,7 +10,8 @@ flagtree_submoduels = {
                  commit_id="380b87122c88af131530903a702d5318ec59bb33",
                  dst_path=os.path.join(flagtree_submoduel_dir, "triton_shared")),
     "ascend":
-    tools.Module(name="ascend", url="https://gitee.com/ascend/triton-ascend.git",
+    tools.Module(name="ascend", url="https://gitee.com/flagtree/triton-ascend.git",
+                 commit_id="flagtree-dot-hint",
                  dst_path=os.path.join(flagtree_submoduel_dir, "triton_ascend")),
 }
 
