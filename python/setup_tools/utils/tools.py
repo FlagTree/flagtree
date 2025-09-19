@@ -147,6 +147,7 @@ class DownloadManager:
             print(f"[ERROR]: Failed to clone {module.name} from {module.url}")
             return False
         print(f"[INFO]: Successfully cloned {module.name} to {module.dst_path}")
+        return True
 
     def general_download_impl(self, request):
         with urllib.request.urlopen(request, timeout=NetConfig.timeout) as response:
