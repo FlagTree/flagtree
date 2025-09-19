@@ -103,8 +103,9 @@ python3 -m pip install . --no-build-isolation -v
 ```shell
 # 自行下载 llvm
 cd ${YOUR_LLVM_DOWNLOAD_DIR}
-wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-10dc3a8e-ubuntu-x64.tar.gz
-tar zxvf llvm-10dc3a8e-ubuntu-x64.tar.gz
+wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-x64.tar.gz
+tar zxvf llvm-a66376b0-ubuntu-x64.tar.gz
+
 # 编译安装
 cd ${YOUR_CODE_DIR}/flagtree/python
 export LLVM_SYSPATH=${YOUR_LLVM_DOWNLOAD_DIR}/llvm-10dc3a8e-ubuntu-x64
