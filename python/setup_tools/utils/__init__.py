@@ -2,7 +2,7 @@ from pathlib import Path
 import importlib.util
 import os
 from . import tools, default, aipu
-from .tools import flagtree_submodule_dir, download_module
+from .tools import flagtree_submodule_dir, OfflineBuildManager
 
 flagtree_submodules = {
     "triton_shared":
@@ -29,4 +29,4 @@ def activate(backend, suffix=".py"):
     return module
 
 
-__all__ = ["aipu", "default", "activate", "flagtree_submodules", "download_module", "tools"]
+__all__ = ["aipu", "default", "activate", "flagtree_submodules", "OfflineBuildManager", "tools"]
