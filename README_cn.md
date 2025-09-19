@@ -11,7 +11,7 @@ apt install zlib1g zlib1g-dev libxml2 libxml2-dev  # ubuntu
 cd python; python3 -m pip install -r requirements.txt
 ```
 
-构建安装：
+构建安装（网络畅通环境下推荐使用）：
 ```shell
 cd python
 export FLAGTREE_BACKEND=backendxxx
@@ -23,47 +23,48 @@ python3 -m pip install . --no-build-isolation -v
 自动下载依赖库的速度可能受限于网络环境，编译前可自行下载至缓存目录 ~/.flagtree（可通过环境变量 FLAGTREE_CACHE_DIR 修改），无需自行设置 LLVM_BUILD_DIR 等环境变量。 <br>
 各后端完整构建命令如下： <br>
 
-[iluvatar](/third_party/iluvatar/)
+[iluvatar](https://github.com/FlagTree/flagtree/tree/main/third_party/iluvatar/)
 ```shell
 # 推荐使用镜像 Ubuntu 20.04
 mkdir -p ~/.flagtree/iluvatar; cd ~/.flagtree/iluvatar
-wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/iluvatar-llvm18-x86_64.tar.gz
-tar zxvf iluvatar-llvm18-x86_64.tar.gz
-wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz
-tar zxvf iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64.tar.gz
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/iluvatar-llvm18-x86_64_v0.3.0.tar.gz
+tar zxvf iluvatar-llvm18-x86_64_v0.3.0.tar.gz
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64_v0.3.0.tar.gz
+tar zxvf iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64_v0.3.0.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=iluvatar
 python3 -m pip install . --no-build-isolation -v
 ```
-[xpu (klx)](/third_party/xpu/)
+[xpu (klx)](https://github.com/FlagTree/flagtree/tree/main/third_party/xpu/)
 ```shell
 # 推荐使用镜像（22GB）https://su.bcebos.com/klx-sdk-release-public/xpytorch/docker/ubuntu2004_v030/ubuntu_2004_x86_64_v30.tar
 # 联系 kunlunxin-support@baidu.com 可获取进一步支持
 mkdir -p ~/.flagtree/xpu; cd ~/.flagtree/xpu
-wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/XTDK-llvm19-ubuntu2004_x86_64.tar.gz
-tar zxvf XTDK-llvm19-ubuntu2004_x86_64.tar.gz
-wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/xre-Linux-x86_64.tar.gz
-tar zxvf xre-Linux-x86_64.tar.gz
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/XTDK-llvm19-ubuntu2004_x86_64_v0.3.0.tar.gz
+tar zxvf XTDK-llvm19-ubuntu2004_x86_64_v0.3.0.tar.gz
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/xre-Linux-x86_64_v0.3.0.tar.gz
+tar zxvf xre-Linux-x86_64_v0.3.0.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=xpu
 python3 -m pip install . --no-build-isolation -v
 ```
-[mthreads](/third_party/mthreads/)
+[mthreads](https://github.com/FlagTree/flagtree/tree/main/third_party/mthreads/)
 ```shell
 # 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.10-mthreads
 mkdir -p ~/.flagtree/mthreads; cd ~/.flagtree/mthreads
-wget https://github.com/FlagTree/flagtree/releases/download/v0.1.0-build-deps/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
-tar zxvf mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64.tar.gz
-wget https://github.com/FlagTree/flagtree/releases/download/v0.3.0-build-deps/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
-tar zxvf mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64_v0.1.0.tar.gz
+tar zxvf mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64_v0.1.0.tar.gz
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz
+tar zxvf mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0_v0.3.0.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/python
 export FLAGTREE_BACKEND=mthreads
 python3 -m pip install . --no-build-isolation -v
 ```
 [aipu (arm npu)](https://github.com/FlagTree/flagtree/tree/triton_v3.3.x/third_party/aipu/)
 ```shell
-# 推荐使用镜像 Ubuntu 20.04
+# 推荐使用镜像 Ubuntu 22.04
 mkdir -p ~/.flagtree/aipu; cd ~/.flagtree/aipu
+# 模拟环境中使用 x64 版本，在 ARM 开发板上使用 arm64 版本
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-x64.tar.gz
 tar zxvf llvm-a66376b0-ubuntu-x64.tar.gz
 cd ${YOUR_CODE_DIR}/flagtree/
@@ -75,8 +76,11 @@ python3 -m pip install . --no-build-isolation -v
 ```shell
 # 推荐使用镜像 Ubuntu 20.04
 mkdir -p ~/.flagtree/tsingmicro; cd ~/.flagtree/tsingmicro
-wget https://github.com/FlagTree/flagtree/releases/download/v0.2.0-build-deps/tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-python3.11-x64.tar.gz
-tar zxvf tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-python3.11-x64.tar.gz
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-python3.11-x64_v0.2.0.tar.gz
+tar zxvf tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-python3.11-x64_v0.2.0.tar.gz
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/tx8_depends_release_20250814_195126_v0.2.0.tar.gz
+tar zxvf tx8_depends_release_20250814_195126_v0.2.0.tar.gz
+export TX8_DEPS_ROOT=~/.flagtree/tsingmicro/tx8_deps
 cd ${YOUR_CODE_DIR}/flagtree/
 git checkout -b triton_v3.3.x origin/triton_v3.3.x
 export FLAGTREE_BACKEND=tsingmicro
@@ -105,9 +109,19 @@ git checkout -b triton_v3.2.x origin/triton_v3.2.x
 export FLAGTREE_BACKEND=ascend
 python3 -m pip install . --no-build-isolation -v
 ```
+[hcu](https://github.com/FlagTree/flagtree/tree/main/third_party/hcu/)
+```shell
+# 推荐使用镜像 flagtree/dockerfiles/Dockerfile-ubuntu22.04-python3.10-hcu
+mkdir -p ~/.flagtree/hcu; cd ~/.flagtree/hcu
+wget baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64_v0.3.0.tar.gz
+tar zxvf hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64_v0.3.0.tar.gz
+cd ${YOUR_CODE_DIR}/flagtree/python
+export FLAGTREE_BACKEND=hcu
+python3 -m pip install . --no-build-isolation -v
+```
 
 [nvidia](/third_party/nvidia/)
-使用默认的构建命令，可以构建安装 nvidia、amd、triton_shared (cpu) 后端：
+使用默认的构建命令，可以构建安装 nvidia、amd、triton_shared cpu 后端：
 ```shell
 cd ${YOUR_LLVM_DOWNLOAD_DIR}
 wget https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-10dc3a8e-ubuntu-x64.tar.gz
