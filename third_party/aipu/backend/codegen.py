@@ -1,8 +1,8 @@
 import numpy as np
-import tvm
-from tvm import tir, ir
-from tvm.script.parser import tir as T
-from tvm.compass.dsl import BuildManager, script as S
+#import tvm
+#from tvm import tir, ir
+#from tvm.script.parser import tir as T
+#from tvm.compass.dsl import BuildManager, script as S
 from mlir import ir as mlir_ir
 from mlir.dialects import func
 
