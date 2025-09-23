@@ -1,5 +1,7 @@
 #include "triton/Analysis/AxisInfo.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+
 namespace mlir::triton {
 
 template <class T>
@@ -26,6 +28,16 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
     }
   }
 }
+
+template void AxisInfo::initPessimisticStateFromFunc<mlir::FunctionOpInterface>(
+    int argNumber, mlir::FunctionOpInterface funcOp, AxisInfo::DimVectorT *contiguity,
+    AxisInfo::DimVectorT *divisibility, AxisInfo::DimVectorT *constancy,
+    FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc_ARG spec_arg);
+
+template void AxisInfo::initPessimisticStateFromFunc<mlir::LLVM::LLVMFuncOp>(
+    int argNumber, mlir::LLVM::LLVMFuncOp funcOp, AxisInfo::DimVectorT *contiguity,
+    AxisInfo::DimVectorT *divisibility, AxisInfo::DimVectorT *constancy,
+    FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc_ARG spec_arg);
 
 }
 
