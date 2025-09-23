@@ -695,7 +695,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   // raise exception asap
-  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0]=="*" else "" for i, ty in signature.items()])};       
+  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0]=="*" else "" for i, ty in signature.items()])};
   _launch(kernelName, function, stream, gridX, gridY, gridZ, tensorShapes, tensorKinds, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items())});
   if (PyErr_Occurred()) {{
     return NULL;
