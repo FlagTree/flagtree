@@ -84,10 +84,15 @@ class AIPULauncher(object):
             else:
                 real_args.append(arg)
 
+        need_benchmark = os.getenv("CPS_BENCHMARK")
+
         tec_num = 4
         for i in range((totoal_pid_size + tec_num - 1) // tec_num):
             tail_args[3] = i
-            ex(*(real_args + tail_args))
+            if need_benchmark:
+                print(ex.benchmark(*(real_args + tail_args)))
+            else:
+                ex(*(real_args + tail_args))
 
         for i, arg in enumerate(real_args):
             if i in convert_map.keys():
