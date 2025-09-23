@@ -13,8 +13,6 @@
 #include <optional>
 #include <type_traits>
 
-#define FLAGTREE_SPEC_CorexFlag
-#define FLAGTREE_SPEC_AxisInfo_getCorexFlag
 #include "flagtree_spec.h"
 
 namespace mlir::triton {

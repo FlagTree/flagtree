@@ -8,7 +8,6 @@ add_triton_library(TritonAnalysis
   DEPENDS
   TritonTableGen
   TritonGPUAttrDefsIncGen
-  FlagTree_${FLAGTREE_BACKEND}_TritonAnalysis
 
   LINK_LIBS PUBLIC
   MLIRAnalysis
