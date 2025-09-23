@@ -15,7 +15,7 @@
 
 #define FLAGTREE_SPEC_CorexFlag
 #define FLAGTREE_SPEC_AxisInfo_getCorexFlag
-#include "third_party/iluvatar/backend/flagtree_backend_specialization/include/flagtree_spec.h"
+#include "flagtree_spec.h"
 
 namespace mlir::triton {
 

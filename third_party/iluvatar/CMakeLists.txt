@@ -1,6 +1,7 @@
+include_directories(backend/flagtree_backend_specialization/include)
+add_subdirectory(backend/flagtree_backend_specialization/lib)
 add_subdirectory(include)
 add_subdirectory(lib)
-add_subdirectory(backend/flagtree_backend_specialization/lib)
 
 if(TRITON_BUILD_PYTHON_MODULE)
   if(FLAGTREE_PLUGIN)
