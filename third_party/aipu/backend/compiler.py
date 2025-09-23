@@ -37,6 +37,7 @@ from triton.backends.compiler import (
     register_descriptor,
 )
 
+
 def min_dot_size(target: GPUTarget):
     return lambda lhsType, rhsType: (1, 1, 1)
 
@@ -77,12 +78,14 @@ class AIPUOptions:
         key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+
 class AscendAttrsDescriptor(AttrsDescriptor):
 
     # For now we collect shapes of tensor at runtime.
     # We comment out the following func but keep it for future reference.
     def _add_backend_properties(self, params=None, values=None):
         pass
+
 
 def __get_metadata_attr_by_callback(lib, postfix: str, metadata, meta_key: str):
     func_symbol = metadata["kernel_name"] + postfix
@@ -106,6 +109,7 @@ def _parse_linalg_metadata(linalg: str, metadata: dict):
     metadata["tensor_kinds"] = [int(kind) for _, kind in re.findall(TENSOR_KIND_REGEX, linalg)]
     linalg = re.sub(REMOVE_MIX_MODE_REGEX, "", linalg)
     return linalg, metadata
+
 
 def linalg_to_bin_enable_npu_compile(linalg: str, metadata, opt):
 
@@ -157,7 +161,7 @@ def linalg_to_bin_enable_npu_compile(linalg: str, metadata, opt):
         limit_auto_multi_buffer_only_for_local_buffer = opt.limit_auto_multi_buffer_only_for_local_buffer
         if limit_auto_multi_buffer_only_for_local_buffer is not None:
             _compile_option_list += \
-                [f"--limit-auto-multi-buffer-only-for-local-buffer={limit_auto_multi_buffer_only_for_local_buffer}"]    
+                [f"--limit-auto-multi-buffer-only-for-local-buffer={limit_auto_multi_buffer_only_for_local_buffer}"]
 
         set_workspace_multibuffer = opt.set_workspace_multibuffer
         if set_workspace_multibuffer is not None:
@@ -188,17 +192,13 @@ def linalg_to_bin_enable_npu_compile(linalg: str, metadata, opt):
                 bishengir_hivm_opt,
                 "--enable-triton-kernel-compile=true",
             ]
-        cmd_list = (
-            [npu_compiler_path, ttadapter_path]
-            + _compile_option_list
-            + ["-o", bin_file]
-        )
+        cmd_list = ([npu_compiler_path, ttadapter_path] + _compile_option_list + ["-o", bin_file])
         ret = subprocess.run(cmd_list, capture_output=True, check=True)
         if Path(callback_path).is_file():
             lib = ctypes.CDLL(callback_path)
             __get_metadata_attr_by_callback(lib, "_infer_workspace_shape_function", metadata, "workspace_size")
             __get_metadata_attr_by_callback(lib, "_infer_sync_block_lock_num_function", metadata, "lock_num")
-            __get_metadata_attr_by_callback(lib, "_infer_sync_block_lock_init_function", metadata, "lock_init_val")     
+            __get_metadata_attr_by_callback(lib, "_infer_sync_block_lock_init_function", metadata, "lock_init_val")
 
         return Path(bin_path).read_bytes()
 
@@ -279,7 +279,6 @@ class AscendBackend(BaseBackend):
         aipu.passes.convert.add_triton_to_linalg_pipeline(pm)
         pm.run(mod)
         return mod
-
 
     @staticmethod
     def make_npubin(mod, metadata, opt):
