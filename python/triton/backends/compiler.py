@@ -48,7 +48,7 @@ class AttrsDescriptor:
             "prop1": val1
         }
 
-    `constant_properties`: a set containing the properties that can be used to determine if a parameter is constant     
+    `constant_properties`: a set containing the properties that can be used to determine if a parameter is constant
 
     """
     __slots__ = ('divisibility_16', 'equal_to_1', 'arg_properties', 'property_values', 'constant_properties')
