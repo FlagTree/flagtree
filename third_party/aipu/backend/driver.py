@@ -18,7 +18,9 @@ from triton.backends.aipu.utils import (
     _is_auto_map_parallel_blocks_enabled,
 )
 
+
 class NPUUtils(object):
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(NPUUtils, cls).__new__(cls)
@@ -73,6 +75,7 @@ class NPUUtils(object):
 
 
 class NPULauncher(object):
+
     def __init__(self, src, metadata):
         debug_mode = metadata.debug
         workspace_size = int(metadata.workspace_size) \
@@ -102,6 +105,7 @@ class NPULauncher(object):
 
 
 class NPUDriver(DriverBase):
+
     def __init__(self):
         self.utils = NPUUtils()
         self.launcher_cls = NPULauncher
@@ -109,11 +113,13 @@ class NPUDriver(DriverBase):
 
     @classmethod
     def is_active(cls):
+
         def test_npucompiler():
             from triton.backends.aipu.utils import _get_bisheng_path
             npucompiler = _get_bisheng_path()
             targets = subprocess.check_output([npucompiler, "-print-targets"]).decode().strip().split()
             return "hiipu64" in targets
+
         try:
             return test_npucompiler()
         except Exception as e_npucompiler:
@@ -128,6 +134,7 @@ class NPUDriver(DriverBase):
         arch = self.utils.get_arch()
         warp_size = 0
         return GPUTarget(backend, arch, warp_size)
+
     def get_active_torch_device(self):
         import torch
         import torch_npu
@@ -192,7 +199,7 @@ def make_npu_launcher_stub(src, debug=False):
     if debug:
         dump_manager = get_dump_manager(so_cache_key)
         print(f"Dumping {name}.cxx to {dump_manager.cache_dir}")
-        dump_manager.put(src, f"{name}.cxx", binary = False)
+        dump_manager.put(src, f"{name}.cxx", binary=False)
 
     cache_path = so_cache_manager.get_file(so_name)
     if cache_path is not None:
@@ -349,14 +356,11 @@ def generate_npu_wrapper_src(constants, signature, workspace_size, mix_mode, loc
 
     grid_info = {'X': 'i32', 'Y': 'i32', 'Z': 'i32'}
 
-    enable_device_print = os.getenv(
-        "TRITON_DEVICE_PRINT", 'false').lower() in ('true', '1')
-    enable_taskqueue = os.getenv(
-        "TRITON_ENABLE_TASKQUEUE", 'true').lower() in ('true', '1')
+    enable_device_print = os.getenv("TRITON_DEVICE_PRINT", 'false').lower() in ('true', '1')
+    enable_taskqueue = os.getenv("TRITON_ENABLE_TASKQUEUE", 'true').lower() in ('true', '1')
     enable_auto_map_parallel_blocks = _is_auto_map_parallel_blocks_enabled()
     npu_utils = NPUUtils()
-    num_physical_blocks = npu_utils.get_aivector_core_num(
-    ) if mix_mode == "aiv" else npu_utils.get_aicore_num()
+    num_physical_blocks = npu_utils.get_aivector_core_num() if mix_mode == "aiv" else npu_utils.get_aicore_num()
     task_type = "MSPROF_GE_TASK_TYPE_AIV" if mix_mode == "aiv" else "MSPROF_GE_TASK_TYPE_AI_CORE"
     LINE_CHANGE_CHAR = chr(10)  # it is \n
 
@@ -596,7 +600,7 @@ static void _launch(const char* kernelName, const void* func, rtStream_t stream,
       static_cast<void*>(ffts_addr),
       static_cast<void*>(syncBlockLock),
       static_cast<void*>(workspace_addr),
-      {', '.join(f'static_cast<{_ty_to_cpp(ty)}>(arg{i})' for i, ty in signature.items() if i not in constants)},       
+      {', '.join(f'static_cast<{_ty_to_cpp(ty)}>(arg{i})' for i, ty in signature.items() if i not in constants)},
       {', '.join(f'static_cast<{_ty_to_cpp(ty)}>(grid{mark})' for mark, ty in grid_info.items())}
       {', static_cast<void*>(DTData)' if enable_device_print else ''}
     }};
@@ -691,7 +695,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   // raise exception asap
-  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0]=="*" else "" for i, ty in signature.items()])};
+  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0]=="*" else "" for i, ty in signature.items()])};       
   _launch(kernelName, function, stream, gridX, gridY, gridZ, tensorShapes, tensorKinds, {', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items())});
   if (PyErr_Occurred()) {{
     return NULL;
