@@ -15,7 +15,7 @@
 
 #define FLAGTREE_SPEC_CorexFlag
 #define FLAGTREE_SPEC_AxisInfo_getCorexFlag
-#define FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc
+#include "third_party/iluvatar/backend/flagtree_backend_specialization/include/flagtree_spec.h"
 
 namespace mlir::triton {
 
@@ -140,15 +140,17 @@ public:
 
   std::optional<int64_t> getConstantValue() const { return constantValue; }
 
-#ifndef FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc
+#ifdef FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc_ARG
+  template <class T>
+  static void
+  initPessimisticStateFromFunc(int argNumber, T funcOp, DimVectorT *contiguity,
+                               DimVectorT *divisibility, DimVectorT *constancy,
+                               FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc_ARG spec_arg);
+#else
   template <class T>
   static void
   initPessimisticStateFromFunc(int argNumber, T funcOp, DimVectorT *contiguity,
                                DimVectorT *divisibility, DimVectorT *constancy);
-#else
-// #define initPessimisticStateFromFunc FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc
-  template <class T>
-  std::function<static void(int, T, DimVectorT*, DimVectorT*, DimVectorT*, DimVectorT*)> initPessimisticStateFromFunc = FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc;
 #endif
 
 #ifndef __ILUVATAR__
