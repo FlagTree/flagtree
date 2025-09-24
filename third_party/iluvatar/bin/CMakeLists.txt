@@ -1,8 +1,8 @@
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
-
 add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
+find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
 
 # TODO: what's this?
 llvm_update_compile_flags(triton-opt)
