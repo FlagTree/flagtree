@@ -89,4 +89,16 @@ target_link_libraries(triton-llvm-opt PRIVATE
   LLVMOption
   LLVMCodeGen
   )
+
+find_library(iluvatarTritonPluginLib
+  NAMES
+    iluvatarTritonPlugin.so
+  PATHS
+    ${FLAGTREE_PLUGIN_DIR}
+  REQUIRED
+  )
+  
+add_triton_plugin(TritonILUVATAR
+  SHARED_LIB ${iluvatarTritonPluginLib}
+)
 export_executable_symbols_for_plugins(triton-llvm-opt)

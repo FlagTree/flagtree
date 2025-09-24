@@ -33,9 +33,9 @@ static std::optional<std::string> get_env(std::string_view key) {
 
 static void *load_backend_plugin(const char *backend_name) {
   const std::string lib_name =
-      get_env("HOME").value_or("") + "/.flagtree/" + std::string(backend_name);
+      get_env("HOME").value_or("nobackend") + "/.flagtree/" + std::string(backend_name);
   const std::string &plugin_path =
-      get_env("FLAGTREE_BACKEND_PLUGIN_LIB_DIR").value_or(lib_name) + "/" +
+      get_env("FLAGTREE_BACKEND_PLUGIN_LIB_DIR").value_or(DEFAULT_PLUGIN_DIR) + "/" +
       backend_name + "TritonPlugin.so";
   void *handle = dlopen(plugin_path.c_str(), RTLD_LAZY);
   if (!handle) {

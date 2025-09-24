@@ -425,6 +425,11 @@ class CMakeBuild(build_ext):
             cmake_args += self.get_proton_cmake_args()
         else:
             cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
+        
+        if help.flagtree_backend=="iluvatar":
+            src_plugin_path=helper.cache.dir_path+"/iluvatar/iluvatarTrironPlugin.so"
+            dst_plugin_path= sysconfig.get_paths()['purelib']+"/triton/_C/iluvatarTritonPlugin.so"
+            shutil.copy(src_plugin_path, dst_plugin_path)
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
