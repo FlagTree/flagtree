@@ -1,6 +1,5 @@
 add_subdirectory(include)
 add_subdirectory(lib)
-
 find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
 set (MTHREADS_PLUGIN_DIR "${Python3_SITELIB}/triton/_C")
 

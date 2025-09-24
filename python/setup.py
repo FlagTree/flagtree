@@ -434,7 +434,6 @@ class CMakeBuild(build_ext):
             dst_plugin_path = dst_plugin_dir+"/"+helper.flagtree_backend+"TritonPlugin.so"
             shutil.copy(src_plugin_path, dst_plugin_path)
 
-
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
