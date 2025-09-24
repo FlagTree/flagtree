@@ -90,7 +90,6 @@ target_link_libraries(triton-llvm-opt PRIVATE
   LLVMCodeGen
   )
 
-endif()
 add_triton_plugin(TritonILUVATAR
   SHARED_LIB ${iluvatarTritonPluginLib}
 )
