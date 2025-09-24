@@ -27,7 +27,7 @@ public:
   typedef SmallVector<int64_t> DimVectorT;
 
 public:
-#ifndef __ILUVATAR__
+#ifndef FLAGTREE_SPEC_AxisInfo_CorexFlag
   AxisInfo() : AxisInfo({}, {}, {}) {}
 
   AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy)
@@ -127,7 +127,7 @@ public:
   int64_t getConstancy(size_t dim) const { return constancy[dim]; }
   const DimVectorT &getConstancy() const { return constancy; }
 
-#ifdef FLAGTREE_SPEC_AxisInfo_getCorexFlag
+#ifdef FLAGTREE_SPEC_AxisInfo_CorexFlag
   // corexFlag is used to determine whether special instructions can be used to
   // accelerate data loading.
   int64_t getCorexFlag(size_t dim) const { return corexFlag[dim]; }
@@ -151,26 +151,20 @@ public:
                                DimVectorT *divisibility, DimVectorT *constancy);
 #endif
 
-#ifndef __ILUVATAR__
   bool operator==(const AxisInfo &other) const {
     return contiguity == other.contiguity &&
            divisibility == other.divisibility && constancy == other.constancy &&
+#ifdef FLAGTREE_SPEC_AxisInfo_CorexFlag
+           corexFlag == other.corexFlag &&
+#endif
            constantValue == other.constantValue;
   }
-#else
-  bool operator==(const AxisInfo &other) const {
-    return contiguity == other.contiguity &&
-           divisibility == other.divisibility && constancy == other.constancy &&
-           corexFlag == other.corexFlag && constantValue == other.constantValue;
-  }
-#endif
 
   static AxisInfo getPessimisticValueState(Value value);
 
   // The gcd of both arguments for each dimension
   static AxisInfo join(const AxisInfo &lhs, const AxisInfo &rhs);
 
-#ifndef __ILUVATAR__
   void print(raw_ostream &os) const {
     auto print = [&](StringRef name, DimVectorT vec) {
       os << name << " = [";
@@ -180,30 +174,15 @@ public:
     print("contiguity", contiguity);
     print(", divisibility", divisibility);
     print(", constancy", constancy);
-    os << ", constant_value = ";
-    if (constantValue)
-      os << *constantValue;
-    else
-      os << "<none>";
-  }
-#else
-  void print(raw_ostream &os) const {
-    auto print = [&](StringRef name, DimVectorT vec) {
-      os << name << " = [";
-      llvm::interleaveComma(vec, os);
-      os << "]";
-    };
-    print("contiguity", contiguity);
-    print(", divisibility", divisibility);
-    print(", constancy", constancy);
+#ifdef FLAGTREE_SPEC_AxisInfo_CorexFlag
     print(", corexflag", corexFlag);
+#endif
     os << ", constant_value = ";
     if (constantValue)
       os << *constantValue;
     else
       os << "<none>";
   }
-#endif
 
 private:
   DimVectorT contiguity;
@@ -212,7 +191,7 @@ private:
 
   // The constant value of the lattice if we can infer it.
   std::optional<int64_t> constantValue;
-#ifdef FLAGTREE_SPEC_CorexFlag
+#ifdef FLAGTREE_SPEC_AxisInfo_CorexFlag
   DimVectorT corexFlag;
 #endif
 };

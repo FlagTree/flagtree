@@ -1,8 +1,7 @@
 #ifndef ILUVATAR_TRITON_ANALYSIS_AXISINFO_H
 #define ILUVATAR_TRITON_ANALYSIS_AXISINFO_H
 
-#define FLAGTREE_SPEC_CorexFlag
-#define FLAGTREE_SPEC_AxisInfo_getCorexFlag
+#define FLAGTREE_SPEC_AxisInfo_CorexFlag
 #define FLAGTREE_SPEC_AxisInfo_initPessimisticStateFromFunc_ARG AxisInfo::DimVectorT *
 
 #endif
