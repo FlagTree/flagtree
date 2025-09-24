@@ -71,6 +71,13 @@ set_target_properties(triton-lsp PROPERTIES
 
 mlir_check_all_link_libraries(triton-lsp)
 
+find_library(iluvatarTritonPluginLib
+  NAMES
+    iluvatarTritonPlugin.so
+  PATHS
+    ${FLAGTREE_PLUGIN_DIR}
+  REQUIRED
+  )
 
 add_llvm_executable(triton-llvm-opt
   triton-llvm-opt.cpp

@@ -89,14 +89,7 @@ target_link_libraries(triton-llvm-opt PRIVATE
   LLVMOption
   LLVMCodeGen
   )
-if(FLAGTREE_BACKEND STREQUAL "iluvatar")
-  find_library(iluvatarTritonPluginLib
-    NAMES
-      iluvatarTritonPlugin.so
-    PATHS
-      ${FLAGTREE_PLUGIN_DIR}
-    REQUIRED
-    )
+
 endif()
 add_triton_plugin(TritonILUVATAR
   SHARED_LIB ${iluvatarTritonPluginLib}
