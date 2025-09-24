@@ -4,7 +4,7 @@ import os
 from . import tools, ascend, cambricon, xpu
 from .tools import OfflineBuildManager, flagtree_submodule_dir
 
-flagtree_submoduels = {
+flagtree_submodules = {
     "triton_shared":
     tools.Module(name="triton_shared", url="https://github.com/microsoft/triton-shared.git",
                  commit_id="380b87122c88af131530903a702d5318ec59bb33",
