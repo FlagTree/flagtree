@@ -1,6 +1,9 @@
 add_subdirectory(include)
 add_subdirectory(lib)
 
+find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+set (MTHREADS_PLUGIN_DIR "${Python3_SITELIB}/triton/_C")
+
 if(TRITON_BUILD_PYTHON_MODULE)
   if(FLAGTREE_PLUGIN)
     add_subdirectory(plugin)
@@ -12,7 +15,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
       NAMES
         mthreadsTritonPlugin.so
       PATHS
-        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${MTHREADS_PLUGIN_DIR}
       REQUIRED
     )
     add_triton_plugin(TritonMTHREADS

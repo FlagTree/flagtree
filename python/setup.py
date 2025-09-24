@@ -426,13 +426,14 @@ class CMakeBuild(build_ext):
         else:
             cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
 
-        if helper.flagtree_backend == "iluvatar":
-            src_plugin_path = str(os.getenv("HOME")) + "/.flagtree/iluvatar/iluvatarTritonPlugin.so"
+        if helper.flagtree_backend in ["iluvatar","mthreads"]:
+            src_plugin_path = str(os.getenv("HOME")) + "/.flagtree/"+helper.flagtree_backend+"/"+helper.flagtree_backend+"TritonPlugin.so"
             dst_plugin_dir = sysconfig.get_paths()['purelib'] + "/triton/_C"
             if not os.path.exists(dst_plugin_dir):
                os.makedirs(dst_plugin_dir)
-            dst_plugin_path = dst_plugin_dir+"/iluvatarTritonPlugin.so"
+            dst_plugin_path = dst_plugin_dir+"/"+helper.flagtree_backend+"TritonPlugin.so"
             shutil.copy(src_plugin_path, dst_plugin_path)
+
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
