@@ -808,10 +808,10 @@ multiRootTopologicalSort(const SetVector<Operation *> &toSort) {
   return res;
 }
 
+#ifndef FLAGTREE_SPEC_Utility_multiRootGetSlice_ARG
 SetVector<Operation *> multiRootGetSlice(Operation *op,
                                          TransitiveFilter backwardFilter,
-                                         TransitiveFilter forwardFilter,
-                                         bool omitBlockArguments) {
+                                         TransitiveFilter forwardFilter) {
   SetVector<Operation *> slice;
   slice.insert(op);
 
@@ -825,12 +825,7 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
     opt.filter = backwardFilter;
-#ifdef __ILUVATAR__
-    getBackwardSliceCorex(currentOp, &backwardSlice, opt.filter,
-                          opt.omitBlockArguments);
-#elif
     getBackwardSlice(currentOp, &backwardSlice, opt);
-#endif
     slice.insert(backwardSlice.begin(), backwardSlice.end());
 
     // Compute and insert the forwardSlice starting from currentOp.
@@ -841,6 +836,7 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
   }
   return multiRootTopologicalSort(slice);
 }
+#endif
 
 namespace {
 // Copied from TestDeadCodeAnalysis.cpp, because some dead code analysis

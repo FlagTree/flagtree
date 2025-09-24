@@ -2,5 +2,6 @@
 #define ILUVATAR_TRITON_ANALYSIS_UTILITY_H
 
 #define FLAGTREE_SPEC_Utility_Function
+#define FLAGTREE_SPEC_Utility_multiRootGetSlice_ARG bool
 
 #endif // TRITON_ANALYSIS_UTILITY_H
