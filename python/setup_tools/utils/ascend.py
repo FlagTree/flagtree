@@ -120,7 +120,7 @@ def precompile_hock(*args, **kargs):
     shutil.copytree(ascend_src_path, ascend_path, dirs_exist_ok=True)
     shutil.copytree(patch_src_path, patch_path, dirs_exist_ok=True)
     shutil.rmtree(project_path)
-    [downloader.download(submodule, required=False) for submodule in submodules]
+    [downloader.download(module=submodule, required=False) for submodule in submodules]
     cmake_patch_copy()
     patched_code = """  set(triton_abs_dir "${TRITON_ROOT_DIR}/include/triton/Dialect/Triton/IR") """
     src_code = """set(triton_abs_dir"""
