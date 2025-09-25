@@ -8,6 +8,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+#include "triton/../../backend/flagtree_backend_specialization/include/flagtree_spec.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
