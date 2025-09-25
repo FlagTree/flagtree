@@ -1,11 +1,13 @@
 import os
 import shutil
 from pathlib import Path
-from setup_tools.utils.tools import flagtree_root_dir, Module, flagtree_submoduel_dir, download_module
+from setup_tools.utils.tools import flagtree_root_dir, Module, flagtree_submodule_dir, DownloadManager
+
+downloader = DownloadManager()
 
 submodules = (Module(name="ascendnpu-ir", url="https://gitee.com/ascend/ascendnpu-ir.git",
                      commit_id="1505845986bc26cd2f7f36b3e6132f605331c8f8",
-                     dst_path=os.path.join(flagtree_submoduel_dir, "ascend/third_party/ascendnpu-ir")), )
+                     dst_path=os.path.join(flagtree_submodule_dir, "ascend/third_party/ascendnpu-ir")), )
 
 
 def get_backend_cmake_args(*args, **kargs):
@@ -52,10 +54,10 @@ def create_symlink_for_triton(link_map):
 
 def cmake_patch_copy():
     src_path = os.path.join(flagtree_root_dir, "python/setup_tools/utils/src/ascend/CMakeLists.txt")
-    if os.path.exists(os.path.join(flagtree_submoduel_dir, "ascend")):
-        dst_path = os.path.join(flagtree_submoduel_dir, "ascend/triton-adapter/CMakeLists.txt")
+    if os.path.exists(os.path.join(flagtree_submodule_dir, "ascend")):
+        dst_path = os.path.join(flagtree_submodule_dir, "ascend/triton-adapter/CMakeLists.txt")
     else:
-        dst_path = os.path.join(flagtree_submoduel_dir, "triton_ascend/ascend/triton-adapter/CMakeLists.txt")
+        dst_path = os.path.join(flagtree_submodule_dir, "triton_ascend/ascend/triton-adapter/CMakeLists.txt")
     if not os.path.exists(src_path):
         raise RuntimeError(f"Source file {src_path} does not exist.")
     shutil.copyfile(src_path, dst_path)
@@ -118,7 +120,7 @@ def precompile_hock(*args, **kargs):
     shutil.copytree(ascend_src_path, ascend_path, dirs_exist_ok=True)
     shutil.copytree(patch_src_path, patch_path, dirs_exist_ok=True)
     shutil.rmtree(project_path)
-    [download_module(submodule, required=False) for submodule in submodules]
+    [downloader.download(module=submodule, required=False) for submodule in submodules]
     cmake_patch_copy()
     patched_code = """  set(triton_abs_dir "${TRITON_ROOT_DIR}/include/triton/Dialect/Triton/IR") """
     src_code = """set(triton_abs_dir"""

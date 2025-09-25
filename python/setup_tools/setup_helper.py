@@ -2,10 +2,6 @@ import os
 import shutil
 import sys
 import functools
-import tarfile
-import zipfile
-from io import BytesIO
-import urllib.request
 from pathlib import Path
 import hashlib
 from distutils.sysconfig import get_python_lib
@@ -20,6 +16,7 @@ flagtree_plugin = os.getenv("FLAGTREE_PLUGIN", "").lower()
 offline_build = os.getenv("FLAGTREE_PLUGIN", "OFF")
 device_mapping = {"xpu": "xpu", "mthreads": "musa", "ascend": "ascend", "cambricon": "mlu"}
 activated_module = utils.activate(flagtree_backend)
+downloader = utils.tools.DownloadManager()
 
 set_llvm_env = lambda path: set_env({
     'LLVM_INCLUDE_DIRS': Path(path) / "include",
@@ -92,13 +89,23 @@ def dir_rollback(deep, base_path):
     return Path(base_path)
 
 
+def enable_flagtree_third_party(name):
+    if name in ["triton_shared"]:
+        return os.environ.get(f"USE_{name.upper()}", 'OFF') == 'OFF'
+    else:
+        return os.environ.get(f"USE_{name.upper()}", 'ON') == 'ON'
+
+
 def download_flagtree_third_party(name, condition, required=False, hock=None):
     if condition:
-        submoduel = utils.flagtree_submoduels[name]
-        succ = utils.download_module(submoduel, required)
-        if succ:
+        if enable_flagtree_third_party(name):
+            submodule = utils.flagtree_submodules[name]
+            downloader.download(module=submodule, required=required)
             if callable(hock):
-                hock(third_party_base_dir=utils.flagtree_submoduel_dir, backend=submoduel)
+                hock(third_party_base_dir=utils.flagtree_submodule_dir, backend=submodule,
+                     default_backends=default_backends)
+        else:
+            print(f"\033[1;33m[Note] Skip downloading {name} since USE_{name.upper()} is set to OFF\033[0m")
 
 
 def configure_cambricon_packages_and_data(packages, package_dir, package_data):
@@ -159,41 +166,6 @@ class FlagTreeCache:
             while chunk := file.read(4096):
                 md5_hash.update(chunk)
         return md5_hash.hexdigest()
-
-    def _download(self, url, path, file_name):
-        MAX_RETRY_COUNT = 4
-        user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0'
-        headers = {
-            'User-Agent': user_agent,
-        }
-        request = urllib.request.Request(url, None, headers)
-        retry_count = MAX_RETRY_COUNT
-        content = None
-        print(f'downloading {url} ...')
-        while (retry_count):
-            try:
-                with urllib.request.urlopen(request, timeout=300) as response:
-                    content = response.read()
-                    break
-            except Exception:
-                retry_count -= 1
-                print(f"\n[{MAX_RETRY_COUNT - retry_count}] retry to downloading and extracting {url}")
-
-        if retry_count == 0:
-            raise RuntimeError("The download failed, probably due to network problems")
-
-        print(f'extracting {url} ...')
-        file_bytes = BytesIO(content)
-        file_names = []
-        if url.endswith(".zip"):
-            with zipfile.ZipFile(file_bytes, "r") as file:
-                file.extractall(path=path)
-                file_names = file.namelist()
-        else:
-            with tarfile.open(fileobj=file_bytes, mode="r|*") as file:
-                file.extractall(path=path)
-                file_names = file.getnames()
-        os.rename(Path(path) / file_names[0], Path(path) / file_name)
 
     def check_file(self, file_name=None, url=None, path=None, md5_digest=None):
         origin_file_path = None
@@ -256,7 +228,7 @@ class FlagTreeCache:
                     return
 
         if is_url and not self.check_file(file_name=file, url=url, md5_digest=md5_digest):
-            self._download(url, path, file_name=file)
+            downloader.download(url=url, path=path, file_name=file)
 
         if copy_dst_path is not None:
             file_lists = [file] if files is None else list(files)
