@@ -36,9 +36,9 @@ static void *load_backend_plugin(const char *backend_name) {
       std::string(DEFAULT_PLUGIN_DIR) + "/" + backend_name + "TritonPlugin.so";
   void *handle = dlopen(lib_name.c_str(), RTLD_LAZY);
   if (!handle) {
-    std::cerr << "Warnings: can not find Plugin.so at default path"
+    std::cerr << "Warnings: can not find Plugin.so at default path\n"
                  "We will get the Plugin.so from "
-                 "$ENV{FLAGTREE_BACKEND_PLUGIN_LIB_DIR}"
+                 "$E}"
                  " and help you copy it to default path\n";
     if (auto lib_dir = get_env("FLAGTREE_BACKEND_PLUGIN_LIB_DIR")) {
       const std::string src_path =
