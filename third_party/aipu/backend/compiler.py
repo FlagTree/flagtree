@@ -61,8 +61,30 @@ class AIPUOptions:
     reg_inc_consumer: int = -1
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
 
-    enable_npu_compile: bool = False
+    debug: bool = False
+    sanitize_overflow: bool = True
+    llvm_version: int = 15
+    kernel_name: str = "triton_"
+
+    cluster_dims: tuple = (1, 1, 1)
+    num_warps: int = -1
+    num_ctas: int = -1
+    num_stages: int = 2
+    num_buffers_warp_spec: int = 0
+    num_consumer_groups: int = 0
+    reg_dec_producer: int = 0
+    reg_inc_consumer: int = 0
+
+    enable_warp_specialization: bool = False
     enable_nd2nz_on_vector: bool = False
+    enable_persistent: bool = False
+    optimize_epilogue: bool = False
+    enable_fp_fusion: bool = True
+    allow_fp8e4nv: bool = False
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", "hf32")
+    max_num_imprecise_acc_default: bool = None
+    extern_libs: dict = None
+
     multibuffer: bool = None
     enable_hivm_auto_cv_balance: bool = None
     unit_flag: bool = None
@@ -72,6 +94,8 @@ class AIPUOptions:
     set_workspace_multibuffer: int = None
     tile_mix_vector_loop: int = None
     tile_mix_cube_loop: int = None
+
+    stream: int = None
 
     def hash(self):
         hash_dict = dict(self.__dict__)
@@ -219,28 +243,24 @@ class AscendBackend(BaseBackend):
         return AIPUOptions(**{k: opts[k] for k in AIPUOptions.__dataclass_fields__.keys() if k in opts})
 
     def pack_metadata(self, metadata):
-
-        if hasattr(metadata, 'kernel_name') and hasattr(metadata, 'tensor_kinds'):
-            KERNEL_NAME_MAX_LEN = 49
-            kernel_name_orig = metadata.kernel_name
-            if len(kernel_name_orig) > KERNEL_NAME_MAX_LEN:
-                kernel_name = kernel_name_orig[-KERNEL_NAME_MAX_LEN:]
-            else:
-                kernel_name = kernel_name_orig
-            return {
-                "kernel_name": kernel_name,
-                "hash": metadata.hash,
-                "debug": metadata.debug,
-                "tensor_kinds": metadata.tensor_kinds,
-            }
+        # collect necessary metadata to launch kernels
+        # TORCHINDUCTOR_UNIQUE_KERNEL_NAMES=1 could set unique name.
+        # Get this name as the kernel_name to CANN runtime.
+        # kernel_name is unique to Ascend backend and should not be public.
+        # CANN runtime limits the length of kernel name <= 50.
+        # Considering '\n' is appended, thus the real kernel name <= 49.
+        KERNEL_NAME_MAX_LEN = 49
+        kernel_name_orig, mix_mode = metadata.name.split()
+        if len(kernel_name_orig) > KERNEL_NAME_MAX_LEN:
+            kernel_name = kernel_name_orig[-KERNEL_NAME_MAX_LEN:]
         else:
-            return (
-                metadata.num_tecs,
-                metadata.num_cores,
-                metadata.cluster_dims[0],
-                metadata.cluster_dims[1],
-                metadata.cluster_dims[2],
-            )
+            kernel_name = kernel_name_orig
+        return {
+            "kernel_name": kernel_name,
+            "hash": metadata.hash,
+            "debug": metadata.debug,
+            "tensor_kinds": metadata.tensor_kinds,
+        }
 
     def get_codegen_implementation(self, options):
         codegen_fns = {"min_dot_size": min_dot_size(self.target)}
