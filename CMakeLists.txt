@@ -205,6 +205,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   else()
     # Otherwise, we might be building from top CMakeLists.txt directly.
     # Try to find Python and pybind11 packages.
+    find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
     find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
     include_directories(${Python3_INCLUDE_DIRS})
     include_directories(${pybind11_INCLUDE_DIR})
