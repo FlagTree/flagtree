@@ -4,11 +4,11 @@
 #include <cassert>
 #include <cstdlib>
 #include <dlfcn.h>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
-#include<filesystem>
 
 #define DEFINE_LOAD_FUNC(symbol_name)                                          \
   static symbol_name##Func load_##symbol_name##_func(const char *backend_name, \
@@ -32,25 +32,29 @@ static std::optional<std::string> get_env(std::string_view key) {
   return std::nullopt;
 }
 static void *load_backend_plugin(const char *backend_name) {
-  const std::string lib_name =  std::string(DEFAULT_PLUGIN_DIR) +"/" + backend_name + "TritonPlugin.so";
+  const std::string lib_name =
+      std::string(DEFAULT_PLUGIN_DIR) + "/" + backend_name + "TritonPlugin.so";
   void *handle = dlopen(lib_name.c_str(), RTLD_LAZY);
   if (!handle) {
-    std::cerr<<"Warnings: can not find Plugin.so at default path"
-              "We will get the Plugin.so from $ENV{FLAGTREE_BACKEND_PLUGIN_LIB_DIR}"
-              " and help you copy it to default path\n";
-    if(auto lib_dir = get_env("FLAGTREE_BACKEND_PLUGIN_LIB_DIR")){
-      const std::string src_path=*lib_dir+"/"+backend_name+"TritonPlugin.so";
-      if(!std::filesystem::copy_file(src_path,lib_name))
-      {
+    std::cerr << "Warnings: can not find Plugin.so at default path"
+                 "We will get the Plugin.so from "
+                 "$ENV{FLAGTREE_BACKEND_PLUGIN_LIB_DIR}"
+                 " and help you copy it to default path\n";
+    if (auto lib_dir = get_env("FLAGTREE_BACKEND_PLUGIN_LIB_DIR")) {
+      const std::string src_path =
+          *lib_dir + "/" + backend_name + "TritonPlugin.so";
+      if (!std::filesystem::copy_file(src_path, lib_name)) {
         std::cout << "Could not copy the share library \n";
       }
-      handle=dlopen(lib_name.c_str(), RTLD_LAZY);
+      handle = dlopen(lib_name.c_str(), RTLD_LAZY);
     }
   }
   if (!handle) {
-    std::cerr << "Failed to load plugin: " << std::string(dlerror()) <<'\n';
-    std::cerr << "We could not find your shared library in the default directory, nor could we find the environment variable. "
-                 "If you haven't downloaded the shared library yet, please download it from the following URLs:\n"
+    std::cerr << "Failed to load plugin: " << std::string(dlerror()) << '\n';
+    std::cerr << "We could not find your shared library in the default "
+                 "directory, nor could we find the environment variable. "
+                 "If you haven't downloaded the shared library yet, please "
+                 "download it from the following URLs:\n"
                  "{\"backend\":\"iluvatar\",\"urls\":\"https://github.com/"
                  "FlagTree/flagtree/releases/download/"
                  "v0.3.0-build-deps/"
@@ -60,7 +64,8 @@ static void *load_backend_plugin(const char *backend_name) {
                  "FlagTree/flagtree/releases/download/v0.3.0-build-deps/"
                  "mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-"
                  "cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz\"},\n"
-                 "then set $ENV{FLAGTREE_BACKEND_PLUGIN_LIB_DIR} to the directory where the shared library is located.\n";
+                 "then set $ENV{FLAGTREE_BACKEND_PLUGIN_LIB_DIR} to the "
+                 "directory where the shared library is located.\n";
     assert(handle);
   }
   return handle;

@@ -424,10 +424,9 @@ cache.store(
     post_hock=set_llvm_env,
 )
 
-
 if flagtree_backend in ["iluvatar", "mthreads"]:
-    src_plugin_path = str(os.getenv(
-        "HOME")) + "/.flagtree/" + flagtree_backend + "/" + flagtree_backend + "TritonPlugin.so"
+    src_plugin_path = str(
+        os.getenv("HOME")) + "/.flagtree/" + flagtree_backend + "/" + flagtree_backend + "TritonPlugin.so"
     dst_plugin_dir = sysconfig.get_paths()['purelib'] + "/triton/_C"
     if not os.path.exists(dst_plugin_dir):
         os.makedirs(dst_plugin_dir)
