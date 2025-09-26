@@ -78,8 +78,8 @@ class DownloadManager:
         NetConfig.headers = {'User-Agent': NetConfig.user_agent}
 
     def download(self, url=None, path=None, file_name=None, mode=None, module=None, required=False):
-        self.init_single_src_settings(url, path, file_name, mode)
-
+        if url:
+            self.init_single_src_settings(url, path, file_name, mode)
         if mode == "git" or module:
             return self.git_clone(module, required)
         else:
