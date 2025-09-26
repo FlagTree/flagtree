@@ -101,7 +101,6 @@ class DownloadManager:
 
     def init_single_src_settings(self, url, path, file_name, mode):
         self.current_url = self.normalize_url(url)
-        print(f'Preparing to download from {self.current_url} ...')
         self.current_dst_path = path
         self.current_file_name = file_name
         self.src_list[self.current_url] = {"mode": mode, "path": path, "status": None, "content": None}
