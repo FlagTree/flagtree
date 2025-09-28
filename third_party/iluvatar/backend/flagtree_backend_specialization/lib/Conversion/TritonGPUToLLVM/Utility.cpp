@@ -1,8 +1,10 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/../../lib/Conversion/TritonGPUToLLVM/Utility.cpp"
 
 namespace mlir {
 namespace LLVM {
+using namespace mlir::triton;
+using mlir::triton::gpu::getOrder;
+using mlir::triton::gpu::getSizePerThread;
 
 Value createIndexConstant(OpBuilder &builder, Location loc,
                           TypeConverter *converter, int64_t value) {
