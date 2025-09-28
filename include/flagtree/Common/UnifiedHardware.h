@@ -17,10 +17,11 @@ class UnifiedHardware {
 public:
   UnifiedHardware() = default;
   virtual ~UnifiedHardware() = default;
-  virtual bool isRegistered();
-  virtual int getDMATag();
-  virtual int getSharedMemoryTag();
-  virtual std::string getFlagTreeBackend();
+  virtual bool isRegistered() const;
+  virtual int getDMATag() const;
+  virtual int getSharedMemoryTag() const;
+  virtual std::string getReduceStrategy() const;
+  virtual std::string getFlagTreeBackend() const;
 };
 
 std::unique_ptr<UnifiedHardware> createUnifiedHardwareManager();
