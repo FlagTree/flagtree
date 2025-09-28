@@ -2,9 +2,13 @@
 #define FLAGTREE_PLUGIN_H
 
 #include <cassert>
+#include <cstdlib>
 #include <dlfcn.h>
+#include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #define DEFINE_LOAD_FUNC(symbol_name)                                          \
   static symbol_name##Func load_##symbol_name##_func(const char *backend_name, \
@@ -22,11 +26,46 @@
 #define PLUGIN_EXPORT __attribute__((visibility("default")))
 #endif
 
+static std::optional<std::string> get_env(std::string_view key) {
+  if (const char *p = std::getenv(std::string(key).c_str()))
+    return std::string(p);
+  return std::nullopt;
+}
 static void *load_backend_plugin(const char *backend_name) {
-  const std::string lib_name = std::string(backend_name) + "TritonPlugin.so";
+  const std::string lib_name =
+      std::string(DEFAULT_PLUGIN_DIR) + "/" + backend_name + "TritonPlugin.so";
   void *handle = dlopen(lib_name.c_str(), RTLD_LAZY);
   if (!handle) {
-    std::cerr << "Failed to load plugin: " << std::string(dlerror());
+    std::cerr << "Warnings: can not find Plugin.so at default path\n"
+                 "We will get the Plugin.so from "
+                 "$E}"
+                 " and help you copy it to default path\n";
+    if (auto lib_dir = get_env("FLAGTREE_BACKEND_PLUGIN_LIB_DIR")) {
+      const std::string src_path =
+          *lib_dir + "/" + backend_name + "TritonPlugin.so";
+      if (!std::filesystem::copy_file(src_path, lib_name)) {
+        std::cout << "Could not copy the share library \n";
+      }
+      handle = dlopen(lib_name.c_str(), RTLD_LAZY);
+    }
+  }
+  if (!handle) {
+    std::cerr << "Failed to load plugin: " << std::string(dlerror()) << '\n';
+    std::cerr << "We could not find your shared library in the default "
+                 "directory, nor could we find the environment variable. "
+                 "If you haven't downloaded the shared library yet, please "
+                 "download it from the following URLs:\n"
+                 "{\"backend\":\"iluvatar\",\"urls\":\"https://github.com/"
+                 "FlagTree/flagtree/releases/download/"
+                 "v0.3.0-build-deps/"
+                 "iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-"
+                 "cxxabi1.3.12-ubuntu-x86_64.tar.gz\"} and\n"
+                 "{\"backend\":\"mtheads\",\"urls\":\"https://github.com/"
+                 "FlagTree/flagtree/releases/download/v0.3.0-build-deps/"
+                 "mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-"
+                 "cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz\"},\n"
+                 "then set $ENV{FLAGTREE_BACKEND_PLUGIN_LIB_DIR} to the "
+                 "directory where the shared library is located.\n";
     assert(handle);
   }
   return handle;

@@ -1,7 +1,6 @@
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
-
 add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
 
 # TODO: what's this?
@@ -70,7 +69,6 @@ set_target_properties(triton-lsp PROPERTIES
 )
 
 mlir_check_all_link_libraries(triton-lsp)
-
 
 add_llvm_executable(triton-llvm-opt
   triton-llvm-opt.cpp
