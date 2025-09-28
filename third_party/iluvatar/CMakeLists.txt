@@ -1,3 +1,5 @@
+include_directories(backend/flagtree_backend_specialization/include)
+add_subdirectory(backend/flagtree_backend_specialization/lib)
 add_subdirectory(include)
 add_subdirectory(lib)
 
