@@ -78,15 +78,30 @@ class DownloadManager:
         NetConfig.headers = {'User-Agent': NetConfig.user_agent}
 
     def download(self, url=None, path=None, file_name=None, mode=None, module=None, required=False):
-        self.init_single_src_settings(url, path, file_name, mode)
+        if url:
+            self.init_single_src_settings(url, path, file_name, mode)
 
         if mode == "git" or module:
             return self.git_clone(module, required)
         else:
             return self.general_download(is_decompress=True)
 
+    def normalize_url(self, origin_url, default_scheme="https"):
+        try:
+            from urllib.parse import urlparse
+        except ImportError:
+            return origin_url  # Fallback if urlparse is not available, return as is
+
+        parsed_url = urlparse(origin_url)
+        if parsed_url.scheme:
+            return origin_url
+        elif origin_url.startswith("/"):
+            return "file://" + origin_url
+        else:
+            return f"{default_scheme}://{origin_url}"
+
     def init_single_src_settings(self, url, path, file_name, mode):
-        self.current_url = url
+        self.current_url = self.normalize_url(url)
         self.current_dst_path = path
         self.current_file_name = file_name
         self.src_list[self.current_url] = {"mode": mode, "path": path, "status": None, "content": None}
