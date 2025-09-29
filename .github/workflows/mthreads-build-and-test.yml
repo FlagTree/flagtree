@@ -15,6 +15,12 @@ jobs:
     runs-on: mthreads
     if: ${{ github.repository == 'FlagTree/flagtree' }}
     steps:
+      - name: Setup environment
+        shell: bash
+        run: |
+          source ~/env.sh
+          env | grep -E '^(http_proxy|https_proxy|all_proxy|no_proxy)=' >> $GITHUB_ENV || true
+
       - name: Checkout code (attempt 1)
         id: checkout1
         uses: actions/checkout@v5
@@ -51,9 +57,8 @@ jobs:
         run: |
           pip uninstall -y triton
           export FLAGTREE_BACKEND=mthreads
-          source ~/env.sh
           cd python
-          MAX_JOBS=20 python3 -m pip install . --no-build-isolation
+          MAX_JOBS=32 python3 -m pip install . --no-build-isolation
 
       - name: FlagTree Test on Mthreads
         shell: bash
