@@ -47,8 +47,8 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
     mask = offsets < n_elements
     # Load x and y from DRAM, masking out any extra elements in case the input is not a
     # multiple of the block size.
-    x = tl.load(x_ptr + offsets, mask=mask)  # @hint: shared_memory
-    y = tl.load(y_ptr + offsets, mask=mask)  # @hint: shared_memory
+    x = tl.load(x_ptr + offsets, mask=mask)  #@hint: shared_memory
+    y = tl.load(y_ptr + offsets, mask=mask)  #@hint: shared_memory
     output = x + y
     # Write x + y back to DRAM.
     tl.store(output_ptr + offsets, output, mask=mask)
@@ -83,15 +83,17 @@ def add(x: torch.Tensor, y: torch.Tensor):
 
 def test_vector_add():
     torch.manual_seed(0)
-    size = 256
-    x = torch.rand(size, device=DEVICE)
-    y = torch.rand(size, device=DEVICE)
-    output_torch = x.cpu() + y.cpu()
 
-    output_triton = add(x, y)
-    print(f'The maximum difference between torch and triton is '
-          f'{torch.max(torch.abs(output_torch - output_triton))}')
-    assert torch.allclose(output_triton, output_torch), (output_triton, output_torch)
+    test_shapes = [(64), (256), (512), (63), (255), (511), (1024), (2048), (4096)]
+    for size in test_shapes:
+        x = torch.rand(size, device=DEVICE)
+        y = torch.rand(size, device=DEVICE)
+        output_torch = x.cpu() + y.cpu()
+
+        output_triton = add(x, y)
+        print(f'The maximum difference between torch and triton is '
+              f'{torch.max(torch.abs(output_torch - output_triton))}')
+        assert torch.allclose(output_triton, output_torch), (output_triton, output_torch)
 
 
 if __name__ == "__main__":
