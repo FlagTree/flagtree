@@ -140,11 +140,11 @@ class AIPUBackend(BaseBackend):
         pm.add("func.func(cse)")
         pm.add("func.func(reconcile-unrealized-casts)")
         pm.run(mod.operation)
+        pm.run(mod.operation)
 
         # Post aipu pass.
         transform.binding_tid(mod, ctx)
         transform.canonical_const_dtype(mod, ctx)
-
         ex = codegenAIPU(mod)
         metadata["name"] = ex._func_name
         metadata["shared"] = 1

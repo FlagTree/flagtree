@@ -378,9 +378,9 @@ class CodeGenerator():
         elif op_name == "arith.select":
             self.gen_select(op)
         elif op_name in ("arith.shrsi", "arith.shrui"):
-            self.gen_binary(op, T.shift_right)
+            self.gen_shift(op, T.shift_right)
         elif op_name == "arith.shli":
-            self.gen_binary(op, T.shift_left)
+            self.gen_shift(op, T.shift_left)
         elif op_name in ("arith.mulsi_extended", "arith.mului_extended"):
             self.gen_arith_mul_extended(op)
         # Math Dialect
@@ -679,7 +679,7 @@ class CodeGenerator():
             raise RuntimeError(f"Cannot parse constant {op}")
 
         expr = _create_const_expr(op)
-        self.emit_let(expr, op.result)
+        self.mlir_to_tir_mapping[op.result] = expr
 
     def gen_arith_index_cast(self, op):
         result = op.result
@@ -692,6 +692,15 @@ class CodeGenerator():
         arg0 = self.get_operand(op, 0)
         arg1 = self.get_operand(op, 1)
 
+        self.emit_let(method(arg0, arg1), result)
+
+    def gen_shift(self, op, method):
+        result = op.result
+        arg0 = self.get_operand(op, 0)
+        arg1 = self.get_operand(op, 1)
+        if isinstance(arg1, tir.IntImm) and arg1.value >= 32:
+            self.mlir_to_tir_mapping[op.result] = tir.IntImm(arg0.dtype, 0)
+            return
         self.emit_let(method(arg0, arg1), result)
 
     def gen_select(self, op):
