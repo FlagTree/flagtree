@@ -4,6 +4,8 @@
 #include <memory>
 #include <optional>
 
+#include "flagtree_spec.h"
+
 namespace mlir {
 
 class ModuleOp;
@@ -17,7 +19,7 @@ constexpr static char AttrTargetName[] = "triton_gpu.target";
 
 constexpr static char AttrNumThreadsPerWarp[] = "triton_gpu.threads-per-warp";
 
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Conversion_TritonToTritonGPU_TritonToTritonGPUPass_AttrNumStagesForDot
 constexpr static char AttrNumStagesForDot[] = "triton_gpu.dot.num-stages";
 #endif
 
