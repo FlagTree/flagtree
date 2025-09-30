@@ -304,27 +304,27 @@ cache = FlagTreeCache()
 cache.store(
     file="iluvatar-llvm18-x86_64",
     condition=("iluvatar" == flagtree_backend),
-    url="baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/iluvatar-llvm18-x86_64_v0.3.0.tar.gz",
+    url="https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/iluvatar-llvm18-x86_64_v0.3.0.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
 cache.store(
     file="iluvatarTritonPlugin.so", condition=("iluvatar" == flagtree_backend) and (flagtree_plugin == ''), url=
-    "baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64_v0.3.0.tar.gz",
+    "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/iluvatarTritonPlugin-cpython3.10-glibc2.30-glibcxx3.4.28-cxxabi1.3.12-ubuntu-x86_64_v0.3.0.tar.gz",
     copy_dst_path=f"third_party/{flagtree_backend}", md5_digest="015b9af8")
 
 # klx xpu
 cache.store(
     file="XTDK-llvm18-ubuntu2004_x86_64",
     condition=("xpu" == flagtree_backend),
-    url="baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/XTDK-llvm19-ubuntu2004_x86_64_v0.3.0.tar.gz",
+    url="https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/XTDK-llvm19-ubuntu2004_x86_64_v0.3.0.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
 cache.store(file="xre-Linux-x86_64", condition=("xpu" == flagtree_backend),
-            url="baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/xre-Linux-x86_64_v0.3.0.tar.gz",
+            url="https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/xre-Linux-x86_64_v0.3.0.tar.gz",
             copy_dst_path='python/_deps/xre3')
 
 cache.store(
@@ -343,14 +343,14 @@ cache.store(files=("include", "so"), condition=("xpu" == flagtree_backend),
 cache.store(
     file="mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64",
     condition=("mthreads" == flagtree_backend),
-    url="baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64_v0.1.0.tar.gz",
+    url="https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/mthreads-llvm19-glibc2.34-glibcxx3.4.30-x64_v0.1.0.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
 
 cache.store(
     file="mthreadsTritonPlugin.so", condition=("mthreads" == flagtree_backend) and (flagtree_plugin == ''), url=
-    "baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz",
+    "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/mthreadsTritonPlugin-cpython3.10-glibc2.35-glibcxx3.4.30-cxxabi1.3.13-ubuntu-x86_64_v0.3.0.tar.gz",
     copy_dst_path=f"third_party/{flagtree_backend}", md5_digest="2a9ca0b8")
 
 # ascend
@@ -364,9 +364,9 @@ cache.store(
 
 # aipu
 cache.store(
-    file="llvm-a66376b0-ubuntu-x64",
+    file="llvm-a66376b0-ubuntu-x64-clang16-lld16",
     condition=("aipu" == flagtree_backend),
-    url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-x64.tar.gz",
+    url="https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/llvm-a66376b0-ubuntu-x64-clang16-lld16_v0.3.0.tar.gz"
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
@@ -376,7 +376,7 @@ cache.store(
     file="tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-python3.11-x64",
     condition=("tsingmicro" == flagtree_backend),
     url=
-    "baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-python3.11-x64_v0.2.0.tar.gz",
+    "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/tsingmicro-llvm21-glibc2.30-glibcxx3.4.28-python3.11-x64_v0.2.0.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
@@ -384,7 +384,7 @@ cache.store(
 cache.store(
     file="tx8_deps",
     condition=("tsingmicro" == flagtree_backend),
-    url="baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/tx8_depends_release_20250814_195126_v0.2.0.tar.gz",
+    url="https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/tx8_depends_release_20250814_195126_v0.2.0.tar.gz",
     pre_hock=lambda: check_env('TX8_DEPS_ROOT'),
     post_hock=lambda path: set_env({
         'LLVM_SYSPATH': path,
@@ -396,7 +396,7 @@ cache.store(
     file="hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64",
     condition=("hcu" == flagtree_backend),
     url=
-    "baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64_v0.3.0.tar.gz",
+    "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/hcu-llvm20-df0864e-glibc2.35-glibcxx3.4.30-ubuntu-x86_64_v0.3.0.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )

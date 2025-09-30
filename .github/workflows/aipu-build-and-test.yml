@@ -14,6 +14,12 @@ jobs:
   aipu-build-and-test:
     runs-on: aipu
     steps:
+      - name: Setup environment
+        shell: bash
+        run: |
+          source ~/env.sh
+          env | grep -E '^(http_proxy|https_proxy|all_proxy|no_proxy)=' >> $GITHUB_ENV || true
+
       - name: Checkout code (attempt 1)
         id: checkout1
         uses: actions/checkout@v4
@@ -48,11 +54,10 @@ jobs:
       - name: FlagTree Build on AIPU
         shell: bash
         run: |
-          source ~/env.sh
           source ~/env_setup.sh
           export FLAGTREE_BACKEND=aipu
           cd python
-          MAX_JOBS=16 python3.10 -m pip install . --no-build-isolation -v
+          MAX_JOBS=32 python3.10 -m pip install . --no-build-isolation -v
 
       - name: FlagTree Test on AIPU
         shell: bash
