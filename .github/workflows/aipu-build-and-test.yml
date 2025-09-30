@@ -54,6 +54,7 @@ jobs:
       - name: FlagTree Build on AIPU
         shell: bash
         run: |
+          pip uninstall -y triton
           source ~/env_setup.sh
           export FLAGTREE_BACKEND=aipu
           cd python
