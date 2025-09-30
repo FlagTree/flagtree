@@ -1,5 +1,14 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+namespace SharedToDotOperandMMAv1 {
+
+using getMNCoordsFunc = SmallVector<CoordTy> (*)(
+    Value, Location, ConversionPatternRewriter &, ArrayRef<unsigned int>,
+    const IluvatarMmaEncodingAttr &, ArrayRef<int64_t>, int, int, bool);
+DEFINE_LOAD_FUNC(getMNCoords)
+
+} // namespace SharedToDotOperandMMAv1
+
 namespace mlir {
 namespace LLVM {
 using namespace mlir::triton;

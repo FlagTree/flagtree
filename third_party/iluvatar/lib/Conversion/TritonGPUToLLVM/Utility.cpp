@@ -10,15 +10,7 @@
 
 namespace SharedToDotOperandMMAv1 {
 
-using CoordTy = SmallVector<Value>;
-using ValueTable = std::map<std::pair<int, int>, std::pair<Value, Value>>;
-
-using getMNCoordsFunc = SmallVector<CoordTy> (*)(
-    Value, Location, ConversionPatternRewriter &, ArrayRef<unsigned int>,
-    const IluvatarMmaEncodingAttr &, ArrayRef<int64_t>, int, int, bool);
-DEFINE_LOAD_FUNC(getMNCoords)
-
-static SmallVector<CoordTy>
+SmallVector<CoordTy>
 getMNCoords(Value thread, Location loc, ConversionPatternRewriter &rewriter,
             ArrayRef<unsigned int> wpt, const NvidiaMmaEncodingAttr &mmaLayout,
             ArrayRef<int64_t> shape, bool isARow, bool isBRow, bool isAVec4,

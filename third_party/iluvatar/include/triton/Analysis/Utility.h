@@ -7,7 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "triton/../../backend/flagtree_backend_specialization/include/flagtree_spec.h"
+#include "flagtree_spec.h"
 
 namespace mlir {
 

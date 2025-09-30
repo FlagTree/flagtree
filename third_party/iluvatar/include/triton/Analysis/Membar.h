@@ -6,7 +6,7 @@
 
 #include <set>
 
-#include "triton/../../backend/flagtree_backend_specialization/include/flagtree_spec.h"
+#include "flagtree_spec.h"
 
 namespace mlir {
 
