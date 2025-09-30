@@ -1,2 +1,3 @@
 add_subdirectory(Analysis)
 add_subdirectory(Conversion/TritonGPUToLLVM)
+add_subdirectory(Conversion/TritonToTritonGPU)
