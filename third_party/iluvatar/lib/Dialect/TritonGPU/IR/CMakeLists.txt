@@ -11,4 +11,5 @@ add_triton_library(TritonGPUIR
   MLIRGPUDialect
   TritonIR
   TritonTools
+  FlagTree_${FLAGTREE_BACKEND}_TritonDialectTritonGPUIR
 )

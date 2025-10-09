@@ -7,3 +7,4 @@
 #include "triton/Conversion/TritonToTritonGPU/iluvatar_TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/iluvatar_Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/IR/iluvatar_Dialect.h"

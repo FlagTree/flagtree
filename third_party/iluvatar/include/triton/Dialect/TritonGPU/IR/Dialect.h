@@ -15,6 +15,8 @@
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
+#include "flagtree_spec.h"
+
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -114,7 +116,7 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(Type srcType, Type dstType);
 
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_functions
 bool isMma(Attribute layout);
 
 bool isSliceMmaWithDim(Attribute layout, int targetDim);
