@@ -5,3 +5,4 @@
 #include "triton/Conversion/TritonGPUToLLVM/iluvatar_TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/iluvatar_Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/iluvatar_TritonToTritonGPUPass.h"
+#include "triton/Dialect/Triton/IR/iluvatar_Dialect.h"

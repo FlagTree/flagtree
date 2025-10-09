@@ -474,8 +474,12 @@ inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
       auto inferLayoutInterface =
           dyn_cast<DialectInferLayoutInterface>(&dialect);
       if (inferLayoutInterface
+#ifdef FLAGTREE_SPEC_Dialect_Triton_IR_Dialect_inferReduceOpEncoding_ARG
               ->inferReduceOpEncoding(argEncoding, axis, noWarpReduce,
                                       retEncoding)
+#else
+              ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
+#endif
               .failed()) {
         llvm::report_fatal_error("failed to infer layout for ReduceOp");
         return failure();

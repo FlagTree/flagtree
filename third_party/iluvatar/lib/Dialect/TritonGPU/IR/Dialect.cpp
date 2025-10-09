@@ -2445,14 +2445,24 @@ struct TritonGPUInferLayoutInterface
     : public triton::DialectInferLayoutInterface {
   using DialectInferLayoutInterface::DialectInferLayoutInterface;
 
+#ifdef FLAGTREE_SPEC_Dialect_Triton_IR_Dialect_inferReduceOpEncoding_ARG
   LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
-                        bool noWarpReduce,
+                        FLAGTREE_SPEC_Dialect_Triton_IR_Dialect_inferReduceOpEncoding_ARG spec_arg,
                         Attribute &resultEncoding) const override {
     resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
-                                            operandEncoding, noWarpReduce);
+                                            operandEncoding, spec_arg);
     return success();
   }
+#else
+  LogicalResult
+  inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
+                        Attribute &resultEncoding) const override {
+    resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                                            operandEncoding);
+    return success();
+  }
+#endif
 
   // Infer the encoding of a tt.trans(x) given the encoding of x.
   //
