@@ -69,5 +69,7 @@ jobs:
           python3.10 third_party/aipu/python/test/test_libdevice_fmod.py
           python3.10 third_party/aipu/python/test/test_libdevice_pow.py
           python3.10 third_party/aipu/python/test/test_codegen_dma.py
+          python3.10 third_party/aipu/python/test/test_01_vector_add_shared_memory.py
+          python3.10 third_party/aipu/python/test/test_01_vector_add_structured_1d_shared_memory.py
           #python3.10 third_party/aipu/python/test/min.py
           #python3.10 third_party/aipu/python/test/var_mean.py
