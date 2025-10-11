@@ -382,6 +382,10 @@ class CMakeBuild(build_ext):
         # configuration
         cfg = get_build_type()
         build_args = ["--config", cfg]
+        if "editable_wheel"  in sys.argv:
+            cmake_args +=[
+                "-DEDITABLE_MODE=ON"
+            ]
 
         if platform.system() == "Windows":
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
