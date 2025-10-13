@@ -24,8 +24,12 @@ import os
 import re
 
 import pytest
-import torch
-from torch.testing import assert_close
+try:
+    import torch
+    from torch.testing import assert_close
+except ImportError:
+    pytest.skip("Torch not installed — skipping tests.", allow_module_level=True)
+
 
 import triton
 import triton.language as tl

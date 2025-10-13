@@ -27,7 +27,11 @@ This is a Triton implementation of the Flash Attention algorithm
 
 # import numpy as np
 import pytest
-import torch
+
+try:
+    import torch
+except ImportError:
+    pytest.skip("Torch not installed — skipping tests.", allow_module_level=True)
 
 import triton
 import triton.language as tl
@@ -465,3 +469,4 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
 
 # only works on post-Ampere GPUs right now
 # bench_flash_attention.run(save_path='.', print_data=True)
+test_op(4, 48, 128, 64)
