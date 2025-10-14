@@ -6,8 +6,13 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e " =================== Start Packing Downloaded Offline Build Files ==================="
-echo -e ""
+printfln() {
+    printf "%b
+" "$@"
+}
+
+printfln " =================== Start Packing Downloaded Offline Build Files ==================="
+printfln ""
 
 # detect nvidia toolchain version requirement
 NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.json"
@@ -18,15 +23,15 @@ if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
     cudacrt_version=$(grep '"cudacrt"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudacrt": "([^"]+)".*/\1/')
     cudart_version=$(grep '"cudart"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudart": "([^"]+)".*/\1/')
     cupti_version=$(grep '"cupti"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cupti": "([^"]+)".*/\1/')
-    echo -e "Nvidia Toolchain Version Requirement:"
-    echo -e "   ptxas: $ptxas_version"
-    echo -e "   cuobjdump: $cuobjdump_version"
-    echo -e "   nvdisasm: $nvdisasm_version"
-    echo -e "   cudacrt: $cudacrt_version"
-    echo -e "   cudart: $cudart_version"
-    echo -e "   cupti: $cupti_version"
+    printfln "Nvidia Toolchain Version Requirement:"
+    printfln "   ptxas: $ptxas_version"
+    printfln "   cuobjdump: $cuobjdump_version"
+    printfln "   nvdisasm: $nvdisasm_version"
+    printfln "   cudacrt: $cudacrt_version"
+    printfln "   cudart: $cudart_version"
+    printfln "   cupti: $cupti_version"
 else
-    echo -e "${RED}Error: version file $NV_TOOLCHAIN_VERSION_FILE is not exist${NC}"
+    printfln "${RED}Error: version file $NV_TOOLCHAIN_VERSION_FILE is not exist${NC}"
     exit 1
 fi
 
@@ -34,39 +39,39 @@ fi
 JSON_VERSION_FILE="../cmake/json-version.txt"
 if [ -f "$JSON_VERSION_FILE" ]; then
     json_version=$(tr -d '\n' < "$JSON_VERSION_FILE")
-    echo -e "JSON Version Required: $json_version"
+    printfln "JSON Version Required: $json_version"
 else
-    echo -e "${RED}Error: version file $JSON_VERSION_FILE is not exist${NC}"
+    printfln "${RED}Error: version file $JSON_VERSION_FILE is not exist${NC}"
 fi
 
 output_zip="offline-build-pack-triton-3.2.x.zip"
 
 # handle input
-echo -e ""
+printfln ""
 if [ $# -ge 1 ]; then
     input_dir="$1"
-    echo -e "${BLUE}Use $input_dir as input directory${NC}"
+    printfln "${BLUE}Use $input_dir as input directory${NC}"
 else
-    echo -e "${RED}Error: No input directory specified${NC}"
-    echo -e "${GREEN}Usage: sh utils/offline_build_pack.sh [input_dir] [output_zip_file]${NC}"
+    printfln "${RED}Error: No input directory specified${NC}"
+    printfln "${GREEN}Usage: sh utils/offline_build_pack.sh [input_dir] [output_zip_file]${NC}"
     exit 1
 fi
 
 # handle output
 if [ $# -ge 2 ]; then
     output_zip="$2"
-    echo -e "${BLUE}Use $output_zip as output .zip file${NC}"
+    printfln "${BLUE}Use $output_zip as output .zip file${NC}"
 else
-    echo -e "${YELLOW}Use default output .zip file name: $output_zip${NC}"
+    printfln "${YELLOW}Use default output .zip file name: $output_zip${NC}"
 fi
 
 if [ ! -d "$input_dir" ]; then
-    echo -e "${RED}Error: Cannot find input directory $input_dir${NC}"
+    printfln "${RED}Error: Cannot find input directory $input_dir${NC}"
     exit 1
 else
-    echo -e "Find input directory: $input_dir"
+    printfln "Find input directory: $input_dir"
 fi
-echo -e ""
+printfln ""
 
 ptxas_file="cuda-ptxas-${ptxas_version}-0.tar.bz2"
 cudacrt_file="cuda-crt-${cudacrt_version}-0.tar.bz2"
@@ -82,96 +87,96 @@ triton_file="triton-9641643da6c52000c807b5eeed05edaec4402a67.zip"
 triton_shared_file="triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
 if [ ! -f "$input_dir/$ptxas_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$ptxas_file does not exist, run README_offline_build.sh for more information${NC}"
+    printfln "${RED}Error: File $input_dir/$ptxas_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find $input_dir/$ptxas_file"
+printfln "Find $input_dir/$ptxas_file"
 
 if [ ! -f "$input_dir/$cudacrt_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$cudacrt_file does not exist, run README_offline_build.sh for more information${NC}"
+    printfln "${RED}Error: File $input_dir/$cudacrt_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find $input_dir/$cudacrt_file"
+printfln "Find $input_dir/$cudacrt_file"
 
 if [ ! -f "$input_dir/$cuobjdump_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$cuobjdump_file does not exist, run README_offline_build.sh for more information${NC}"
+    printfln "${RED}Error: File $input_dir/$cuobjdump_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find $input_dir/$cuobjdump_file"
+printfln "Find $input_dir/$cuobjdump_file"
 
 if [ ! -f "$input_dir/$nvdisasm_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$nvdisasm_file does not exist, run README_offline_build.sh for more information${NC}"
+    printfln "${RED}Error: File $input_dir/$nvdisasm_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find $input_dir/$nvdisasm_file"
+printfln "Find $input_dir/$nvdisasm_file"
 
 if [ ! -f "$input_dir/$cudart_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$cudart_file does not exist, run README_offline_build.sh for more information${NC}"
+    printfln "${RED}Error: File $input_dir/$cudart_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find $input_dir/$cudart_file"
+printfln "Find $input_dir/$cudart_file"
 
 if [ ! -f "$input_dir/$cupti_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$cupti_file does not exist, run README_offline_build.sh for more information${NC}"
+    printfln "${RED}Error: File $input_dir/$cupti_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find $input_dir/$cupti_file"
+printfln "Find $input_dir/$cupti_file"
 
 if [ ! -f "$input_dir/$json_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$json_file does not exist, run README_offline_build.sh for more information${NC}"
+    printfln "${RED}Error: File $input_dir/$json_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find $input_dir/$json_file"
+printfln "Find $input_dir/$json_file"
 
 if [ ! -f "$input_dir/$googletest_file" ]; then
-    echo -e "${RED}Error: File $input_dir/$googletest_file does not exist, run README_offline_build.sh for more information${NC}"
+    printfln "${RED}Error: File $input_dir/$googletest_file does not exist, run README_offline_build.sh for more information${NC}"
     exit 1
 fi
-echo -e "Find $input_dir/$googletest_file"
+printfln "Find $input_dir/$googletest_file"
 
 if [ ! -f "$input_dir/$triton_ascend_file" ]; then
-    echo -e "${YELLOW}Warning: File $input_dir/$triton_ascend_file does not exist. This file is necessary for ascend backend, please check if you need it.${NC}"
+    printfln "${YELLOW}Warning: File $input_dir/$triton_ascend_file does not exist. This file is necessary for ascend backend, please check if you need it.${NC}"
     triton_ascend_file=""
 else
-    echo -e "Find $input_dir/$triton_ascend_file"
+    printfln "Find $input_dir/$triton_ascend_file"
 fi
 
 if [ ! -f "$input_dir/$ascendnpu_ir_file" ]; then
-    echo -e "${YELLOW}Warning: File $input_dir/$ascendnpu_ir_file does not exist. This file is necessary for ascend backend, please check if you need it.${NC}"
+    printfln "${YELLOW}Warning: File $input_dir/$ascendnpu_ir_file does not exist. This file is necessary for ascend backend, please check if you need it.${NC}"
     ascendnpu_ir_file=""
 else
-    echo -e "Find $input_dir/$ascendnpu_ir_file"
+    printfln "Find $input_dir/$ascendnpu_ir_file"
 fi
 
 if [ ! -f "$input_dir/$triton_file" ]; then
-    echo -e "${YELLOW}Warning: File $input_dir/$triton_file does not exist. This file is necessary for ascend backend, please check if you need it.${NC}"
+    printfln "${YELLOW}Warning: File $input_dir/$triton_file does not exist. This file is necessary for ascend backend, please check if you need it.${NC}"
     triton_file=""
 else
-    echo -e "Find $input_dir/$triton_file"
+    printfln "Find $input_dir/$triton_file"
 fi
 
 if [ ! -f "$input_dir/$triton_shared_file" ]; then
-    echo -e "${YELLOW}Warning: File $input_dir/$triton_shared_file does not exist. This file is optional, please check if you need it.${NC}"
+    printfln "${YELLOW}Warning: File $input_dir/$triton_shared_file does not exist. This file is optional, please check if you need it.${NC}"
     triton_shared_file=""
 else
-    echo -e "Find $input_dir/$triton_shared_file"
+    printfln "Find $input_dir/$triton_shared_file"
 fi
 
-echo -e "cd ${input_dir}"
+printfln "cd ${input_dir}"
 cd "$input_dir"
 
-echo -e "Compressing..."
+printfln "Compressing..."
 zip "$output_zip" "$ptxas_file" "$cudacrt_file" "$cuobjdump_file" "$nvdisasm_file" "$cudart_file" "$cupti_file" \
     "$json_file" "$googletest_file" "$triton_ascend_file" "$ascendnpu_ir_file" "$triton_file" "$triton_shared_file"
 
-echo -e "cd -"
+printfln "cd -"
 cd -
 
-echo -e ""
+printfln ""
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}Offline Build dependencies are successfully compressed into $output_zip${NC}"
+    printfln "${GREEN}Offline Build dependencies are successfully compressed into $output_zip${NC}"
     exit 0
 else
-    echo -e "${RED}Error: Failed to compress offline build dependencies${NC}"
+    printfln "${RED}Error: Failed to compress offline build dependencies${NC}"
     exit 1
 fi

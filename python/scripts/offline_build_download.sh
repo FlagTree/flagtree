@@ -6,7 +6,12 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e " =================== Start Downloading Offline Build Files ==================="
+printfln() {
+    printf "%b
+" "$@"
+}
+
+printfln " =================== Start Downloading Offline Build Files ==================="
 
 # detect nvidia toolchain version requirement
 NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.json"
@@ -17,15 +22,15 @@ if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
     cudacrt_version=$(grep '"cudacrt"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudacrt": "([^"]+)".*/\1/')
     cudart_version=$(grep '"cudart"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cudart": "([^"]+)".*/\1/')
     cupti_version=$(grep '"cupti"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cupti": "([^"]+)".*/\1/')
-    echo -e "Nvidia Toolchain Version Requirement:"
-    echo -e "   ptxas: $ptxas_version"
-    echo -e "   cuobjdump: $cuobjdump_version"
-    echo -e "   nvdisasm: $nvdisasm_version"
-    echo -e "   cudacrt: $cudacrt_version"
-    echo -e "   cudart: $cudart_version"
-    echo -e "   cupti: $cupti_version"
+    printfln "Nvidia Toolchain Version Requirement:"
+    printfln "   ptxas: $ptxas_version"
+    printfln "   cuobjdump: $cuobjdump_version"
+    printfln "   nvdisasm: $nvdisasm_version"
+    printfln "   cudacrt: $cudacrt_version"
+    printfln "   cudart: $cudart_version"
+    printfln "   cupti: $cupti_version"
 else
-    echo -e "${RED}Error: version file $NV_TOOLCHAIN_VERSION_FILE is not exist${NC}"
+    printfln "${RED}Error: version file $NV_TOOLCHAIN_VERSION_FILE is not exist${NC}"
     exit 1
 fi
 
@@ -33,17 +38,17 @@ fi
 JSON_VERSION_FILE="../cmake/json-version.txt"
 if [ -f "$JSON_VERSION_FILE" ]; then
     json_version=$(tr -d '\n' < "$JSON_VERSION_FILE")
-    echo -e "JSON Version Required: $json_version"
+    printfln "JSON Version Required: $json_version"
 else
-    echo -e "${RED}Error: version file $JSON_VERSION_FILE is not exist${NC}"
+    printfln "${RED}Error: version file $JSON_VERSION_FILE is not exist${NC}"
 fi
 
 # handle system arch
 if [ $# -eq 0 ]; then
-    echo -e "${RED}Error: No system architecture specified for offline build.${NC}"
-    echo -e "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
-    echo -e "You need to specify the target system architecture to build the FlagTree"
-    echo -e "Supported system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
+    printfln "${RED}Error: No system architecture specified for offline build.${NC}"
+    printfln "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
+    printfln "You need to specify the target system architecture to build the FlagTree"
+    printfln "Supported system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
     exit 1
 fi
 
@@ -62,45 +67,45 @@ case "$arch" in
         arch="aarch64"
         ;;
     *)
-        echo -e "${RED}Error: Unsupported system architecture '$arch'.${NC}"
-        echo -e "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
-        echo -e "   Supported system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
+        printfln "${RED}Error: Unsupported system architecture '$arch'.${NC}"
+        printfln "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
+        printfln "   Supported system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
         exit 1
         ;;
 esac
-echo -e "Target System Arch for offline building: $arch"
+printfln "Target System Arch for offline building: $arch"
 
 system="linux"
-echo -e "Target System for offline building: $system"
+printfln "Target System for offline building: $system"
 
 check_download() {
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Download Success${NC}"
+        printfln "${GREEN}Download Success${NC}"
     else
-        echo -e "${RED}Download Failed !!!${NC}"
+        printfln "${RED}Download Failed !!!${NC}"
         exit 1
     fi
-    echo -e ""
+    printfln ""
 }
 
 if [ $# -ge 2 ]; then
     target_dir="$2"
-    echo -e "${BLUE}Use $target_dir as download output directory${NC}"
+    printfln "${BLUE}Use $target_dir as download output directory${NC}"
 else
-    echo -e "${RED}Error: No output directory specified for downloading.${NC}"
-    echo -e "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
-    echo -e "   Support system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
+    printfln "${RED}Error: No output directory specified for downloading.${NC}"
+    printfln "${GREEN}Usage: sh $0 arch=<system arch> <output_dir>${NC}"
+    printfln "   Support system arch values: ${GREEN}x86_64, arm64, aarch64${NC}"
     exit 1
 fi
 
-echo -e ""
+printfln ""
 if [ ! -d "$target_dir" ]; then
-    echo -e "Creating download output directory $target_dir"
+    printfln "Creating download output directory $target_dir"
     mkdir -p "$target_dir"
 else
-    echo -e "Download output directory $target_dir already exists"
+    printfln "Download output directory $target_dir already exists"
 fi
-echo -e ""
+printfln ""
 
 # generate download URLs
 version_major=$(echo $ptxas_version | cut -d. -f1)
@@ -135,70 +140,70 @@ else
     cupti_url="https://anaconda.org/nvidia/cuda-cupti/${cupti_version}/download/${system}-${arch}/cuda-cupti-${cupti_version}-0.tar.bz2"
 fi
 
-echo -e "Downloading PTXAS from: ${BLUE}$ptxas_url${NC}"
-echo -e "wget $ptxas_url -O ${target_dir}/cuda-ptxas-${ptxas_version}-0.tar.bz2"
+printfln "Downloading PTXAS from: ${BLUE}$ptxas_url${NC}"
+printfln "wget $ptxas_url -O ${target_dir}/cuda-ptxas-${ptxas_version}-0.tar.bz2"
 wget "$ptxas_url" -O ${target_dir}/cuda-ptxas-${ptxas_version}-0.tar.bz2
 check_download
 
-echo -e "Downloading CUDACRT from: ${BLUE}$cudacrt_url${NC}"
-echo -e "wget $cudacrt_url -O ${target_dir}/cuda-crt-${cudacrt_version}-0.tar.bz2"
+printfln "Downloading CUDACRT from: ${BLUE}$cudacrt_url${NC}"
+printfln "wget $cudacrt_url -O ${target_dir}/cuda-crt-${cudacrt_version}-0.tar.bz2"
 wget "$cudacrt_url" -O ${target_dir}/cuda-crt-${cudacrt_version}-0.tar.bz2
 check_download
 
 cuobjdump_url=https://anaconda.org/nvidia/cuda-cuobjdump/${cuobjdump_version}/download/linux-${arch}/cuda-cuobjdump-${cuobjdump_version}-0.tar.bz2
-echo -e "Downloading CUOBJBDUMP from: ${BLUE}$cuobjdump_url${NC}"
-echo -e "wget $cuobjdump_url -O ${target_dir}/cuda-cuobjdump-${cuobjdump_version}-0.tar.bz2"
+printfln "Downloading CUOBJBDUMP from: ${BLUE}$cuobjdump_url${NC}"
+printfln "wget $cuobjdump_url -O ${target_dir}/cuda-cuobjdump-${cuobjdump_version}-0.tar.bz2"
 wget "$cuobjdump_url" -O ${target_dir}/cuda-cuobjdump-${cuobjdump_version}-0.tar.bz2
 check_download
 
 nvdisasm_url=https://anaconda.org/nvidia/cuda-nvdisasm/${nvdisasm_version}/download/linux-${arch}/cuda-nvdisasm-${nvdisasm_version}-0.tar.bz2
-echo -e "Downloading NVDISASM from: ${BLUE}$nvdisasm_url${NC}"
-echo -e "wget $nvdisasm_url -O ${target_dir}/cuda-nvdisasm-${nvdisasm_version}-0.tar.bz2"
+printfln "Downloading NVDISASM from: ${BLUE}$nvdisasm_url${NC}"
+printfln "wget $nvdisasm_url -O ${target_dir}/cuda-nvdisasm-${nvdisasm_version}-0.tar.bz2"
 wget "$nvdisasm_url" -O ${target_dir}/cuda-nvdisasm-${nvdisasm_version}-0.tar.bz2
 check_download
 
-echo -e "Downloading CUDART from: ${BLUE}$cudart_url${NC}"
-echo -e "wget $cudart_url -O ${target_dir}/cuda-cudart-dev-${cudart_version}-0.tar.bz2"
+printfln "Downloading CUDART from: ${BLUE}$cudart_url${NC}"
+printfln "wget $cudart_url -O ${target_dir}/cuda-cudart-dev-${cudart_version}-0.tar.bz2"
 wget "$cudart_url" -O ${target_dir}/cuda-cudart-dev-${cudart_version}-0.tar.bz2
 check_download
 
-echo -e "Downloading CUPTI from: ${BLUE}$cupti_url${NC}"
-echo -e "wget $cupti_url -O ${target_dir}/cuda-cupti-${cutpti_version}-0.tar.bz2"
+printfln "Downloading CUPTI from: ${BLUE}$cupti_url${NC}"
+printfln "wget $cupti_url -O ${target_dir}/cuda-cupti-${cutpti_version}-0.tar.bz2"
 wget "$cupti_url" -O ${target_dir}/cuda-cupti-${cupti_version}-0.tar.bz2
 check_download
 
 json_url=https://github.com/nlohmann/json/releases/download/${json_version}/include.zip
-echo -e "Downloading JSON library from: ${BLUE}$json_url${NC}"
-echo -e "wget $json_url -O ${target_dir}/include.zip"
+printfln "Downloading JSON library from: ${BLUE}$json_url${NC}"
+printfln "wget $json_url -O ${target_dir}/include.zip"
 wget "$json_url" -O ${target_dir}/include.zip
 check_download
 
 googletest_url=https://github.com/google/googletest/archive/refs/tags/release-1.12.1.zip
-echo -e "Downloading GoogleTest from: ${BLUE}$googletest_url${NC}"
-echo -e "wget $googletest_url -O ${target_dir}/googletest-release-1.12.1.zip"
+printfln "Downloading GoogleTest from: ${BLUE}$googletest_url${NC}"
+printfln "wget $googletest_url -O ${target_dir}/googletest-release-1.12.1.zip"
 wget "$googletest_url" -O ${target_dir}/googletest-release-1.12.1.zip
 check_download
 
 triton_ascend_url=https://gitee.com/ascend/triton-ascend/repository/archive/master.zip
 ascendnpu_ir_url=https://gitee.com/ascend/ascendnpu-ir/repository/archive/1922371c42749fda534d6395b7ed828b5c9f36d4.zip
 triton_url=https://github.com/triton-lang/triton/archive/9641643da6c52000c807b5eeed05edaec4402a67.zip
-echo -e "Downloading Triton_Ascend from: ${BLUE}$triton_ascend_url${NC}"
-echo -e "wget $triton_ascend_url -O ${target_dir}/triton-ascend-master.zip"
+printfln "Downloading Triton_Ascend from: ${BLUE}$triton_ascend_url${NC}"
+printfln "wget $triton_ascend_url -O ${target_dir}/triton-ascend-master.zip"
 wget "$triton_ascend_url" -O ${target_dir}/triton-ascend-master.zip
 check_download
-echo -e "Downloading AscendNPU IR for Triton_Ascend from: ${BLUE}$ascendnpu_ir_url${NC}"
-echo -e "wget $ascendnpu_ir_url -O ${target_dir}/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4.zip"
+printfln "Downloading AscendNPU IR for Triton_Ascend from: ${BLUE}$ascendnpu_ir_url${NC}"
+printfln "wget $ascendnpu_ir_url -O ${target_dir}/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4.zip"
 wget "$ascendnpu_ir_url" -O ${target_dir}/ascendnpu-ir-1922371c42749fda534d6395b7ed828b5c9f36d4.zip
 check_download
-echo -e "Downloading Triton for Triton_Ascend from: ${BLUE}$triton_url${NC}"
-echo -e "wget $triton_url -O ${target_dir}/triton-9641643da6c52000c807b5eeed05edaec4402a67.zip"
+printfln "Downloading Triton for Triton_Ascend from: ${BLUE}$triton_url${NC}"
+printfln "wget $triton_url -O ${target_dir}/triton-9641643da6c52000c807b5eeed05edaec4402a67.zip"
 wget "$triton_url" -O ${target_dir}/triton-9641643da6c52000c807b5eeed05edaec4402a67.zip
 check_download
 
 triton_shared_url=https://github.com/microsoft/triton-shared/archive/380b87122c88af131530903a702d5318ec59bb33.zip
-echo -e "Downloading Triton_Shared from: ${BLUE}$triton_shared_url${NC}"
-echo -e "wget $triton_shared_url -O ${target_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
+printfln "Downloading Triton_Shared from: ${BLUE}$triton_shared_url${NC}"
+printfln "wget $triton_shared_url -O ${target_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 wget "$triton_shared_url" -O ${target_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip
 check_download
 
-echo -e " =================== Done ==================="
+printfln " =================== Done ==================="
