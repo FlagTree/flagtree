@@ -4,7 +4,7 @@ import re
 import pytest
 try:
     import paddle
-except ImportError:
+except:
     pytest.skip("Paddle not installed — skipping tests.", allow_module_level=True)
 import triton
 import triton.language as tl
