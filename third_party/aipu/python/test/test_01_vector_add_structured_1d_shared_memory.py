@@ -2,7 +2,15 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = triton.runtime.driver.active.get_active_torch_device()
+# active driver
+driver = triton.runtime.driver.active
+# torch.cuda, torch.aipu, torch.npu
+torch_device_fn = triton.runtime.driver.active.get_device_interface()
+# device
+if hasattr(driver, "get_active_torch_device"):
+    device = triton.runtime.driver.active.get_active_torch_device()
+else:
+    device = triton.runtime.driver.active.get_current_device()
 
 
 @triton.jit
@@ -45,8 +53,8 @@ def test_vector_add_structured_1d():
 
     test_shapes = [(64), (256), (512), (63), (255), (511), (1024), (2048), (4096)]
     for size in test_shapes:
-        x = torch.rand(size, device=DEVICE)
-        y = torch.rand(size, device=DEVICE)
+        x = torch.rand(size, device=device)
+        y = torch.rand(size, device=device)
 
         output_torch = x.cpu() + y.cpu()
         output_triton = add_structured_1d(x, y)

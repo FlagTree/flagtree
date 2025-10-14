@@ -23,7 +23,15 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = triton.runtime.driver.active.get_active_torch_device()
+# active driver
+driver = triton.runtime.driver.active
+# torch.cuda, torch.aipu, torch.npu
+torch_device_fn = triton.runtime.driver.active.get_device_interface()
+# device
+if hasattr(driver, "get_active_torch_device"):
+    device = triton.runtime.driver.active.get_active_torch_device()
+else:
+    device = triton.runtime.driver.active.get_current_device()
 
 
 @triton.jit
@@ -71,7 +79,8 @@ def add(x: torch.Tensor, y: torch.Tensor):
     #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
     #  - `triton.jit`'ed functions can be indexed with a launch grid to obtain a callable GPU kernel.
     #  - Don't forget to pass meta-parameters as keywords arguments.
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=256)
+    with torch_device_fn.device(x.device):
+        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=256)
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output.cpu()
@@ -86,8 +95,8 @@ def test_vector_add():
 
     test_shapes = [(64), (256), (512), (63), (255), (511), (1024), (2048), (4096)]
     for size in test_shapes:
-        x = torch.rand(size, device=DEVICE)
-        y = torch.rand(size, device=DEVICE)
+        x = torch.rand(size, device=device)
+        y = torch.rand(size, device=device)
         output_torch = x.cpu() + y.cpu()
 
         output_triton = add(x, y)
