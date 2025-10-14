@@ -76,15 +76,27 @@ esac
 echo -e "Current System Arch for offline building: $arch"
 
 # handle params
-if [ $# -ge 2 ]; then
+if [ $# -ge 1 ]; then
     input_zip="$1"
-    output_dir="$2"
     echo -e "${BLUE}Use $input_zip as input packed .zip file${NC}"
-    echo -e "${BLUE}Use $output_dir as output directory${NC}"
 else
-    echo -e "${RED}Error: No input file or output directory specified${NC}"
+    echo -e "${RED}Error: No input .zip file specified${NC}"
     echo -e "${GREEN}Usage: sh utils/offline_build_unpack.sh [input_zip] [output_dir]${NC}"
     exit 1
+fi
+
+# handle output
+if [ $# -ge 2 ]; then
+    output_dir="$2"
+    echo -e "${BLUE}Use $output_dir as output directory${NC}"
+else
+    output_dir="$HOME/.triton"
+    echo -e "${YELLOW}Use default output directory: $output_dir${NC}"
+    if [ -d "$output_dir" ]; then
+        old_output_dir=${output_dir}.$(date +%Y%m%d_%H%M%S)
+        echo -e "${YELLOW}$output_dir already exists, mv to $old_output_dir${NC}"
+        mv $output_dir $old_output_dir
+    fi
 fi
 
 if [ ! -f "${input_zip}" ]; then
