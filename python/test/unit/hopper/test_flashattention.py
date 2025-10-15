@@ -469,4 +469,3 @@ def bench_flash_attention(BATCH, H, N_CTX, D_HEAD, mode, provider, dtype=torch.f
 
 # only works on post-Ampere GPUs right now
 # bench_flash_attention.run(save_path='.', print_data=True)
-test_op(4, 48, 128, 64)
