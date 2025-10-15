@@ -41,11 +41,9 @@ def get_backend_cmake_args(*args, **kargs):
         # lit is used by the test suite
     handle_plugin_backend(editable)
     try:
-        cmake_args=activated_module.get_backend_cmake_args(*args, **kargs)
-        if "editable_wheel"  in sys.argv:
-            cmake_args +=[
-                "-DEDITABLE_MODE=ON"
-            ]
+        cmake_args = activated_module.get_backend_cmake_args(*args, **kargs)
+        if "editable_wheel" in sys.argv:
+            cmake_args += ["-DEDITABLE_MODE=ON"]
         return cmake_args
     except Exception:
         return []
@@ -318,8 +316,9 @@ def handle_flagtree_backend():
         if "editable_wheel" in sys.argv and flagtree_backend not in ("ascend", "iluvatar"):
             ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
 
+
 def handle_plugin_backend(editable):
-    if flagtree_backend in ["iluvatar", "mthreads"] and editable == False:
+    if flagtree_backend in ["iluvatar", "mthreads"] and editable is False:
         src_plugin_path = str(
             os.getenv("HOME")) + "/.flagtree/" + flagtree_backend + "/" + flagtree_backend + "TritonPlugin.so"
         dst_plugin_dir = sysconfig.get_paths()['purelib'] + "/triton/_C"
@@ -327,6 +326,7 @@ def handle_plugin_backend(editable):
             os.makedirs(dst_plugin_dir)
         dst_plugin_path = dst_plugin_dir + "/" + flagtree_backend + "TritonPlugin.so"
         shutil.copy(src_plugin_path, dst_plugin_path)
+
 
 def set_env(env_dict: dict):
     for env_k, env_v in env_dict.items():
@@ -443,4 +443,3 @@ cache.store(
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
-
