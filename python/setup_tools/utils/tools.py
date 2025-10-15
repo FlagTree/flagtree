@@ -133,7 +133,8 @@ class OfflineBuildManager:
         self.offline_build_dir = os.environ.get("FLAGTREE_OFFLINE_BUILD_DIR") if self.is_offline else None
         self.triton_cache_path = get_triton_cache_path()
 
-    def is_offline_build(self) -> bool:
+    @staticmethod
+    def is_offline_build() -> bool:
         return os.getenv("TRITON_OFFLINE_BUILD", "OFF") == "ON" or os.getenv("FLAGTREE_OFFLINE_BUILD_DIR")
 
     def copy_to_flagtree_project(self, kargs):
