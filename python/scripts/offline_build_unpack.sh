@@ -13,8 +13,9 @@ printfln() {
 
 printfln " =================== Start Unpacking Offline Build Dependencies ==================="
 printfln ""
+SCRIPT_DIR=$(dirname $0)
 # detect pybind11 version requirement
-PYBIND11_VERSION_FILE="../cmake/pybind11-version.txt"
+PYBIND11_VERSION_FILE="$SCRIPT_DIR/../../cmake/pybind11-version.txt"
 if [ -f "$PYBIND11_VERSION_FILE" ]; then
     pybind11_version=$(tr -d '\n' < "$PYBIND11_VERSION_FILE")
     printfln "Pybind11 Version Required: $pybind11_version"
@@ -24,7 +25,7 @@ else
 fi
 
 # detect nvidia toolchain version requirement
-NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.txt"
+NV_TOOLCHAIN_VERSION_FILE="$SCRIPT_DIR/../../cmake/nvidia-toolchain-version.txt"
 if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
     nv_toolchain_version=$(tr -d '\n' < "$NV_TOOLCHAIN_VERSION_FILE")
     printfln "Nvidia Toolchain Version Required: $nv_toolchain_version"
