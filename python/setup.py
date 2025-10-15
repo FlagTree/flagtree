@@ -227,14 +227,6 @@ def open_url(url):
 
 # ---- package data ---
 
-offline_handler = helper.utils.OfflineBuildManager()
-if offline_handler.is_offline:
-    print("[INFO] Offline Build: Use offline build for triton origin toolkits")
-    offline_handler.handle_triton_origin_toolkits()
-    offline_build = True
-else:
-    print('[INFO] Offline Build: No offline build for triton origin toolkits')
-    offline_build = False
 
 
 def get_triton_cache_path():
@@ -427,10 +419,6 @@ class CMakeBuild(build_ext):
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
-        if offline_build:
-            googletest_offline_path = os.path.join(offline_handler.offline_build_dir, "googletest-release-1.12.1")
-            print(f'[INFO] Offline Build: Using offline googletest from {googletest_offline_path}')
-            cmake_args += ["-DGOOGLETEST_DIR=" + googletest_offline_path]
         helper.get_backend_cmake_args(build_ext=self)
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
