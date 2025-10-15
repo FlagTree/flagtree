@@ -375,7 +375,8 @@ class CMakeBuild(build_ext):
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
-        helper.get_backend_cmake_args(build_ext=self)
+        cmake_args += helper.get_backend_cmake_args(build_ext=self)
+        cmake_args += helper.get_offline_build_cmake_args(build_ext=self)
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
@@ -426,10 +427,6 @@ class CMakeBuild(build_ext):
             cmake_args += self.get_proton_cmake_args()
         else:
             cmake_args += ["-DTRITON_BUILD_PROTON=OFF"]
-
-        if helper.utils.OfflineBuildManager.is_offline_build():
-            # unit test builds fetch googletests from GitHub
-            cmake_args += ["-DTRITON_BUILD_UT=OFF"]
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
