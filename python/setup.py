@@ -174,10 +174,6 @@ class Package:
 
 # json
 def get_json_package_info():
-    if is_offline_build():
-        triton_cache_path = get_triton_cache_path()
-        os.environ['JSON_SYSPATH'] = os.path.join(triton_cache_path, "json")
-        print(f"[INFO] FlagTree Offline build: set JSON_SYSPATH to {os.environ['JSON_SYSPATH']}")
     url = "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
     return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
 
@@ -254,15 +250,6 @@ def open_url(url):
 
 # ---- package data ---
 
-offline_handler = helper.utils.OfflineBuildManager()
-if offline_handler.is_offline:
-    print("[INFO] FlagTree Offline Build: Use offline build for triton origin toolkits")
-    offline_handler.handle_triton_origin_toolkits()
-    offline_build = True
-else:
-    print('[INFO] FlagTree Offline Build: No offline build for triton origin toolkits')
-    offline_build = False
-
 
 def get_triton_cache_path():
     user_home = os.getenv("TRITON_HOME")
@@ -301,8 +288,6 @@ def get_thirdparty_packages(packages: list):
         input_exists = os.path.exists(version_file_path)
         input_compatible = input_exists and Path(version_file_path).read_text() == p.url
 
-        if is_offline_build() and not input_defined:
-            raise RuntimeError(f"Requested an offline build but {p.syspath_var_name} is not set")
         if not is_offline_build() and not input_defined and not input_compatible:
             with contextlib.suppress(Exception):
                 shutil.rmtree(package_root_dir)
@@ -460,10 +445,6 @@ class CMakeBuild(build_ext):
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
         cmake_args += helper.get_backend_cmake_args(build_ext=self)
-        if is_offline_build():
-            googletest_offline_path = os.path.join(offline_handler.offline_build_dir, "googletest-release-1.12.1")
-            print(f'[INFO] Offline Build: Using offline googletest from {googletest_offline_path}')
-            cmake_args += ["-DGOOGLETEST_DIR=" + googletest_offline_path]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
