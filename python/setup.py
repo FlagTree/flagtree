@@ -228,7 +228,6 @@ def open_url(url):
 # ---- package data ---
 
 
-
 def get_triton_cache_path():
     user_home = os.getenv("TRITON_HOME")
     if not user_home:
@@ -247,9 +246,12 @@ def get_thirdparty_packages(packages: list):
         if os.environ.get(p.syspath_var_name):
             package_dir = os.environ[p.syspath_var_name]
         version_file_path = os.path.join(package_dir, "version.txt")
-        if p.syspath_var_name not in os.environ and\
-           (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url) and\
-           not is_offline_build():
+
+        input_defined = p.syspath_var_name in os.environ
+        input_exists = os.path.exists(version_file_path)
+        input_compatible = input_exists and Path(version_file_path).read_text() == p.url
+
+        if not is_offline_build() and not input_defined and not input_compatible:
             with contextlib.suppress(Exception):
                 shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
@@ -419,7 +421,7 @@ class CMakeBuild(build_ext):
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
-        helper.get_backend_cmake_args(build_ext=self)
+        cmake_args += helper.get_backend_cmake_args(build_ext=self)
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
