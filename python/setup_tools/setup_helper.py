@@ -49,6 +49,12 @@ def get_backend_cmake_args(*args, **kargs):
         return []
 
 
+def get_offline_build_cmake_args(*args, **kargs):
+    if utils.OfflineBuildManager.is_offline_build():
+        return ["-DTRITON_BUILD_UT=OFF"]
+    return []
+
+
 def get_device_name():
     return device_mapping[flagtree_backend]
 
