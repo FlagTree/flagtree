@@ -92,15 +92,17 @@ def add(x: torch.Tensor, y: torch.Tensor):
 
 def test_vector_add():
     torch.manual_seed(0)
-    size = 256
-    x = torch.rand(size, device=DEVICE)
-    y = torch.rand(size, device=DEVICE)
-    output_torch = x.cpu() + y.cpu()
 
-    output_triton = add(x, y)
-    print(f'The maximum difference between torch and triton is '
-          f'{torch.max(torch.abs(output_torch - output_triton))}')
-    assert torch.allclose(output_triton, output_torch), (output_triton, output_torch)
+    test_shapes = [(64), (256), (512), (63), (255), (511), (1024), (2048), (4096)]
+    for size in test_shapes:
+        x = torch.rand(size, device=device)
+        y = torch.rand(size, device=device)
+        output_torch = x.cpu() + y.cpu()
+
+        output_triton = add(x, y)
+        print(f'The maximum difference between torch and triton is '
+              f'{torch.max(torch.abs(output_torch - output_triton))}')
+        assert torch.allclose(output_triton, output_torch), (output_triton, output_torch)
 
 
 if __name__ == "__main__":
