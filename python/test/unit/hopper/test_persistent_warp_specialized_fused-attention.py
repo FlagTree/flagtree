@@ -26,7 +26,10 @@ As of now, it only supports non-persistent warp specialized version of _fwd kern
 """
 
 import pytest
-import torch
+try:
+    import torch
+except ImportError:
+    pytest.skip("Torch not installed — skipping tests.", allow_module_level=True)
 
 import triton
 import triton.language as tl

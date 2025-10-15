@@ -20,7 +20,10 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import pytest
-import torch
+try:
+    import torch
+except ImportError:
+    pytest.skip("Torch not installed — skipping tests.", allow_module_level=True)
 
 import triton
 import triton.language as tl
