@@ -34,8 +34,19 @@ def install_extension(*args, **kargs):
 
 
 def get_backend_cmake_args(*args, **kargs):
+    if "editable_wheel" in sys.argv:
+        editable = True
+    else:
+        editable = False
+        # lit is used by the test suite
+    handle_plugin_backend(editable)
     try:
-        return activated_module.get_backend_cmake_args(*args, **kargs)
+        cmake_args=activated_module.get_backend_cmake_args(*args, **kargs)
+        if "editable_wheel"  in sys.argv:
+            cmake_args +=[
+                "-DEDITABLE_MODE=ON"
+            ]
+        return cmake_args
     except Exception:
         return []
 

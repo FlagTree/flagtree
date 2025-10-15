@@ -355,12 +355,6 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
-        if "editable_wheel" in sys.argv:
-            editable = True
-        else:
-            editable = False
-        # lit is used by the test suite
-        helper.handle_plugin_backend(editable)
         thirdparty_cmake_args = get_thirdparty_packages([get_pybind11_package_info(), get_llvm_package_info()])
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         # create build directories
@@ -387,10 +381,6 @@ class CMakeBuild(build_ext):
         # configuration
         cfg = get_build_type()
         build_args = ["--config", cfg]
-        if "editable_wheel"  in sys.argv:
-            cmake_args +=[
-                "-DEDITABLE_MODE=ON"
-            ]
 
         if platform.system() == "Windows":
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
