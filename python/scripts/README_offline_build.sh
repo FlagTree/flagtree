@@ -12,9 +12,9 @@ printfln() {
 }
 
 printfln " =================== Offline Build README ==================="
-
+SCRIPT_DIR=$(dirname $0)
 # detect nvidia toolchain version requirement
-NV_TOOLCHAIN_VERSION_FILE="../cmake/nvidia-toolchain-version.json"
+NV_TOOLCHAIN_VERSION_FILE="$SCRIPT_DIR/../../cmake/nvidia-toolchain-version.json"
 if [ -f "$NV_TOOLCHAIN_VERSION_FILE" ]; then
     ptxas_version=$(grep '"ptxas"' "$NV_TOOLCHAIN_VERSION_FILE" | grep -v "ptxas-blackwell" | sed -E 's/.*"ptxas": "([^"]+)".*/\1/')
     cuobjdump_version=$(grep '"cuobjdump"' "$NV_TOOLCHAIN_VERSION_FILE" | sed -E 's/.*"cuobjdump": "([^"]+)".*/\1/')
@@ -35,7 +35,7 @@ else
 fi
 
 # detect json version requirement
-JSON_VERSION_FILE="../cmake/json-version.txt"
+JSON_VERSION_FILE="$SCRIPT_DIR/../../cmake/json-version.txt"
 if [ -f "$JSON_VERSION_FILE" ]; then
     json_version=$(tr -d '\n' < "$JSON_VERSION_FILE")
     printfln "JSON Version Required: $json_version"
