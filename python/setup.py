@@ -225,14 +225,6 @@ def open_url(url):
 
 # ---- package data ---
 
-offline_handler = helper.utils.OfflineBuildManager()
-if offline_handler.is_offline:
-    print("[INFO] Offline Build: Use offline build for triton origin toolkits")
-    offline_handler.handle_triton_origin_toolkits()
-    offline_build = True
-else:
-    print('[INFO] Offline Build: No offline build for triton origin toolkits')
-    offline_build = False
 
 
 def get_triton_cache_path():
