@@ -167,6 +167,8 @@ else()
 endif()
 include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
+# flagtree spec include dir
+include_directories(${PROJECT_SOURCE_DIR}/third_party/${FLAGTREE_BACKEND}/backend/flagtree_backend_specialization/include)
 
 # link_directories(${LLVM_LIBRARY_DIR})
 if(NOT FLAGTREE_BACKEND)

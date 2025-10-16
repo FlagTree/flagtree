@@ -4,12 +4,12 @@
 #include <algorithm>
 #include <assert.h>
 #include <cstdlib>
-#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
 
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Tools_Sys_GetEnv_head
+#include <optional>
 #include <dlfcn.h>
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -35,7 +35,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_LLVM_DEBUG_ONLY",
     "USE_TTGIR_LOC",
     "NVPTX_ENABLE_DUMP",
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Tools_Sys_GetEnv_ILUIR_ENABLE_DUMP
     "ILUIR_ENABLE_DUMP",
 #endif
     // clang-format on
@@ -86,7 +86,7 @@ inline std::optional<bool> isEnvValueBool(std::string str) {
   return std::nullopt;
 }
 
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Tools_Sys_GetEnv_funtions
 static fs::path &getCudaPath(void) {
   static fs::path cuda_path = [] {
     void *handle = dlopen("libnvrtc.so", RTLD_LAZY);

@@ -20,6 +20,8 @@
 #define GET_OP_CLASSES
 #include "triton/Dialect/Triton/IR/Ops.h.inc"
 
+#include "flagtree_spec.h"
+
 namespace mlir {
 namespace triton {
 
@@ -36,9 +38,15 @@ public:
   inferTransOpEncoding(Attribute operandEncoding, ArrayRef<int32_t> order,
                        Attribute &resultEncoding) const = 0;
 
+#ifdef FLAGTREE_SPEC_Dialect_Triton_IR_Dialect_inferReduceOpEncoding_ARG
   virtual LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
-                        bool noWarpReduce, Attribute &resultEncoding) const = 0;
+                        FLAGTREE_SPEC_Dialect_Triton_IR_Dialect_inferReduceOpEncoding_ARG spec_arg, Attribute &resultEncoding) const = 0;
+#else
+  virtual LogicalResult
+  inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
+                        Attribute &resultEncoding) const = 0;
+#endif
 
   virtual LogicalResult
   inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,

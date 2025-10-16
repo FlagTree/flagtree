@@ -1,0 +1,7 @@
+#ifndef ILUVATAR_TRITON_ANALYSIS_MEMBAR_H
+#define ILUVATAR_TRITON_ANALYSIS_MEMBAR_H
+
+#define FLAGTREE_SPEC_BlockInfo_Function
+#define FLAGTREE_SPEC_Analysis_Membar_MembarAnalysis_update
+
+#endif // ILUVATAR_TRITON_ANALYSIS_MEMBAR_H

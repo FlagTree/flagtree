@@ -1,7 +1,9 @@
+add_subdirectory(backend/flagtree_backend_specialization/lib)
 add_subdirectory(include)
 add_subdirectory(lib)
 find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
 set (ILUVATAR_PLUGIN_DIR "${Python3_SITELIB}/triton/_C")
+
 if(TRITON_BUILD_PYTHON_MODULE)
   if(FLAGTREE_PLUGIN)
     add_subdirectory(plugin)
@@ -13,7 +15,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
       NAMES
         iluvatarTritonPlugin.so
       PATHS
-      ${ILUVATAR_PLUGIN_DIR}
+        ${ILUVATAR_PLUGIN_DIR}
       REQUIRED
     )
     add_triton_plugin(TritonILUVATAR
