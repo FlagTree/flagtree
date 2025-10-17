@@ -3,6 +3,10 @@ import shutil
 from pathlib import Path
 from setup_tools.utils.tools import flagtree_root_dir, Module, flagtree_submodule_dir, DownloadManager
 
+def precompile_hook_flir(*args, **kargs):
+    default_backends = ["nvidia"]
+    default_backends.append('flir')
+
 downloader = DownloadManager()
 
 submodules = (Module(name="ascendnpu-ir", url="https://gitee.com/ascend/ascendnpu-ir.git",
@@ -106,7 +110,7 @@ def is_compile_ascend_npu_ir():
     return os.getenv("ASCEND_NPU_IR_COMPILE", "1") == "1"
 
 
-def precompile_hock(*args, **kargs):
+def precompile_hook(*args, **kargs):
     third_party_base_dir = Path(kargs['third_party_base_dir'])
     ascend_path = Path(third_party_base_dir) / "ascend"
     patch_path = Path(ascend_path) / "triton_patch"
