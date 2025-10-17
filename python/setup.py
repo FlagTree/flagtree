@@ -555,6 +555,7 @@ package_data_tools = helper.get_package_data_tools()
 
 package_data = {
     "triton/tools": package_data_tools,
+    "": ["*TritonPlugin.so"],
     **{f"triton/backends/{b.name}": b.package_data
        for b in backends},
 }

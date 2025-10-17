@@ -1,7 +1,12 @@
 add_subdirectory(include)
 add_subdirectory(lib)
 find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
-set (ILUVATAR_PLUGIN_DIR "${Python3_SITELIB}/triton/_C")
+option(EDITABLE_MODE "Build in developer (editable) mode" OFF)
+if(EDITABLE_MODE)
+  set(ILUVATAR_PLUGIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+else()
+  set (ILUVATAR_PLUGIN_DIR "${Python3_SITELIB}/triton/_C")
+endif()
 if(TRITON_BUILD_PYTHON_MODULE)
   if(FLAGTREE_PLUGIN)
     add_subdirectory(plugin)
@@ -9,16 +14,29 @@ if(TRITON_BUILD_PYTHON_MODULE)
       SHARED_LIB iluvatarTritonPlugin
     )
   else()
-    find_library(iluvatarTritonPluginLib
+    if(EDITABLE_MODE)
+      find_library(iluvatarTritonPluginLib
       NAMES
         iluvatarTritonPlugin.so
       PATHS
-      ${ILUVATAR_PLUGIN_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}
       REQUIRED
-    )
-    add_triton_plugin(TritonILUVATAR
-      SHARED_LIB ${iluvatarTritonPluginLib}
-    )
+      )
+      add_triton_plugin(TritonILUVATAR
+        SHARED_LIB ${iluvatarTritonPluginLib}
+      )
+    else()
+      find_library(iluvatarTritonPluginLib
+        NAMES
+          iluvatarTritonPlugin.so
+        PATHS
+        ${ILUVATAR_PLUGIN_DIR}
+        REQUIRED
+      )
+      add_triton_plugin(TritonILUVATAR
+        SHARED_LIB ${iluvatarTritonPluginLib}
+      )
+    endif()
   endif()
 endif()
 

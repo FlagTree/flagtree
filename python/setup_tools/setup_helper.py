@@ -34,8 +34,17 @@ def install_extension(*args, **kargs):
 
 
 def get_backend_cmake_args(*args, **kargs):
+    if "editable_wheel" in sys.argv:
+        editable = True
+    else:
+        editable = False
+        # lit is used by the test suite
+    handle_plugin_backend(editable)
     try:
-        return activated_module.get_backend_cmake_args(*args, **kargs)
+        cmake_args = activated_module.get_backend_cmake_args(*args, **kargs)
+        if "editable_wheel" in sys.argv:
+            cmake_args += ["-DEDITABLE_MODE=ON"]
+        return cmake_args
     except Exception:
         return []
 
@@ -308,6 +317,17 @@ def handle_flagtree_backend():
             ext_sourcedir = os.path.abspath(f"../third_party/{flagtree_backend}/python/{ext_sourcedir}") + "/"
 
 
+def handle_plugin_backend(editable):
+    if flagtree_backend in ["iluvatar", "mthreads"] and editable is False:
+        src_plugin_path = str(
+            os.getenv("HOME")) + "/.flagtree/" + flagtree_backend + "/" + flagtree_backend + "TritonPlugin.so"
+        dst_plugin_dir = sysconfig.get_paths()['purelib'] + "/triton/_C"
+        if not os.path.exists(dst_plugin_dir):
+            os.makedirs(dst_plugin_dir)
+        dst_plugin_path = dst_plugin_dir + "/" + flagtree_backend + "TritonPlugin.so"
+        shutil.copy(src_plugin_path, dst_plugin_path)
+
+
 def set_env(env_dict: dict):
     for env_k, env_v in env_dict.items():
         os.environ[env_k] = str(env_v)
@@ -423,12 +443,3 @@ cache.store(
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )
-
-if flagtree_backend in ["iluvatar", "mthreads"]:
-    src_plugin_path = str(
-        os.getenv("HOME")) + "/.flagtree/" + flagtree_backend + "/" + flagtree_backend + "TritonPlugin.so"
-    dst_plugin_dir = sysconfig.get_paths()['purelib'] + "/triton/_C"
-    if not os.path.exists(dst_plugin_dir):
-        os.makedirs(dst_plugin_dir)
-    dst_plugin_path = dst_plugin_dir + "/" + flagtree_backend + "TritonPlugin.so"
-    shutil.copy(src_plugin_path, dst_plugin_path)
