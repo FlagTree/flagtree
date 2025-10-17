@@ -3,5 +3,9 @@
 
 #define FLAGTREE_SPEC_Utility_Function
 #define FLAGTREE_SPEC_Utility_multiRootGetSlice_ARG bool
+#define FLAGTREE_SPEC_Analysis_Utility_maybeSharedAllocationOp
+#define FLAGTREE_SPEC_Analysis_Utility_supportMMA
+#define FLAGTREE_SPEC_Analysis_Utility_isMmaToMmaShortcut
+#define FLAGTREE_SPEC_Analysis_Utility_isMmaToDotShortcut
 
 #endif // ILUVATAR_TRITON_ANALYSIS_UTILITY_H
