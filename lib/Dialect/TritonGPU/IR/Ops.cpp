@@ -17,7 +17,11 @@ LogicalResult UpcastMXFPOp::verify() {
   auto xTy = getSrc().getType();
   auto scaleTy = getScale().getType();
 
+#if LLVM_VERSION_MAJOR < 21
   if (xTy.getElementType() != FloatType::getBF16(getContext()) &&
+#else  // triton_v3.3.x
+  if (xTy.getElementType() != BFloat16Type::get(getContext()) &&
+#endif
       xTy.getElementType() != IntegerType::get(getContext(), 8)) {
     return emitOpError("element type of the first operand must be bf16 or i8");
   }
@@ -97,7 +101,11 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
     auto newShape = SmallVector<int64_t>(xShape);
     newShape.back() *= 2;
     inferredReturnTypes.push_back(
+#if LLVM_VERSION_MAJOR < 21
         RankedTensorType::get(newShape, FloatType::getBF16(ctx), newVEncoding));
+#else
+        RankedTensorType::get(newShape, BFloat16Type::get(ctx), newVEncoding));
+#endif
   } else {
     inferredReturnTypes.push_back(xTy);
   }

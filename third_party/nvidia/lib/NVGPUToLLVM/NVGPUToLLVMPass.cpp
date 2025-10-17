@@ -78,9 +78,17 @@ Type getTypeFromConstraint(char constraint, PatternRewriter &rewriter) {
   else if (constraint == 'l')
     ty = IntegerType::get(rewriter.getContext(), 64);
   else if (constraint == 'f')
+#if LLVM_VERSION_MAJOR < 21
     ty = FloatType::getF32(rewriter.getContext());
+#else  // triton_v3.3.x
+    ty = Float32Type::get(rewriter.getContext());
+#endif
   else if (constraint == 'd')
+#if LLVM_VERSION_MAJOR < 21
     ty = FloatType::getF64(rewriter.getContext());
+#else  // triton_v3.3.x
+    ty = Float64Type::get(rewriter.getContext());
+#endif
   else {
     assert(false && "Unsupported constraint");
   }
