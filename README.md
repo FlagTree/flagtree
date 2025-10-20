@@ -1,8 +1,37 @@
-[中文版](./README_cn.md)
+<div align="right"><a href="/README_cn.md">中文版</a></div>
 
 ## FlagTree
 
 FlagTree is an open source, unified compiler for multiple AI chips project dedicated to developing a diverse ecosystem of AI chip compilers and related tooling platforms, thereby fostering and strengthening the upstream and downstream Triton ecosystem. Currently in its initial phase, the project aims to maintain compatibility with existing adaptation solutions while unifying the codebase to rapidly implement single-repository multi-backend support. For upstream model users, it provides unified compilation capabilities across multiple backends; for downstream chip manufacturers, it offers examples of Triton ecosystem integration.
+
+## Latest News
+
+* 2025/09/30 Support flagtree_hints for shared memory on GPGPU.
+* 2025/09/29 SDK storage migrated to ksyuncs, improving download stability.
+* 2025/09/25 Support flagtree_hints for ascend backend compilation capability.
+* 2025/09/16 Added hcu backend integration, and added CI/CD.
+* 2025/09/09 Forked and modified llvm-project to support FLIR.
+* 2025/09/01 Added adaptation for Paddle framework, and added CI/CD.
+* 2025/08/16 Added adaptation for Beijing Super Cloud Computing Center.
+* 2025/08/04 Added T*** backend integration.
+* 2025/08/01 FLIR supports flagtree_hints for shared memory loading.
+* 2025/07/30 Updated cambricon backend.
+* 2025/07/25 Inspur team added adaptation for OpenAnolis OS.
+* 2025/07/09 FLIR supports flagtree_hints for Async DMA.
+* 2025/07/08 Added UnifiedHardware manager for multi-backend compilation.
+* 2025/07/02 FlagGems LibTuner adapted to triton_v3.3.x version.
+* 2025/07/02 Added S*** backend integration.
+* 2025/06/20 FLIR began supporting MLIR extension functionality.
+* 2025/06/06 Added tsingmicro backend integration, and added CI/CD.
+* 2025/06/04 Added ascend backend integration, and added CI/CD.
+* 2025/06/03 Added metax backend integration, and added CI/CD.
+* 2025/05/22 FlagGems LibEntry adapted to triton_v3.3.x version.
+* 2025/05/21 FLIR began supporting conversion functionality to middle layer.
+* 2025/04/09 Added arm aipu backend integration, provided torch standard extension examples, and added CI/CD.
+* 2025/03/26 Integrated security compliance scanning.
+* 2025/03/19 Added klx xpu backend integration, and added CI/CD.
+* 2025/03/19 Added mthreads backend integration, and added CI/CD.
+* 2025/03/12 Added iluvatar backend integration, and added CI/CD.
 
 ## Install from source
 Installation dependencies (ensure you use the correct python3.x version):

@@ -1,8 +1,36 @@
-[English](./README.md)
+<div align="right"><a href="/README.md">English</a></div>
 
 ## FlagTree
 
 FlagTree 是面向多种 AI 芯片的开源、统一编译器。FlagTree 致力于打造多元 AI 芯片编译器及相关工具平台，发展和壮大 Triton 上下游生态。项目当前处于初期，目标是兼容现有适配方案，统一代码仓库，快速实现单仓库多后端支持。对于上游模型用户，提供多后端的统一编译能力；对于下游芯片厂商，提供 Triton 生态接入范例。
+
+## 新特性
+* 2025/09/30 在 GPGPU 上支持编译指导 shared memory。
+* 2025/09/29 SDK 存储迁移至金山云，大幅提升下载稳定性。
+* 2025/09/25 支持编译指导 ascend 的后端编译能力。
+* 2025/09/16 新增接入 hcu 后端，加入 CI/CD。
+* 2025/09/09 Fork 并修改 llvm-project，承接 FLIR 的支撑。
+* 2025/09/01 新增适配 Paddle 框架，加入 CI/CD。
+* 2025/08/16 新增适配北京超级云计算中心 AI 智算云。
+* 2025/08/04 新增接入 T*** 后端。
+* 2025/08/01 FLIR 支持编译指导 shared memory loading。
+* 2025/07/30 更新 cambricon 后端。
+* 2025/07/25 浪潮团队新增适配 OpenAnolis 龙蜥操作系统。
+* 2025/07/09 FLIR 支持编译指导 Async DMA。
+* 2025/07/08 新增多后端编译统一管理模块。
+* 2025/07/02 FlagGems LibTuner 适配 triton_v3.3.x 版本。
+* 2025/07/02 新增接入 S*** 后端。
+* 2025/06/20 FLIR 开始承接 MLIR 扩展功能。
+* 2025/06/06 新增接入 tsingmicro 后端，加入 CI/CD。
+* 2025/06/04 新增接入 ascend 后端，加入 CI/CD。
+* 2025/06/03 新增接入 metax 后端，加入 CI/CD。
+* 2025/05/22 FlagGems LibEntry 适配 triton_v3.3.x 版本。
+* 2025/05/21 FLIR 开始承接到中间层的转换功能。
+* 2025/04/09 新增接入 arm aipu 后端，提供 torch 标准扩展范例，加入 CI/CD。
+* 2025/03/26 接入安全合规扫描。
+* 2025/03/19 新增接入 klx xpu 后端，加入 CI/CD。
+* 2025/03/19 新增接入 mthreads 后端，加入 CI/CD。
+* 2025/03/12 新增接入 iluvatar 后端，加入 CI/CD。
 
 ## 从源代码安装
 安装依赖（注意使用正确的 python3.x 执行）：
