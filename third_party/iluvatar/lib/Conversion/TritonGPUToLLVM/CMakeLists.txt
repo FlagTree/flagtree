@@ -1,3 +1,15 @@
+if (FLAGTREE_BACKEND)
+    set(NVGPUIR "")
+else()
+    set(NVGPUIR "NVGPUIR")
+endif()
+
+if(NOT FLAGTREE_BACKEND STREQUAL "iluvatar")
+  set(_EXTRA_LINK_LIBS TritonNvidiaGPUTransforms)
+else()
+  set(_EXTRA_LINK_LIBS FlagTree_${FLAGTREE_BACKEND}_TritonConversionTritonGPUToLLVM)
+endif()
+
 add_triton_library(TritonGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     DotOpToLLVM/FMA.cpp
@@ -33,7 +45,6 @@ add_triton_library(TritonGPUToLLVM
     TritonIR
     TritonGPUIR
     TritonGPUTransforms
-    #TritonNvidiaGPUTransforms
-    # NVGPUIR
-    FlagTree_${FLAGTREE_BACKEND}_TritonConversionTritonGPUToLLVM
+    ${NVGPUIR}
+    ${_EXTRA_LINK_LIBS}
 )

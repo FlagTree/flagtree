@@ -10,3 +10,4 @@
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/iluvatar_Dialect.h"
 #include "triton/Tools/Sys/iluvatar_GetEnv.hpp"
+#include "triton/Conversion/TritonGPUToLLVM/iluvatar_DecomposeUnsupportedConversions.h"
