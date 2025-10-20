@@ -6,6 +6,8 @@
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
+#include "flagtree_spec.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
