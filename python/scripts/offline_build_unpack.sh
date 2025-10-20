@@ -53,11 +53,6 @@ if [ $# -ge 2 ]; then
 else
     output_dir="$HOME/.triton"
     printfln "${YELLOW}Use default output directory: $output_dir${NC}"
-    if [ -d "$output_dir" ]; then
-        old_output_dir=${output_dir}.$(date +%Y%m%d_%H%M%S)
-        printfln "${YELLOW}$output_dir already exists, mv to $old_output_dir${NC}"
-        mv $output_dir $old_output_dir
-    fi
 fi
 
 if [ ! -f "${input_zip}" ]; then
@@ -72,7 +67,9 @@ if [ ! -d "$output_dir" ]; then
     printfln "Creating output directory $output_dir"
     mkdir -p "$output_dir"
 else
-    printfln "Output directory $output_dir already exists"
+    old_output_dir=${output_dir}.$(date +%Y%m%d_%H%M%S)
+    printfln "${YELLOW}Output directory $output_dir already exists, mv to $old_output_dir${NC}"
+    mv $output_dir $old_output_dir
 fi
 printfln ""
 
@@ -86,57 +83,51 @@ pybind11_file="${output_dir}/pybind11-${pybind11_version}.tar.gz"
 googletest_file="${output_dir}/googletest-release-1.12.1.zip"
 triton_shared_file="${output_dir}/triton-shared-380b87122c88af131530903a702d5318ec59bb33.zip"
 
-
-
-if [ ! -d "$output_dir" ]; then
-    mkdir "$output_dir"
-fi
-
-
+mkdir -p "$output_dir"
 
 printfln "Unpacking ${input_zip} into ${output_dir}..."
 unzip "${input_zip}" -d ${output_dir}
 
 printfln "Creating directory ${output_dir}/nvidia ..."
-mkdir "${output_dir}/nvidia"
+mkdir -p "${output_dir}/nvidia"
 
 printfln "Creating directory ${output_dir}/nvidia/ptxas ..."
-mkdir "${output_dir}/nvidia/ptxas"
+mkdir -p "${output_dir}/nvidia/ptxas"
 printfln "Extracting $nvcc_file into ${output_dir}/nvidia/ptxas ..."
 tar -jxf $nvcc_file -C "${output_dir}/nvidia/ptxas"
 
 printfln "Creating directory ${output_dir}/nvidia/cuobjdump ..."
-mkdir "${output_dir}/nvidia/cuobjdump"
+mkdir -p "${output_dir}/nvidia/cuobjdump"
 printfln "Extracting $cuobjdump_file into ${output_dir}/nvidia/cuobjdump ..."
 tar -jxf $cuobjdump_file -C "${output_dir}/nvidia/cuobjdump"
 
 printfln "Creating directory ${output_dir}/nvidia/nvdisasm ..."
-mkdir "${output_dir}/nvidia/nvdisasm"
+mkdir -p "${output_dir}/nvidia/nvdisasm"
 printfln "Extracting $nvdisam_file into ${output_dir}/nvidia/nvdisasm ..."
 tar -jxf $nvdisam_file -C "${output_dir}/nvidia/nvdisasm"
 
 printfln "Creating directory ${output_dir}/nvidia/cudacrt ..."
-mkdir "${output_dir}/nvidia/cudacrt"
+mkdir -p "${output_dir}/nvidia/cudacrt"
 printfln "Extracting $nvcc_file into ${output_dir}/nvidia/cudacrt ..."
 tar -jxf $nvcc_file -C "${output_dir}/nvidia/cudacrt"
 
 printfln "Creating directory ${output_dir}/nvidia/cudart ..."
-mkdir "${output_dir}/nvidia/cudart"
+mkdir -p "${output_dir}/nvidia/cudart"
 printfln "Extracting $cudart_file into ${output_dir}/nvidia/cudart ..."
 tar -jxf $cudart_file -C "${output_dir}/nvidia/cudart"
 
 printfln "Creating directory ${output_dir}/nvidia/cupti ..."
-mkdir "${output_dir}/nvidia/cupti"
+mkdir -p "${output_dir}/nvidia/cupti"
 printfln "Extracting $cupti_file into ${output_dir}/nvidia/cupti ..."
 tar -jxf $cupti_file -C "${output_dir}/nvidia/cupti"
 
 printfln "Creating directory ${output_dir}/json ..."
-mkdir "${output_dir}/json"
+mkdir -p "${output_dir}/json"
 printfln "Extracting $json_file into ${output_dir}/json ..."
 unzip $json_file -d "${output_dir}/json" > /dev/null
 
 printfln "Creating directory ${output_dir}/pybind11 ..."
-mkdir "${output_dir}/pybind11"
+mkdir -p "${output_dir}/pybind11"
 printfln "Extracting $pybind11_file into ${output_dir}/pybind11 ..."
 tar -zxf $pybind11_file -C "${output_dir}/pybind11"
 
