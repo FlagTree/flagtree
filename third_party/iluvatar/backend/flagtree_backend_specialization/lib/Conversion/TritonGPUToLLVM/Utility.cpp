@@ -193,5 +193,101 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
   llvm_unreachable("unexpected layout in getMultiDimOffset");
 }
 
+Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
+                        StringRef key, StringRef content) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto ctx = moduleOp.getContext();
+  unsigned stringNumber = 0;
+  SmallString<16> stringConstName;
+  do {
+    stringConstName.clear();
+    (key + Twine(stringNumber++)).toStringRef(stringConstName);
+  } while (moduleOp.lookupSymbol(stringConstName));
+
+  llvm::SmallString<64> contentStr(content);
+  size_t contentSize = contentStr.size_in_bytes();
+  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
+
+  LLVM::GlobalOp global;
+  {
+    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    global = rewriter.create<LLVM::GlobalOp>(
+        UnknownLoc::get(ctx), globalType,
+        /*isConstant=*/true, LLVM::Linkage::Private, stringConstName,
+        rewriter.getStringAttr(contentStr), 1, 4);
+  }
+
+  Value zero = i32_val(0);
+  Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
+  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
+      UnknownLoc::get(ctx), globalPtrType, global.getSymName());
+  Value localPtr = addrspacecast(ptr_ty(ctx), globalPtr);
+  Value stringStart =
+      gep(ptr_ty(ctx), i8_ty, localPtr, SmallVector<Value>({zero}));
+  return stringStart;
+}
+
 } // namespace LLVM
+
+SmallVector<std::pair<StringAttr, Value>>
+applyLinearLayout(Location loc, RewriterBase &rewriter,
+                  const LinearLayout &layout,
+                  ArrayRef<std::pair<StringAttr, Value>> indices) {
+  assert(layout.getNumInDims() == indices.size());
+  for (auto [inDimName, idx] : indices) {
+    assert(layout.hasInDim(inDimName) && "Invalid inDimName");
+  }
+
+  // This function can emit a lot of MLIR code, which ultimately makes
+  // compilation slow.  (We think this shouldn't be the case -- it's not *that*
+  // much code -- but we're not clear on how to fix the slowness, which happens
+  // in the bowels of MLIR.)
+  //
+  // As a result we go through some contortions to avoid emitting code where
+  // possible.
+
+  // Manually constant-fold the layout where possible.
+  SmallVector<std::pair<StringAttr, int32_t>> constantIns;
+  for (auto [inDimName, idx] : indices) {
+    if (auto constant = dyn_cast<LLVM::ConstantOp>(idx.getDefiningOp())) {
+      constantIns.push_back(
+          {inDimName, constant.getValue().cast<IntegerAttr>().getInt()});
+    } else {
+      constantIns.push_back({inDimName, 0});
+    }
+  }
+  SmallVector<int32_t> constantComponent =
+      llvm::to_vector(llvm::make_second_range(layout.apply(constantIns)));
+
+  Value zero = i32_val(0);
+  SmallVector<std::pair<StringAttr, Value>> outIndices;
+  for (auto [i, outDimName] : llvm::enumerate(layout.getOutDimNames())) {
+    if (constantComponent[i] == 0)
+      outIndices.push_back({outDimName, zero});
+    else
+      outIndices.push_back({outDimName, i32_val(constantComponent[i])});
+  }
+
+  for (auto [inDimName, idx] : indices) {
+    if (isa<LLVM::ConstantOp>(idx.getDefiningOp())) {
+      continue;
+    }
+
+    int nBits = layout.getInDimSizeLog2(inDimName);
+    for (int i = 0; i < nBits; i++) {
+      Value bit = and_(idx, i32_val(1 << i));
+      Value bit_is_zero = icmp_eq(bit, zero);
+      for (auto &[outDimName, outIdx] : outIndices) {
+        int32_t basis = layout.getBasis(inDimName, i, outDimName);
+        if (basis == 0)
+          continue;
+        outIdx = xor_(outIdx, select(bit_is_zero, zero, i32_val(basis)));
+      }
+    }
+  }
+
+  return outIndices;
+}
+
 } // namespace mlir

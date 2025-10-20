@@ -1,7 +1,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "python/src/plugin.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -110,7 +109,6 @@ getMNCoords(Value thread, Location loc, ConversionPatternRewriter &rewriter,
   return coords; // {M,N} in row-major
 }
 } // namespace SharedToDotOperandMMAv1
-
 namespace mlir {
 
 namespace triton::gpu {
@@ -144,6 +142,7 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(ConversionPatternRewriter &rewriter,
 }
 } // namespace triton::gpu
 
+#ifndef FLAGTREE_SPEC_Conversion_TritonGPUToLLVM_Utility_applyLinearLayout
 SmallVector<std::pair<StringAttr, Value>>
 applyLinearLayout(Location loc, RewriterBase &rewriter,
                   const LinearLayout &layout,
@@ -166,7 +165,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   for (auto [inDimName, idx] : indices) {
     if (auto constant = dyn_cast<LLVM::ConstantOp>(idx.getDefiningOp())) {
       constantIns.push_back(
-          {inDimName, constant.getValue().cast<IntegerAttr>().getInt()});
+          {inDimName, cast<IntegerAttr>(constant.getValue()).getInt()});
     } else {
       constantIns.push_back({inDimName, 0});
     }
@@ -203,6 +202,7 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
 
   return outIndices;
 }
+#endif
 
 std::optional<SmallVector<SmallVector<Value>>>
 emitIndicesUsingLinearLayouts(Location loc, RewriterBase &rewriter,
@@ -414,6 +414,7 @@ Value linearize(ConversionPatternRewriter &rewriter, Location loc,
   return linear;
 }
 
+#ifndef FLAGTREE_SPEC_Conversion_TritonGPUToLLVM_Utility_addStringToModule
 Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
                         StringRef key, StringRef content) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -429,7 +430,6 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
   size_t contentSize = contentStr.size_in_bytes();
   auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
 
-#ifndef __ILUVATAR__
   LLVM::GlobalOp global;
   {
     ConversionPatternRewriter::InsertionGuard guard(rewriter);
@@ -446,27 +446,9 @@ Value addStringToModule(Location loc, ConversionPatternRewriter &rewriter,
       UnknownLoc::get(ctx), globalPtrType, global.getSymName());
   Value stringStart =
       gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
-#else
-  LLVM::GlobalOp global;
-  {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-    global = rewriter.create<LLVM::GlobalOp>(
-        UnknownLoc::get(ctx), globalType,
-        /*isConstant=*/true, LLVM::Linkage::Private, stringConstName,
-        rewriter.getStringAttr(contentStr), 1, 4);
-  }
-
-  Value zero = i32_val(0);
-  Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
-  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
-      UnknownLoc::get(ctx), globalPtrType, global.getSymName());
-  Value localPtr = addrspacecast(ptr_ty(ctx), globalPtr);
-  Value stringStart =
-      gep(ptr_ty(ctx), i8_ty, localPtr, SmallVector<Value>({zero}));
-#endif
   return stringStart;
 }
+#endif
 
 #ifndef FLAGTREE_SPEC_Conversion_TritonGPUToLLVM_Utility_getMultiDimOffset_ARG
 SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
