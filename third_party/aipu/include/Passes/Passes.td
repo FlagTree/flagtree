@@ -40,4 +40,33 @@ def FlattenMemrefsPass : Pass<"flatten-memref"> {
   ];
 }
 
+// The following code snippet is from:
+// https://github.com/google/heir/blob/main/lib/Transforms/ForwardStoreToLoad/ForwardStoreToLoad.td
+// License: Apache 2.0
+// Modifications: remove affine dialect dependency
+def ForwardStoreToLoad : Pass<"forward-store-to-load"> {
+  let summary = "Forward stores to loads within a single block";
+  let description = [{
+    This pass is a simplified version of mem2reg and similar passes.
+    It analyzes an operation, finding all basic blocks within that op
+    that have memrefs whose stores can be forwarded to loads.
+
+    Does not support complex control flow within a block, nor ops
+    with arbitrary subregions.
+  }];
+  let dependentDialects = [
+    "mlir::memref::MemRefDialect"
+  ];
+}
+
+def ConvertI64ToI32 : Pass<"convert-i64-to-i32"> {
+  let summary = "Convert i64 to i32";
+  let description = [{
+    This pass is to simply i64 to i32 ir.
+  }];
+  let dependentDialects = [
+    "mlir::arith::ArithDialect"
+  ];
+}
+
 #endif // MLIR_DIALECT_AIPU_PASSES

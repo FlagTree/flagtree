@@ -14,7 +14,9 @@ void init_all_passes(nanobind::module_ &&m) {
   m.def("register_all_passes", []() {
     registerAIPUConvertBoolArg2I8();
     registerSCFLoopBufferizationPreprocessing();
-    mlir::aipu::registerFlattenMemrefsPass();
+    registerFlattenMemrefsPass();
+    registerForwardStoreToLoadPass();
+    registerConvertI64ToI32Pass();
   });
 }
 
