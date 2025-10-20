@@ -1,4 +1,4 @@
-[中文版](./release_notes_v0.2.0_cn.md)
+<div align="right"><a href="./release_notes_v0.2.0_cn.md">中文版</a></div>
 
 ## FlagTree 0.2.0 Release
 

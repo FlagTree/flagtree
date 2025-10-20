@@ -1,4 +1,4 @@
-<div align="right">[中文版](./release_notes_v0.3.0_cn.md)</div>
+<div align="right"><a href="./release_notes_v0.3.0_cn.md">中文版</a></div>
 
 ## FlagTree 0.3.0 Release
 
