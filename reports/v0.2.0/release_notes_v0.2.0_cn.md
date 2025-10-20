@@ -1,4 +1,4 @@
-[English](./release_notes_v0.2.0.md)
+<div align="right"><a href="./release_notes_v0.2.0.md">English</a></div>
 
 ## FlagTree 0.2.0 Release
 

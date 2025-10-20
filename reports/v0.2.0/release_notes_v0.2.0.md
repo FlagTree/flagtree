@@ -1,6 +1,6 @@
-[中文版](./release_notes_v0.2.0_cn.md)
+<div align="right"><a href="./release_notes_v0.2.0_cn.md">中文版</a></div>
 
-## FlagTree 0.1.0 Release
+## FlagTree 0.2.0 Release
 
 ### Highlights
 
@@ -8,7 +8,7 @@ FlagTree inherits capabilities from the previous version, continuously integrate
 
 ### New features
 
-* Added multi-Backend Support
+* Added multi-backend Support
 
 Currently supported backends include triton_shared cpu, iluvatar, xpu (klx), mthreads, __metax__, __aipu__(arm npu), __ascend__ npu & cpu, __tsingmicro__, cambricon, with __bold__ indicating newly added ones. <br>
 Each new backend maintains the capabilities of the previous version: cross-platform compilation and rapid verification, plugin-based high-differentiation modules, CI/CD, and quality management capabilities. <br>
