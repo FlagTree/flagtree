@@ -2,7 +2,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefsPlugin.h"
 
 using namespace mlir;
 using namespace mlir::triton;
