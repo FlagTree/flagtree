@@ -279,6 +279,10 @@ def get_thirdparty_packages(packages: list):
 def download_and_copy(name, src_path, dst_path, variable, version, url_func):
     if is_offline_build():
         return
+    # Skip CUDA toolkit downloads for non-CUDA backends
+    from setup_tools.utils.tools import is_skip_cuda_toolkits
+    if is_skip_cuda_toolkits():
+        return
     triton_cache_path = get_triton_cache_path()
     if variable in os.environ:
         return
