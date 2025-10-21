@@ -13,3 +13,4 @@
 #include "triton/Conversion/TritonGPUToLLVM/iluvatar_DecomposeUnsupportedConversions.h"
 #include "triton/Conversion/TritonGPUToLLVM/iluvatar_ReduceOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/iluvatar_TypeConverter.h"
+#include "triton/Dialect/Triton/IR/iluvatar_Ops.h"

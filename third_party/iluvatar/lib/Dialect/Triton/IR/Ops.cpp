@@ -9,9 +9,12 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 
+#include "flagtree_spec.h"
+
 namespace mlir {
 namespace triton {
 
+#ifdef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_LoadOp_parse
 // Parser & printer for assembly forms
 ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
   // Parse operands
@@ -78,7 +81,9 @@ ParseResult LoadOp::parse(OpAsmParser &parser, OperationState &result) {
 
   return success();
 }
+#endif
 
+#ifdef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_LoadOp_print
 void LoadOp::print(OpAsmPrinter &printer) {
   printer << " ";
   printer << getOperation()->getOperands();
@@ -96,6 +101,7 @@ void LoadOp::print(OpAsmPrinter &printer) {
   }
   printer.printStrippedAttrOrType(getResult().getType());
 }
+#endif
 
 void LoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
@@ -120,6 +126,7 @@ namespace mlir {
 namespace triton {
 
 //-- LoadOp --
+#ifdef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_getLoadOpResultType
 static Type getLoadOpResultType(OpBuilder &builder, Type ptrType) {
   auto ptrTensorType = ptrType.dyn_cast<RankedTensorType>();
   if (!ptrTensorType)
@@ -129,6 +136,7 @@ static Type getLoadOpResultType(OpBuilder &builder, Type ptrType) {
       ptrTensorType.getElementType().cast<PointerType>().getPointeeType();
   return RankedTensorType::get(shape, elementType);
 }
+#endif
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
@@ -165,6 +173,15 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    Value mask, Value other, ArrayRef<int32_t> boundaryCheck,
                    std::optional<PaddingOption> padding, CacheModifier cache,
                    EvictionPolicy evict, bool isVolatile) {
+#ifndef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_LoadOp_build
+  auto paddingAttr =
+      padding.has_value()
+          ? PaddingOptionAttr::get(builder.getContext(), padding.value())
+          : PaddingOptionAttr();
+  LoadOp::build(builder, state, ptr, mask, other,
+                builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
+                evict, isVolatile);
+#else
   // Operands
   state.addOperands(ptr);
   if (mask) {
@@ -196,6 +213,7 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
   // Result type
   Type resultType = getLoadOpResultType(builder, ptr.getType());
   state.addTypes({resultType});
+#endif
 }
 
 // load(ptr, splat(1), ...)        -> load(ptr, ...)
@@ -221,12 +239,19 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
 
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
+#ifndef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_LoadOp_CanonicalizeMaskedLoadPattern
+      rewriter.replaceOpWithNewOp<LoadOp>(
+          loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
+          loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
+          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+#else
       rewriter.replaceOpWithNewOp<LoadOp>(
           loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
           loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
           loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile(),
           loadOp.getInputStride(), loadOp.getInputStride(),
           loadOp.getInputStride());
+#endif
     } else {
       // mask = splat(0)
 
@@ -455,6 +480,38 @@ LogicalResult MakeRangeOp::verify() {
 }
 
 //-- ReduceOp --
+#ifndef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_LoadOp_inferReduceReturnShape
+static LogicalResult
+inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
+                       int axis, SmallVectorImpl<Type> &inferredReturnTypes) {
+  auto retShape = argTy.getShape().vec();
+  retShape.erase(retShape.begin() + axis);
+  if (retShape.empty()) {
+    // 0d-tensor -> scalar
+    inferredReturnTypes.push_back(retEltTy);
+  } else {
+    // nd-tensor where n >= 1
+    // infer encoding
+    Attribute argEncoding = argTy.getEncoding();
+    Attribute retEncoding;
+    if (argEncoding) {
+      Dialect &dialect = argEncoding.getDialect();
+      auto inferLayoutInterface =
+          dyn_cast<DialectInferLayoutInterface>(&dialect);
+      if (inferLayoutInterface
+              ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
+              .failed()) {
+        llvm::report_fatal_error("failed to infer layout for ReduceOp");
+        return failure();
+      }
+    }
+    // create type
+    inferredReturnTypes.push_back(
+        RankedTensorType::get(retShape, retEltTy, retEncoding));
+  }
+  return success();
+}
+#else
 static LogicalResult
 inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
                        int axis, bool noWarpReduce,
@@ -474,12 +531,8 @@ inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
       auto inferLayoutInterface =
           dyn_cast<DialectInferLayoutInterface>(&dialect);
       if (inferLayoutInterface
-#ifdef FLAGTREE_SPEC_Dialect_Triton_IR_Dialect_inferReduceOpEncoding_ARG
               ->inferReduceOpEncoding(argEncoding, axis, noWarpReduce,
                                       retEncoding)
-#else
-              ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
-#endif
               .failed()) {
         llvm::report_fatal_error("failed to infer layout for ReduceOp");
         return failure();
@@ -491,7 +544,21 @@ inferReduceReturnShape(const RankedTensorType &argTy, const Type &retEltTy,
   }
   return success();
 }
+#endif
 
+#ifndef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_ReduceOp_build
+void ReduceOp::build(OpBuilder &builder, OperationState &state,
+                     ValueRange operands, int axis) {
+  SmallVector<Type> inferredReturnTypes;
+  for (unsigned i = 0; i < operands.size(); ++i) {
+    auto argTy = cast<RankedTensorType>(operands[i].getType());
+    auto retEltTy = argTy.getElementType();
+    (void)inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
+  }
+
+  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+}
+#else
 void ReduceOp::build(OpBuilder &builder, OperationState &state,
                      ValueRange operands, int axis, bool noWarpReduce) {
   SmallVector<Type> inferredReturnTypes;
@@ -505,6 +572,7 @@ void ReduceOp::build(OpBuilder &builder, OperationState &state,
   ReduceOp::build(builder, state, inferredReturnTypes, operands, axis,
                   noWarpReduce);
 }
+#endif
 
 LogicalResult ReduceOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, ValueRange operands,
@@ -512,12 +580,18 @@ LogicalResult ReduceOp::inferReturnTypes(
     SmallVectorImpl<Type> &inferredReturnTypes) {
   Properties *prop = properties.as<Properties *>();
   int axis = prop->axis.getInt();
+#ifdef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_ReduceOp_inferReturnTypes
   bool noWarpReduce = prop->noWarpReduce.getValue();
+#endif
   for (auto arg : operands) {
     auto argTy = cast<RankedTensorType>(arg.getType());
     auto retEltTy = argTy.getElementType();
+#ifndef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_ReduceOp_inferReturnTypes
+    if (inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes)
+#else
     if (inferReduceReturnShape(argTy, retEltTy, axis, noWarpReduce,
                                inferredReturnTypes)
+#endif
             .failed()) {
       return failure();
     }
@@ -640,7 +714,11 @@ void ScanOp::build(OpBuilder &builder, OperationState &state,
   state.addAttribute("reverse", builder.getBoolAttr(reverse));
   for (auto arg : operands)
     inferredReturnTypes.push_back(arg.getType());
+#ifndef FLAGTREE_SPEC_Dialect_Triton_IR_Ops_ScanOp_build
+  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+#else
   ScanOp::build(builder, state, inferredReturnTypes, operands, axis, reverse);
+#endif
 }
 
 LogicalResult
