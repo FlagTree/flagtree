@@ -11,7 +11,7 @@ flagtree_submodules = {
                  dst_path=os.path.join(flagtree_submodule_dir, "triton_shared")),
     "ascend":
     tools.Module(name="ascend", url="https://gitcode.com/FlagTree/triton-ascend.git",
-                 commit_id="lxy-dev",
+                 commit_id="fcca5392ffe0a9a3526d2e43182c7eecab8dfe26",
                  dst_path=os.path.join(flagtree_submodule_dir, "triton_ascend")),
 }
 
