@@ -5,8 +5,8 @@ from setup_tools.utils.tools import flagtree_root_dir, Module, flagtree_submodul
 
 downloader = DownloadManager()
 
-submodules = (Module(name="ascendnpu-ir", url="https://gitee.com/ascend/ascendnpu-ir.git",
-                     commit_id="1922371c42749fda534d6395b7ed828b5c9f36d4",
+submodules = (Module(name="ascendnpu-ir", url="https://gitcode.com/Ascend/AscendNPU-IR.git",
+                     commit_id="af5499b3b9f3dbab50b2834bcfff5da5c2a1d920",
                      dst_path=os.path.join(flagtree_submodule_dir, "ascend/third_party/ascendnpu-ir")), )
 
 
