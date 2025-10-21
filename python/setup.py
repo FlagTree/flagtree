@@ -757,7 +757,7 @@ setup(
     zip_safe=False,
     # for PyPI
     keywords=["Compiler", "Deep Learning"],
-    url="https://gitcode.com/FlagTree/triton-ascend/tree/lxy-dev",
+    url="https://github.com/triton-lang/triton/",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
