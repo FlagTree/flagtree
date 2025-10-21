@@ -99,12 +99,13 @@ class DownloadManager:
         try:
             if succ:
                 print(f"[INFO] Offline Build: Found {module.name} at {src_path}")
-                self.module_offline_handler.src = os.path.join(self.module_offline_handler.offline_build_dir, module.name)
+                self.module_offline_handler.src = os.path.join(self.module_offline_handler.offline_build_dir,
+                                                               module.name)
                 self.module_offline_handler.copy_to_flagtree_project({"dst_path": module.dst_path})
             else:
                 print(f"[INFO] Offline Build: {module.name} is not found in offline build directory.")
         except Exception:
-            if(required):
+            if (required):
                 raise RuntimeError(f"[ERROR] Failed to copy {module.name} from offline build directory.")
             print(f"[WARNING] Failed to copy {module.name} from offline build directory.")
             pass
