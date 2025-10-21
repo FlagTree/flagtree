@@ -32,10 +32,6 @@ class Module:
     dst_path: str = None
 
 
-def is_skip_cuda_toolkits():
-    return flagtree_backend and (flagtree_backend not in use_cuda_toolkit)
-
-
 def dir_rollback(deep, base_path):
     while (deep):
         base_path = os.path.dirname(base_path)
@@ -66,7 +62,6 @@ def decompress(url, content, dst_path, file_name=None):
             file.extractall(path=dst_path)
             file_names = file.getnames()
     os.rename(Path(dst_path) / file_names[0], Path(dst_path) / file_name)
-
 
 
 def get_triton_cache_path():
@@ -110,8 +105,7 @@ class DownloadManager:
                 print(f"[INFO] Offline Build: {module.name} is not found in offline build directory.")
         except Exception:
             if(required):
-                raise RuntimeError(
-                    f"[ERROR] Failed to copy {module.name} from offline build directory.")
+                raise RuntimeError(f"[ERROR] Failed to copy {module.name} from offline build directory.")
             print(f"[WARNING] Failed to copy {module.name} from offline build directory.")
             pass
 
