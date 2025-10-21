@@ -136,6 +136,8 @@ class AIPUBackend(BaseBackend):
         pm.add("func.func(lower-affine)")
 
         # Optimize pass.
+        pm.add("func.func(forward-store-to-load)")
+        pm.add("func.func(convert-i64-to-i32)")
         pm.add("func.func(canonicalize)")
         pm.add("func.func(cse)")
         pm.add("func.func(reconcile-unrealized-casts)")

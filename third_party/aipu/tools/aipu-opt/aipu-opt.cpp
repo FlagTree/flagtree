@@ -10,6 +10,8 @@ int main(int argc, char **argv) {
   mlir::aipu::registerAIPUConvertBoolArg2I8();
   mlir::aipu::registerSCFLoopBufferizationPreprocessing();
   mlir::aipu::registerFlattenMemrefsPass();
+  mlir::aipu::registerForwardStoreToLoadPass();
+  mlir::aipu::registerConvertI64ToI32Pass();
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "AIPU optimizer driver\n", registry));

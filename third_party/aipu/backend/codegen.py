@@ -96,10 +96,10 @@ def _convert_scalar_type(type):
         return "int32"
     if isinstance(type, mlir_ir.IntegerType):
         sign_str = "u" if type.is_unsigned else ""
-        width = min(32, type.width)
-        if width == 1:
+        assert type.width <= 32, f"type_width should be <= 32, but got {type.width}"
+        if type.width == 1:
             return "bool"
-        return f"{sign_str}int{width}"
+        return f"{sign_str}int{type.width}"
     if isinstance(type, mlir_ir.FloatType):
         return f"float{type.width}"
     raise RuntimeError(f"not scalar type {type}")
@@ -210,19 +210,6 @@ class CodeGenerator():
         self.while_cond = None
         self.after_args = None
         self.yeild_args = None
-
-    def _get_associated_dtype(self, op):
-        # Find the associated_dtype of the bool arg.
-        try:
-            owner = op.operands[0].owner
-            associated_dtype = self.get_operand(owner, 0).dtype
-            while associated_dtype.startswith("bool"):
-                owner = owner.operands[0].owner
-                associated_dtype = self.get_operand(owner, 0).dtype
-        except IndexError:
-            associated_dtype = "int32"
-        finally:
-            return associated_dtype
 
     def create_var_name(self):
         var_name = "var_" + str(self.name_idx)
@@ -484,7 +471,9 @@ class CodeGenerator():
 
     def generate(self):
         self.mod.walk_mod(self.dispatch)
-        return BuildManager().build(self.ir_mod)
+        bm = BuildManager()
+        bm._is_from_schedule = False
+        return bm.build(self.ir_mod)
 
     def gen_memref_reinterpret_cast(self, op):
         result = op.result
@@ -718,15 +707,12 @@ class CodeGenerator():
         arg0 = self.get_operand(op, 0)
 
         if dtype.startswith("bool") and _is_vector_type(op.result.type):
-            # arg_type >bool
+            # arg_type -> bool
             arg0 = S.vcneq(arg0, S.cast(0, arg0.dtype))
         elif arg0.dtype.startswith("bool") and _is_vector_type(op.operands[0].type):
-            # bool->associate_type->ret_type
-            associated_dtype = self._get_associated_dtype(op)
-            arg0 = T.Select(arg0, S.cast(1, associated_dtype), S.cast(0, associated_dtype))
-            # if associate_type is float16 -> float32
-            if associated_dtype.startswith("float16"):
-                arg0 = S.cast(arg0, "float32")
+            # bool -> ret_type
+            mask_dtype = f"int32x{arg0.dtype.lanes}"
+            arg0 = S.vsel(S.cast(1, mask_dtype), S.cast(0, mask_dtype), arg0)
             arg0 = S.cast(arg0, _get_type(result))
         else:
             arg0 = S.cast(arg0, _get_type(result))
