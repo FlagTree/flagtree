@@ -478,7 +478,7 @@ endif()
 
 add_subdirectory(third_party/f2reduce)
 
-if(NOT FLAGTREE_BACKEND)
+if(NOT FLAGTREE_BACKEND OR FLAGTREE_BACKEND MATCHES "^(aipu|ascend|tsingmicro)$")
   add_subdirectory(bin)
   add_subdirectory(test)
 endif()
