@@ -110,7 +110,6 @@ class DownloadManager:
             print(f"[WARNING] Failed to copy {module.name} from offline build directory.")
             pass
 
-
     def init_single_src_settings(self, url, path, file_name, mode):
         self.current_url = url
         self.current_dst_path = path
