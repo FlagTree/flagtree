@@ -81,6 +81,7 @@ class DownloadManager:
     def download(self, url=None, path=None, file_name=None, mode=None, module=None, required=False):
         if self.module_offline_handler.is_offline_build():
             self.offline_copy(module)
+            return
 
         if url:
             self.init_single_src_settings(url, path, file_name, mode)
