@@ -1,3 +1,9 @@
+if(FLAGTREE_BACKEND STREQUAL "iluvatar")
+  set(_EXTRA_LINK_LIBS FlagTree_${FLAGTREE_BACKEND}_TritonDialectTritonGPUIR)
+else()
+  set(_EXTRA_LINK_LIBS "")
+endif()
+
 add_triton_library(TritonGPUIR
   Dialect.cpp
   LinearLayoutConversions.cpp
@@ -11,5 +17,5 @@ add_triton_library(TritonGPUIR
   MLIRGPUDialect
   TritonIR
   TritonTools
-  FlagTree_${FLAGTREE_BACKEND}_TritonDialectTritonGPUIR
+  ${_EXTRA_LINK_LIBS}
 )

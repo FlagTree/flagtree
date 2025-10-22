@@ -8,7 +8,9 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_head
 #include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefsPlugin.h"
+#endif
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
@@ -455,12 +457,22 @@ LogicalResult CTALayoutAttr::verify(
   return success();
 }
 
-LogicalResult BlockedEncodingAttr::verify(
-    function_ref<InFlightDiagnostic()> emitError,
-    ArrayRef<unsigned> sizePerThread, ArrayRef<unsigned> threadsPerWarp,
-    ArrayRef<unsigned> warpsPerCTA, ArrayRef<unsigned> order,
-    CTALayoutAttr CTALayout, unsigned loadType,
-    ArrayRef<unsigned> smeWarpsPerCTA) {
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_BlockedEncodingAttr_verify
+LogicalResult
+BlockedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                            ArrayRef<unsigned> sizePerThread,
+                            ArrayRef<unsigned> threadsPerWarp,
+                            ArrayRef<unsigned> warpsPerCTA,
+                            ArrayRef<unsigned> order, CTALayoutAttr CTALayout) {
+#else
+LogicalResult 
+BlockedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                            ArrayRef<unsigned> sizePerThread,
+                            ArrayRef<unsigned> threadsPerWarp,
+                            ArrayRef<unsigned> warpsPerCTA,
+                            ArrayRef<unsigned> order, CTALayoutAttr CTALayout,
+                            unsigned loadType, ArrayRef<unsigned> smeWarpsPerCTA) {
+#endif
   if (sizePerThread.size() != threadsPerWarp.size() ||
       threadsPerWarp.size() != warpsPerCTA.size() ||
       warpsPerCTA.size() != order.size()) {
@@ -536,10 +548,16 @@ static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
   return success();
 }
 
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_parseBoolAttrValue
+static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
+                                        bool &value, StringRef desc) {
+  auto boolAttr = mlir::dyn_cast<BoolAttr>(attr);
+#else
 static LogicalResult parseBoolAttrValue(AsmParser &parser,
                                         const NamedAttribute &attr, bool &value,
                                         StringRef desc) {
   auto boolAttr = mlir::dyn_cast<BoolAttr>(attr.getValue());
+#endif
   if (!boolAttr) {
     parser.emitError(parser.getNameLoc(), "expected an bool type in ") << desc;
     return failure();
@@ -915,7 +933,7 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 }
 
 //
-
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_IluvatarMmaEncodingAttr_functions
 using getElemsPerThreadFunc = SmallVector<unsigned> (*)(
     const IluvatarMmaEncodingAttr *, ArrayRef<int64_t>, Type);
 
@@ -950,7 +968,7 @@ IluvatarMmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
       "iluvatar", "getTotalElemsPerThread");
   return func(this, shape, eltTy);
 }
-
+#endif
 //
 
 SmallVector<unsigned>
@@ -1053,9 +1071,15 @@ SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
   }
 }
 
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_DotOperandEncodingAttr_verify
+LogicalResult DotOperandEncodingAttr::verify(
+    ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
+    unsigned opIdx, Attribute parent, unsigned kWidth) {
+#else
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned opIdx, Attribute parent, unsigned kWidth, unsigned useSme) {
+#endif
   if (opIdx != 0 && opIdx != 1) {
     return emitError()
            << "triton_gpu.dot_op opIdx paramenter can be 0 or 1, got: "
@@ -1091,9 +1115,11 @@ LogicalResult DotOperandEncodingAttr::verify(
     return success();
   }
 
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_DotOperandEncodingAttr_verify
   if (auto parentAttr = mlir::dyn_cast<IluvatarMmaEncodingAttr>(parent)) {
     return success();
   }
+#endif
 
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
     if (kWidth != 0)
@@ -1141,8 +1167,10 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> threadsPerWarp;
   SmallVector<unsigned> warpsPerCTA;
   SmallVector<unsigned> order;
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_BlockedEncodingAttr_parse
   unsigned loadType = 0;
   SmallVector<unsigned> smeWarpsPerCTA;
+#endif
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
@@ -1178,12 +1206,14 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
               .failed())
         return {};
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_BlockedEncodingAttr_parse
     } else if (attr.getName() == "loadType") {
       loadType = attr.getValue().cast<IntegerAttr>().getInt();
     } else if (attr.getName() == "smeWarpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, smeWarpsPerCTA, "smeWarpsPerCTA")
               .failed())
         return {};
+#endif
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -1196,9 +1226,16 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<BlockedEncodingAttr>(
-      parser.getContext(), sizePerThread, threadsPerWarp, warpsPerCTA, order,
-      *CTALayout, loadType, smeWarpsPerCTA);
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_BlockedEncodingAttr_parse
+  return parser.getChecked<BlockedEncodingAttr>(parser.getContext(),
+                                                sizePerThread, threadsPerWarp,
+                                                warpsPerCTA, order, *CTALayout);
+#else
+  return parser.getChecked<BlockedEncodingAttr>(parser.getContext(),
+                                                sizePerThread, threadsPerWarp,
+                                                warpsPerCTA, order, *CTALayout,
+                                                loadType, smeWarpsPerCTA);
+#endif
 }
 
 void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
@@ -1206,9 +1243,13 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
           << "sizePerThread = [" << ArrayRef(getSizePerThread()) << "]"
           << ", threadsPerWarp = [" << ArrayRef(getThreadsPerWarp()) << "]"
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_BlockedEncodingAttr_print
+          << ", order = [" << getOrder() << "]";
+#else
           << ", order = [" << getOrder() << "]"
           << ", loadType = " << getLoadType() << ", smeWarpsPerCTA = ["
           << getSmeWarpsPerCTA() << "]";
+#endif
 
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getSizePerThread().size());
@@ -1457,6 +1498,7 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
 // Iluvatar MMA encoding
 //===----------------------------------------------------------------------===//
 
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_IluvatarMmaEncodingAttr_functions
 Attribute IluvatarMmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
@@ -1530,6 +1572,7 @@ void IluvatarMmaEncodingAttr::print(AsmPrinter &printer) const {
 
   printer << ", instrShape = [" << getInstrShape() << "]}>";
 }
+#endif
 
 //===----------------------------------------------------------------------===//
 // Sliced Encoding
@@ -1544,16 +1587,23 @@ Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
   unsigned dim = mlir::cast<IntegerAttr>(attrs.get("dim")).getInt();
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_SliceEncodingAttr_parse
+  Attribute parent = attrs.get("parent");
+  return parser.getChecked<SliceEncodingAttr>(parser.getContext(), dim, parent);
+#else
   bool noWarpReduce = attrs.get("noWarpReduce").cast<BoolAttr>().getValue();
   Attribute parent = attrs.get("parent");
   return parser.getChecked<SliceEncodingAttr>(parser.getContext(), dim, parent,
                                               noWarpReduce);
+#endif
 }
 
 void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "<{"
           << "dim = " << getDim() << ", "
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_SliceEncodingAttr_print
           << "noWarpReduce = " << getNoWarpReduce() << ", "
+#endif
           << "parent = " << getParent() << "}>";
 }
 
@@ -1579,7 +1629,9 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
   bool hasLeadingOffset = false;
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_SharedEncodingAttr_parse
   bool useTcu = false;
+#endif
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "vec") {
@@ -1610,9 +1662,11 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseBool(parser, attr, hasLeadingOffset, "hasLeadingOffset")
               .failed())
         return {};
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_SharedEncodingAttr_parse
     } else if (attr.getName() == "useTcu") {
       if (parseBool(parser, attr, useTcu, "useTcu").failed())
         return {};
+#endif
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -1625,9 +1679,15 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<SharedEncodingAttr>(
-      parser.getContext(), vec, perPhase, maxPhase, order, *CTALayout,
-      hasLeadingOffset, useTcu);
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_SharedEncodingAttr_parse
+  return parser.getChecked<SharedEncodingAttr>(parser.getContext(), vec,
+                                               perPhase, maxPhase, order,
+                                               *CTALayout, hasLeadingOffset);
+#else
+  return parser.getChecked<SharedEncodingAttr>(parser.getContext(), vec,
+                                               perPhase, maxPhase, order,
+                                               *CTALayout, hasLeadingOffset, useTcu);
+#endif
 }
 
 void SharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1638,8 +1698,12 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", order = [" << getOrder() << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_SharedEncodingAttr_print
+  printer << ", hasLeadingOffset = " << getHasLeadingOffset() << "}>";
+#else
   printer << ", hasLeadingOffset = " << getHasLeadingOffset()
           << ", useTcu = " << getUseTcu() << "}>";
+#endif
 }
 
 //===----------------------------------------------------------------------===//
@@ -2226,6 +2290,7 @@ NvidiaMmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
 // Iluvatar Mma encoding
 //===----------------------------------------------------------------------===//
 
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_IluvatarMmaEncodingAttr_functions
 using isVoltaFunc = bool (*)(const IluvatarMmaEncodingAttr *);
 DEFINE_LOAD_FUNC(isVolta)
 bool IluvatarMmaEncodingAttr::isVolta() const {
@@ -2324,6 +2389,7 @@ IluvatarMmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
       "iluvatar", "getSizePerThreadForOperands");
   return func(this, opIdx);
 }
+#endif
 
 //===----------------------------------------------------------------------===//
 // DotOperand Encoding
@@ -2462,10 +2528,17 @@ struct TritonGPUInferLayoutInterface
       if (failed(ctaLayout)) {
         return failure();
       }
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_TritonGPUInferLayoutInterface_inferTransOpEncoding
+      resultEncoding = SharedEncodingAttr::get(
+          getDialect()->getContext(), enc.getVec(), enc.getPerPhase(),
+          enc.getMaxPhase(), applyPermutation(invOrderUnsigned, enc.getOrder()),
+          *ctaLayout, enc.getHasLeadingOffset());
+#else
       resultEncoding = SharedEncodingAttr::get(
           getDialect()->getContext(), enc.getVec(), enc.getPerPhase(),
           enc.getMaxPhase(), applyPermutation(invOrderUnsigned, enc.getOrder()),
           *ctaLayout, enc.getHasLeadingOffset(), enc.getUseTcu());
+#endif
       return success();
     }
 
@@ -2480,6 +2553,14 @@ struct TritonGPUInferLayoutInterface
       if (failed(ctaLayout)) {
         return failure();
       }
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_TritonGPUInferLayoutInterface_inferTransOpEncoding
+      resultEncoding = BlockedEncodingAttr::get(
+          getDialect()->getContext(),
+          applyPermutation(enc.getSizePerThread(), order),
+          applyPermutation(enc.getThreadsPerWarp(), order),
+          applyPermutation(enc.getWarpsPerCTA(), order),
+          applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout);
+#else
       resultEncoding = BlockedEncodingAttr::get(
           getDialect()->getContext(),
           applyPermutation(enc.getSizePerThread(), order),
@@ -2487,6 +2568,7 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(enc.getWarpsPerCTA(), order),
           applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout,
           enc.getLoadType(), enc.getSmeWarpsPerCTA());
+#endif
       return success();
     }
 
@@ -2856,12 +2938,19 @@ struct TritonGPUInferLayoutInterface
         append(enc.getThreadsPerWarp(), 1),  //
         append(enc.getWarpsPerCTA(), 1),     //
         appendMinorDim(enc.getOrder()),      //
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_TritonGPUInferLayoutInterface_inferJoinOpEncoding
+        CTALayoutAttr::get(enc.getContext(), //
+                           append(enc.getCTAsPerCGA(), 1),
+                           append(enc.getCTASplitNum(), 1),
+                           appendMinorDim(enc.getCTAOrder())));
+#else
         CTALayoutAttr::get(enc.getContext(), //
                            append(enc.getCTAsPerCGA(), 1),
                            append(enc.getCTASplitNum(), 1),
                            appendMinorDim(enc.getCTAOrder())),
-        enc.getLoadType(), //
-        enc.getSmeWarpsPerCTA());
+                           enc.getLoadType(), //
+                           enc.getSmeWarpsPerCTA());
+#endif
     return success();
   }
 
@@ -2905,11 +2994,18 @@ struct TritonGPUInferLayoutInterface
         ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
         ArrayRef(enc.getWarpsPerCTA()).drop_back(1),
         ArrayRef(enc.getOrder()).drop_front(1),
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_TritonGPUInferLayoutInterface_inferSplitOpEncoding
+        CTALayoutAttr::get(enc.getContext(), //
+                           ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
+                           ArrayRef(enc.getCTASplitNum()).drop_back(1),
+                           ArrayRef(enc.getCTAOrder()).drop_front(1)));
+#else
         CTALayoutAttr::get(enc.getContext(), //
                            ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
                            ArrayRef(enc.getCTASplitNum()).drop_back(1),
                            ArrayRef(enc.getCTAOrder()).drop_front(1)),
-        enc.getLoadType(), enc.getSmeWarpsPerCTA());
+                           enc.getLoadType(), enc.getSmeWarpsPerCTA());
+#endif
     return success();
   }
 };
@@ -3010,9 +3106,14 @@ struct CanonicalizeConvertFromConvert
     // heuristic to accommodate fused attention.
     auto srcType = op.getSrc().getType();
     auto dstType = op.getType();
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_CanonicalizeConvertFromConvert_matchAndRewrite
+    if (mlir::isa<DotOperandEncodingAttr>(dstType.getEncoding()) &&
+        mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()))
+#else
     if (mlir::isa<DotOperandEncodingAttr>(dstType.getEncoding()) &&
         (mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) ||
          mlir::isa<IluvatarMmaEncodingAttr>(srcType.getEncoding())))
+#endif
       return failure();
 
     // for hopper MMAv3
@@ -3081,7 +3182,7 @@ struct CanonicalizeConvertFromConvert
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       auto srcType = op.getSrc().getType();
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_IR_Dialect_CanonicalizeConvertFromConvert_matchAndRewrite
       if (triton::gpu::isMmaConvertLayout(cvt))
         return failure();
       if (triton::gpu::isSliceMmaConvertLayout(arg, true, false))
