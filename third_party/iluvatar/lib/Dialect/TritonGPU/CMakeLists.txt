@@ -1,2 +1,5 @@
 add_subdirectory(IR)
 add_subdirectory(Transforms)
+if(NOT FLAGTREE_BACKEND STREQUAL "iluvatar")
+  add_subdirectory(TritonNvidiaGPU)
+endif()

@@ -16,3 +16,4 @@
 #include "triton/Dialect/Triton/IR/iluvatar_Ops.h"
 #include "triton/Dialect/Triton/Transforms/iluvatar_Combine.h"
 #include "triton/Dialect/Triton/Transforms/iluvatar_RewriteTensorPointer.h"
+#include "triton/Dialect/TritonGPU/Transforms/Pipeliner/iluvatar_MatmulLoopPipeline.h"
