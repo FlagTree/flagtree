@@ -132,7 +132,7 @@ class DownloadManager:
             try:
                 os.system(f"git clone {module.url} {module.dst_path}")
                 if has_specialization_commit:
-                    os.system("cd module.dst_path")
+                    os.system(f"cd {module.dst_path}")
                     os.system(f"git checkout {module.commit_id}")
                     os.system("cd -")
                 return True
