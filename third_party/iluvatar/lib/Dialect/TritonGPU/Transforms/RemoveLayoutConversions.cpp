@@ -22,6 +22,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
+#include "flagtree_spec.h"
+
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -78,6 +80,7 @@ public:
   }
 };
 
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_SliceMMAConvert
 // convert(slice<{parent=#mma, noWarpReduce=true}>, blocked) ->
 // convert(slice<{parent=#mma, noWarpReduce=true}>, slice<{parent=#mma,
 // noWarpReduce=false}>) + convert(slice<{parent=#mma, noWarpReduce=false}>,
@@ -125,6 +128,7 @@ public:
     return mlir::success();
   }
 };
+#endif
 
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
 // based on the analysis. The algorithm is as follows.
@@ -180,7 +184,9 @@ public:
   void rewriteConditionOp(scf::ConditionOp conditionOp);
   void rewriteReduceToScalar(Operation *reduceOp);
   void rewriteAssertOp(AssertOp assertOp);
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_LayoutPropagation_rewriteStoreOp
   bool rewriteStoreOp(Operation *storeOp);
+#endif
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   // Map the original value to the rewritten one.
@@ -285,16 +291,20 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
         if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding))
           return (mmaLayout.getVersionMajor() > 1) ? true
                                                    : mmaLayout == encoding;
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_hasConvertToMMATransisitiveUse
         if (isa<triton::gpu::IluvatarMmaEncodingAttr>(dstEncoding))
           return true;
+#endif
         if (isa<triton::gpu::AMDMfmaEncodingAttr,
                 triton::gpu::AMDWmmaEncodingAttr>(dstEncoding))
           return true;
         if (isa<triton::gpu::DotOperandEncodingAttr>(dstEncoding)) {
           if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
             return mmaLayout.getVersionMajor() > 1;
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_hasConvertToMMATransisitiveUse
           } else if (isa<triton::gpu::IluvatarMmaEncodingAttr>(encoding)) {
             return true;
+#endif
           } else {
             assert((mlir::isa<triton::gpu::AMDMfmaEncodingAttr,
                               triton::gpu::AMDWmmaEncodingAttr>(encoding)));
@@ -338,7 +348,11 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOp /*, nvidia_gpu::DotAsyncOp*/, AtomicRMWOp, AtomicCASOp>(op))
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_isLayoutAnchor
+  if (isa<DotOp, nvidia_gpu::DotAsyncOp, AtomicRMWOp, AtomicCASOp>(op))
+#else
+  if (isa<DotOp, AtomicRMWOp, AtomicCASOp>(op))
+#endif
     return true;
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
@@ -349,7 +363,7 @@ bool isLayoutAnchor(Operation *op) {
   if (auto reshape = dyn_cast<ReshapeOp>(op))
     return reshape.getAllowReorder();
 
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_isLayoutAnchor
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     if (reduceOp.getNoWarpReduce() == true)
       return true;
@@ -363,7 +377,7 @@ bool isLayoutAnchor(Operation *op) {
 void LayoutPropagation::initAnchorLayout() {
   auto maybeAddAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
-#ifndef __ILUVATAR__
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_LayoutPropagation_initAnchorLayout
       // Workaround, don't popagate MMA layout unless there is a convert
       // back to mma further down to avoid generating reduction with MMA
       // layout that may have lower performance.
@@ -424,7 +438,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
   SmallVector<Value> changed;
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_LayoutPropagation_propagateToUsers
     assert(info.encodings.size() >= 1 &&
            "we should have at least one encoding.");
     bool skip = false;
@@ -484,7 +498,11 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp /*, nvidia_gpu::DotWaitOp*/>(user)) {
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_LayoutPropagation_propagateToUsers
+            ConvertLayoutOp, nvidia_gpu::DotWaitOp>(user)) {
+#else
+            ConvertLayoutOp>(user)) {
+#endif
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -595,11 +613,13 @@ void LayoutPropagation::rewriteRegion(Region &region) {
       } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
         rewriteAssertOp(assertOp);
       } else {
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_LayoutPropagation_rewriteRegion
         bool changed = false;
         if (auto storeOp = dyn_cast<triton::StoreOp>(&op))
           changed = rewriteStoreOp(storeOp);
         if (changed)
           continue;
+#endif
         // If we don't need to rewrite the op we still need to remap the
         // operands.
         for (OpOperand &operand : op.getOpOperands()) {
@@ -872,6 +892,7 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   assertOp->setOperand(0, newOperand);
 }
 
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_LayoutPropagation_rewriteStoreOp
 bool LayoutPropagation::rewriteStoreOp(Operation *storeOp) {
   IRMapping mapping;
   Value value = storeOp->getOperand(1);
@@ -913,6 +934,7 @@ bool LayoutPropagation::rewriteStoreOp(Operation *storeOp) {
   opToDelete.insert(storeOp);
   return true;
 }
+#endif
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
   opToDelete.insert(op);
@@ -950,7 +972,11 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-          ConvertLayoutOp /*, nvidia_gpu::DotWaitOp*/>(op)) {
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_LayoutPropagation_rewriteOp
+          ConvertLayoutOp, nvidia_gpu::DotWaitOp>(op)) {
+#else
+          ConvertLayoutOp>(op)) {
+#endif
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {
@@ -1269,7 +1295,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (mlir::isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
 
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_LayoutRematerialization_hoistConvertOnTopOfExtOrBroadcast
   auto srcType = convertOp.getOperand().getType().cast<RankedTensorType>();
   auto srcSliceLayout = srcType.getEncoding().dyn_cast<SliceEncodingAttr>();
   auto tgtSliceLayout = targetType.getEncoding().dyn_cast<SliceEncodingAttr>();
@@ -1429,7 +1455,7 @@ public:
 
     RewritePatternSet decomposePatterns(context);
     decomposePatterns.add<ConvertDotConvert>(context);
-#ifdef __ILUVATAR__
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_RemoveLayoutConversions_TritonGPURemoveLayoutConversionsPass_runOnOperation
     decomposePatterns.add<SliceMMAConvert>(context);
 #endif
     if (applyPatternsAndFoldGreedily(m, std::move(decomposePatterns))
