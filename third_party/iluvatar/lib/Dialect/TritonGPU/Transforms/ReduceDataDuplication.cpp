@@ -18,6 +18,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 
+#include "flagtree_spec.h"
+
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -42,6 +44,7 @@ public:
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
+#ifdef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_ReduceDataDuplication_TritonGPUReduceDataDuplicationPass_runOnOperation
       if (auto srcMmaEncoding =
               dyn_cast<triton::gpu::IluvatarMmaEncodingAttr>(srcEncoding)) {
 
@@ -51,6 +54,7 @@ public:
              dstDotOp.getParent() == srcMmaEncoding))
           return;
       }
+#endif
       if (auto srcMmaEncoding =
               dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcEncoding)) {
 

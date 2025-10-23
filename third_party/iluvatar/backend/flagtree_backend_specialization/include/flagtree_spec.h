@@ -23,3 +23,4 @@
 #include "triton/Dialect/TritonGPU/Transforms/iluvatar_OptimizeDotOperands.h"
 #include "triton/Dialect/TritonGPU/Transforms/iluvatar_OptimizeThreadLocality.h"
 #include "triton/Dialect/TritonGPU/Transforms/iluvatar_Prefetch.h"
+#include "triton/Dialect/TritonGPU/Transforms/iluvatar_ReduceDataDuplication.h"
