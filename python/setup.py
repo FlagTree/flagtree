@@ -221,7 +221,8 @@ def get_thirdparty_packages(packages: list):
             package_dir = os.environ[p.syspath_var_name]
         version_file_path = os.path.join(package_dir, "version.txt")
         if p.syspath_var_name not in os.environ and\
-           (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url):
+           (not os.path.exists(version_file_path) or Path(version_file_path).read_text() != p.url) and\
+           not helper.utils.OfflineBuildManager.is_offline_build():
             with contextlib.suppress(Exception):
                 shutil.rmtree(package_root_dir)
             os.makedirs(package_root_dir, exist_ok=True)
@@ -263,7 +264,7 @@ def download_and_copy(name, src_path, variable, version, url_func):
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = download or curr_version != version
-    if download:
+    if download and not helper.utils.OfflineBuildManager.is_offline_build():
         print(f'downloading and extracting {url} ...')
         file = tarfile.open(fileobj=open_url(url), mode="r|*")
         file.extractall(path=tmp_path)
@@ -374,7 +375,8 @@ class CMakeBuild(build_ext):
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
-        helper.get_backend_cmake_args(build_ext=self)
+        cmake_args += helper.get_backend_cmake_args(build_ext=self)
+        cmake_args += helper.get_offline_build_cmake_args(build_ext=self)
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)

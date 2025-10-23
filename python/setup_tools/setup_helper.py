@@ -49,6 +49,12 @@ def get_backend_cmake_args(*args, **kargs):
         return []
 
 
+def get_offline_build_cmake_args(*args, **kargs):
+    if utils.OfflineBuildManager.is_offline_build():
+        return ["-DTRITON_BUILD_UT=OFF"]
+    return []
+
+
 def get_device_name():
     return device_mapping[flagtree_backend]
 
@@ -208,9 +214,19 @@ class FlagTreeCache:
               md5_digest=None, pre_hock=None, post_hock=None):
         if not condition or (pre_hock and pre_hock()):
             return
-        if self.offline_handler.single_build(src=file, dst_path=copy_dst_path, post_hock=post_hock, required=True,
-                                             url=url, md5_digest=md5_digest):
-            return
+        if files is not None:
+            offline_build_failed = False
+            for single_files in files:
+                if not self.offline_handler.single_build(src=os.path.join(
+                        copy_src_path, single_files), dst_path=copy_dst_path, post_hock=post_hock, required=True,
+                                                         url=url, md5_digest=md5_digest):
+                    offline_build_failed = True
+            if not offline_build_failed:
+                return
+        else:
+            if self.offline_handler.single_build(src=file, dst_path=copy_dst_path, post_hock=post_hock, required=True,
+                                                 url=url, md5_digest=md5_digest):
+                return
 
         is_url = False if url is None else True
         path = self.sub_dirs[flagtree_backend] if flagtree_backend else self.dir_path
@@ -336,6 +352,13 @@ def set_env(env_dict: dict):
 def check_env(env_val):
     return os.environ.get(env_val, '') != ''
 
+
+offline_handler = utils.OfflineBuildManager()
+if offline_handler.is_offline:
+    print("[INFO] Offline Build: Use offline build for triton origin toolkits")
+    offline_handler.handle_triton_origin_toolkits()
+else:
+    print('[INFO] Offline Build: No offline build for triton origin toolkits')
 
 download_flagtree_third_party("triton_shared", hock=utils.default.precompile_hock, condition=(not flagtree_backend))
 
