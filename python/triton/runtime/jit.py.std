@@ -6,14 +6,11 @@ import itertools
 import os
 import re
 import textwrap
-import tokenize
 from collections import defaultdict
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 from ..runtime.driver import driver
-from ..backends.ascend.compiler import AscendAttrsDescriptor
 from types import ModuleType
-from io import StringIO
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -331,6 +328,7 @@ class KernelInterface(Generic[T]):
         memorizes the grid.
         """
         return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+        # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
 
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
@@ -568,8 +566,7 @@ class JITFunction(KernelInterface[T]):
         # parse options
         from ..compiler import make_backend
         device = driver.active.get_current_device()
-        if ('stream' not in kwargs.keys()):
-            stream = driver.active.get_current_stream(device)
+        stream = driver.active.get_current_stream(device)
         target = driver.active.get_current_target()
         backend = make_backend(target)
 
@@ -593,20 +590,10 @@ class JITFunction(KernelInterface[T]):
             # deprecated arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
             assert "device" not in kwargs, "device option is deprecated; current device will be used"
-            # assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
+            assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
             for k in excess_kwargs:
                 if k not in options.__dict__:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
-            ignor_params = ["debug", "sanitize_overflow", "llvm_version", "kernel_name", \
-                "allowed_dot_input_precisions", "multibuffer", "stream"]
-            not_work_params = []
-            for k in kwargs:
-                if k in ignor_params:
-                    continue
-                elif k in excess_kwargs:
-                    not_work_params.append(k)
-            if len(not_work_params) != 0:
-                print("[WARNING] Please DO NOT tune args {}!".format(not_work_params))
 
             bound_vals = tuple(bound_args.values())
 
@@ -660,16 +647,9 @@ class JITFunction(KernelInterface[T]):
             grid_0 = grid[0]
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
-            grid_all_size = grid_0 * grid_1 * grid_2
-            if os.getenv("TRITON_ALL_BLOCKS_PARALLEL", "0") == "0":
-                if grid_all_size > 65535:
-                    raise RuntimeError("grid should be less than 65536! You can try \"export TRITON_ALL_BLOCKS_PARALLEL=1\" to avoid this problem.")
-            if ('stream' in kwargs.keys()):
-                stream = kwargs["stream"]
+
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
-            # explicitly define run method and load kernel binary
-            kernel._init_handles()
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
                        self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook, *non_constexpr_vals)
         return kernel
@@ -749,6 +729,7 @@ class JITFunction(KernelInterface[T]):
 
     def preload(self, specialization_data):
         from ..compiler import compile, ASTSource
+        from triton.backends.compiler import AttrsDescriptor
         import json
         import triton.language as tl
         device = driver.active.get_current_device()
@@ -761,7 +742,7 @@ class JITFunction(KernelInterface[T]):
             for key, value in deserialized_obj['constants'].items()
         }
         signature = dict(deserialized_obj['signature'].items())
-        src = ASTSource(self, signature, constants, AscendAttrsDescriptor.from_dict(deserialized_obj['attrs']))
+        src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
         options = {
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()
@@ -775,29 +756,10 @@ class JITFunction(KernelInterface[T]):
     # the user might want to monkey-patch self.src dynamically.
     # Our unit tests do this, for example.
     def parse(self):
-        # Maps line numbers to comment hints
-        line_flagtree_hints = {}
-        code_str = self.src
-        g = tokenize.generate_tokens(StringIO(code_str).readline)
-        for tok_type, tok_text, start, end, _ in g:
-            if tok_type == tokenize.COMMENT:
-                comment = tok_text.replace(" ", "").strip()
-                if comment.startswith('#@hint:'):
-                    flagtree_hints = comment[len('#@hint:'):].strip()
-                    # Record the line number of the comment
-                    line_num = start[0]
-                    line_flagtree_hints[line_num] = flagtree_hints
-                    
-                    # print(f"[FLAGTREE] Parsed hint at line {line_num}: {flagtree_hints}")
-
         tree = ast.parse(self.src)
         assert isinstance(tree, ast.Module)
         assert len(tree.body) == 1
         assert isinstance(tree.body[0], ast.FunctionDef)
-
-        # Attach the line number to comment mapping to the function definition node
-        tree.body[0].line_flagtree_hints = line_flagtree_hints
-        
         return tree
 
     def __call__(self, *args, **kwargs):
