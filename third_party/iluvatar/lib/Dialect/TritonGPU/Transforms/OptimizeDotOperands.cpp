@@ -9,6 +9,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <memory>
 
+#include "flagtree_spec.h"
+
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -197,7 +199,7 @@ public:
   }
 };
 
-#ifndef __ILUVATAR__
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_OptimizeDotOperands_FuseTransHopper
 // Rewrite
 //
 //   dot(alloc(trans() #shared1) ->
@@ -329,7 +331,7 @@ public:
     patterns.add<SwizzleShmemConvert>(context);
     if (this->hoistLayoutConversion.getValue())
       patterns.add<HoistLayoutConversion>(context);
-#ifndef __ILUVATAR__
+#ifndef FLAGTREE_SPEC_Dialect_TritonGPU_Transforms_OptimizeDotOperands_TritonGPUOptimizeDotOperandsPass
     patterns.add<FuseTransHopper>(context);
 #endif
     patterns.add<MMAV3UseRegOperand>(context);

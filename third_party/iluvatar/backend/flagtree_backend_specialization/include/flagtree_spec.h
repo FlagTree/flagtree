@@ -20,3 +20,4 @@
 #include "triton/Dialect/TritonGPU/Transforms/Pipeliner/iluvatar_PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Pipeliner/iluvatar_Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Pipeliner/iluvatar_SoftwarePipeliner.h"
+#include "triton/Dialect/TritonGPU/Transforms/iluvatar_OptimizeDotOperands.h"
