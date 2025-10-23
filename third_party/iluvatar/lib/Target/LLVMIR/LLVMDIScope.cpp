@@ -7,6 +7,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Path.h"
 
+#include "flagtree_spec.h"
+
 //===----------------------------------------------------------------------===//
 // This file implements a pass to add debug info scope to LLVM operations, and
 // is inspired by the DIScopeForLLVMFuncOpPass in LLVM/MLIR. Different from the
@@ -88,7 +90,11 @@ struct LLVMDIScopePass : public LLVMDIScopeBase<LLVMDIScopePass> {
       distinctId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
       if (!compileUnitAttr) {
         compileUnitAttr = LLVM::DICompileUnitAttr::get(
+#ifndef FLAGTREE_SPEC_Target_LLVMIR_LLVMDIScope_LLVMDIScopePass_setSubprogramAttr
+            distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
+#else
             context, distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
+#endif
             StringAttr::get(context, "triton"),
             /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
       }
