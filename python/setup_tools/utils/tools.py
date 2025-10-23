@@ -88,15 +88,36 @@ class DownloadManager:
         self.current_url = None
         self.current_dst_path = None
         self.current_file_name = None
+        self.module_offline_handler = OfflineBuildManager()
         NetConfig.headers = {'User-Agent': NetConfig.user_agent}
 
     def download(self, url=None, path=None, file_name=None, mode=None, module=None, required=False):
+        if self.module_offline_handler.is_offline_build():
+            self.offline_copy(module, required)
+            return
         if url:
             self.init_single_src_settings(url, path, file_name, mode)
         if mode == "git" or module:
             return self.git_clone(module, required)
         else:
             return self.general_download(is_decompress=True)
+
+    def offline_copy(self, module, required):
+        src_path = os.path.join(self.module_offline_handler.offline_build_dir, module.name)
+        succ = os.path.exists(src_path)
+        try:
+            if succ:
+                print(f"[INFO] Offline Build: Found {module.name} at {src_path}")
+                self.module_offline_handler.src = os.path.join(self.module_offline_handler.offline_build_dir,
+                                                               module.name)
+                self.module_offline_handler.copy_to_flagtree_project({"dst_path": module.dst_path})
+            else:
+                print(f"[INFO] Offline Build: {module.name} is not found in offline build directory.")
+        except Exception:
+            if (required):
+                raise RuntimeError(f"[ERROR] Failed to copy {module.name} from offline build directory.")
+            print(f"[WARNING] Failed to copy {module.name} from offline build directory.")
+            pass
 
     def normalize_url(self, origin_url, default_scheme="https"):
         try:
@@ -248,7 +269,10 @@ class OfflineBuildManager:
             kargs['post_hock'](self.src)
 
     def handle_triton_origin_toolkits(self):
-        triton_origin_toolkits = ["ptxas", "nvdisasm", "cuobjdump", "cudacrt", " cudart", "pybind11", "json"]
+        triton_origin_toolkits = [
+            "nvidia/ptxas", "nvidia/nvdisasm", "nvidia/cuobjdump", "nvidia/cudacrt", "nvidia/cudart", "nvidia/cupti",
+            "json"
+        ]
         for toolkit in triton_origin_toolkits:
             toolkit_cache_path = os.path.join(self.triton_cache_path, toolkit)
             if os.path.exists(toolkit_cache_path):

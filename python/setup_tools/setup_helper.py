@@ -323,6 +323,13 @@ def check_env(env_val):
     return os.environ.get(env_val, '') != ''
 
 
+offline_handler = utils.OfflineBuildManager()
+if offline_handler.is_offline:
+    print("[INFO] Offline Build: Use offline build for triton origin toolkits")
+    offline_handler.handle_triton_origin_toolkits()
+else:
+    print('[INFO] Offline Build: No offline build for triton origin toolkits')
+
 download_flagtree_third_party("triton_shared", condition=(not flagtree_backend))
 
 download_flagtree_third_party("ascend", condition=(flagtree_backend == "ascend"), hock=utils.ascend.precompile_hock,
