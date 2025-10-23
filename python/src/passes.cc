@@ -81,7 +81,11 @@ void init_triton_passes_ttgpuir(py::module &&m) {
 
 void init_triton_passes_convert(py::module &&m) {
   using namespace mlir;
+#if LLVM_VERSION_MAJOR < 21
   ADD_PASS_WRAPPER_0("add_scf_to_cf", createConvertSCFToCFPass);
+#else  // triton_v3.3.x
+  ADD_PASS_WRAPPER_0("add_scf_to_cf", createSCFToControlFlowPass);
+#endif
   ADD_PASS_WRAPPER_0("add_cf_to_llvmir", createConvertControlFlowToLLVMPass);
   ADD_PASS_WRAPPER_0("add_index_to_llvmir", createConvertIndexToLLVMPass);
   ADD_PASS_WRAPPER_0("add_arith_to_llvmir", createArithToLLVMConversionPass);

@@ -4,6 +4,7 @@ import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import GPUTarget, AttrsDescriptor
+from ..backends.ascend.compiler import AscendAttrsDescriptor
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
@@ -11,6 +12,7 @@ from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
+from .errors import MLIRCompilationError
 from pathlib import Path
 import re
 import functools
@@ -86,7 +88,7 @@ class ASTSource:
                 if not isinstance(k, str):
                     raise TypeError("Constants keys must be string")
         if self.attrs is None:
-            self.attrs = AttrsDescriptor()
+            self.attrs = AscendAttrsDescriptor()
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
@@ -250,6 +252,12 @@ def compile(src, target=None, options=None):
         # cache hit!
         metadata = json.loads(Path(metadata_path).read_text())
         return CompiledKernel(src, metadata_group, hash)
+    compile_speed_opt = os.getenv("TRITON_ASCEND_COMPILE_SPEED_OPT", 'false').lower() in ('true', '1')
+    if (compile_speed_opt):
+        ttir_path = f"{file_name}.ttir"
+        if (metadata_path is None) and (fn_cache_manager.has_file(ttir_path)):
+            # Already compile once but failed. So directly return
+            raise Exception("already failed once")
     # initialize metadata
     metadata = {
         "hash": hash,
@@ -276,7 +284,17 @@ def compile(src, target=None, options=None):
         raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
-        next_module = compile_ir(module, metadata)
+        try:
+            next_module = compile_ir(module, metadata)
+        except Exception as e:
+            if (ext == "ttadapter"):
+                stage_name = "ConvertTritonIRToLinalgIR"
+            elif (ext == "npubin"):
+                stage_name = "ConvertLinalgRToBinary"
+            else:
+                stage_name = "MLIRCompile"
+            error_detail = e.stderr.decode('utf-8') if hasattr(e, 'stderr') and e.stderr else str(e)
+            raise MLIRCompilationError(stage_name, error_detail)
         ir_filename = f"{file_name}.{ext}"
         if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
             print(f"\nOverriding kernel with file {full_name}")
@@ -330,7 +348,6 @@ class LazyDict:
 class AsmDict(dict):
 
     def __missing__(self, key):
-
         if key == "sass":
             value = get_sass(self["cubin"])
         else:
@@ -390,10 +407,8 @@ class CompiledKernel:
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
 
-    def __getattribute__(self, name):
-        if name == 'run':
-            self._init_handles()
-        return super().__getattribute__(name)
+    # This mechanism introduces heavy runtime overhead.
+    # Commenting __getattribute__ requires explicitly calling _init_handles()
 
     def launch_metadata(self, grid, stream, *args):
         if CompiledKernel.launch_enter_hook is None:
@@ -416,6 +431,8 @@ class CompiledKernel:
         self._init_handles()
 
         def runner(*args, stream=None):
+            if stream is None:
+                stream = self.metadata.stream
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)

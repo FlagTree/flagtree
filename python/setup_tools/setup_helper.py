@@ -325,8 +325,11 @@ def check_env(env_val):
 
 download_flagtree_third_party("triton_shared", condition=(not flagtree_backend))
 
-download_flagtree_third_party("ascend", condition=(flagtree_backend == "ascend"), hock=utils.ascend.precompile_hock,
+download_flagtree_third_party("flir", condition=(flagtree_backend == "ascend"), hock=utils.ascend.precompile_hook_flir,
                               required=True)
+
+#download_flagtree_third_party("ascend", condition=(flagtree_backend == "ascend"), hock=utils.ascend.precompile_hook,
+#                              required=True)
 
 handle_flagtree_backend()
 
@@ -387,9 +390,9 @@ cache.store(
 
 # ascend
 cache.store(
-    file="llvm-b5cc222d-ubuntu-arm64",
+    file="llvm-a66376b0-ubuntu-arm64",
     condition=("ascend" == flagtree_backend),
-    url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-b5cc222d-ubuntu-arm64.tar.gz",
+    url="https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-a66376b0-ubuntu-arm64.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )

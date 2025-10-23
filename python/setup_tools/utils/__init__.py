@@ -9,9 +9,13 @@ flagtree_submodules = {
     tools.Module(name="triton_shared", url="https://github.com/microsoft/triton-shared.git",
                  commit_id="380b87122c88af131530903a702d5318ec59bb33",
                  dst_path=os.path.join(flagtree_submodule_dir, "triton_shared")),
-    "ascend":
-    tools.Module(name="ascend", url="https://gitcode.com/FlagTree/triton-ascend.git",
-                 dst_path=os.path.join(flagtree_submodule_dir, "triton_ascend")),
+    "flir":
+    tools.Module(name="flir", url="https://github.com/FlagTree/flir.git",
+                 dst_path=os.path.join(flagtree_submodule_dir, "flir")),
+    #"ascend":
+    #tools.Module(name="ascend", url="https://gitcode.com/FlagTree/triton-ascend.git",
+    #             commit_id="18803572c3aaf55b914090560fe8a31bc5eaa2cc",  # ascend_with_llvma66376b0_20251021_debug
+    #             dst_path=os.path.join(flagtree_submodule_dir, "triton_ascend")),
 }
 
 
