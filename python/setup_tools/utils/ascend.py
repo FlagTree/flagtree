@@ -1,13 +1,9 @@
 import os
 import shutil
 from pathlib import Path
-from setup_tools.utils.tools import flagtree_root_dir, Module, flagtree_submodule_dir, DownloadManager
+from setup_tools.utils.tools import flagtree_root_dir, flagtree_submodule_dir, DownloadManager
 
 downloader = DownloadManager()
-
-submodules = (Module(name="ascendnpu-ir", url="https://gitcode.com/Ascend/AscendNPU-IR.git",
-                     commit_id="af5499b3b9f3dbab50b2834bcfff5da5c2a1d920",
-                     dst_path=os.path.join(flagtree_submodule_dir, "ascend/third_party/ascendnpu-ir")), )
 
 
 def get_backend_cmake_args(*args, **kargs):
@@ -111,6 +107,8 @@ def precompile_hock(*args, **kargs):
     ascend_path = Path(third_party_base_dir) / "ascend"
     patch_path = Path(ascend_path) / "triton_patch"
     project_path = Path(third_party_base_dir) / "triton_ascend"
+    project_thirdparty_path = project_path / "third_party/ascendnpu-ir"
+    ascend_thirdparty_path = ascend_path / "third_party/ascendnpu-ir"
     if os.path.exists(ascend_path):
         shutil.rmtree(ascend_path)
     if not os.path.exists(project_path):
@@ -119,8 +117,8 @@ def precompile_hock(*args, **kargs):
     patch_src_path = Path(project_path) / "triton_patch"
     shutil.copytree(ascend_src_path, ascend_path, dirs_exist_ok=True)
     shutil.copytree(patch_src_path, patch_path, dirs_exist_ok=True)
+    shutil.copytree(project_thirdparty_path, ascend_thirdparty_path, dirs_exist_ok=True)
     shutil.rmtree(project_path)
-    [downloader.download(module=submodule, required=False) for submodule in submodules]
     cmake_patch_copy()
     patched_code = """  set(triton_abs_dir "${TRITON_ROOT_DIR}/include/triton/Dialect/Triton/IR") """
     src_code = """set(triton_abs_dir"""
