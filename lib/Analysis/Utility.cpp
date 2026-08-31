@@ -42,7 +42,9 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallSet.h"
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 #include "llvm/Support/MathExtras.h"
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 namespace mlir {
 
@@ -1026,7 +1028,7 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   return false;
 }
 
-#if defined(__TLE__) && defined(__NVIDIA__)
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 namespace {
 
 constexpr unsigned kNvidiaWarpSize = 32;
@@ -1250,8 +1252,8 @@ planSameWarpShuffleConversion(RankedTensorType srcTy,
                              std::move(removeBroadcastedSrcRegs),
                              std::move(removeBroadcastedDstRegs)};
 }
-#endif // defined(__TLE__) && defined(__NVIDIA__)
 
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !cvtNeedsWarpShuffle(srcTy, dstTy);

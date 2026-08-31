@@ -285,7 +285,7 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 // within a warp.  No data exchange across warps or blocks is needed.
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 
-#if defined(__TLE__) && defined(__NVIDIA__)
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // A route from destination hardware locations to equivalent source locations
 // in the same block and warp.  Register broadcasting is removed from the
 // layouts in the plan and restored by lowering after the unique values have
@@ -305,8 +305,8 @@ struct SameWarpShufflePlan {
 std::optional<SameWarpShufflePlan>
 planSameWarpShuffleConversion(RankedTensorType srcTy,
                               RankedTensorType dstTy);
-#endif // defined(__TLE__) && defined(__NVIDIA__)
 
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // Conversion from `srcTy` to `dstTy` involves data exchange across threads,
 // warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
