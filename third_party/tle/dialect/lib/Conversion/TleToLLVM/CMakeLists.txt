@@ -23,6 +23,8 @@ add_triton_library(TleToLLVM
     ${TLE_TO_LLVM_SRC}
 
     DEPENDS
+    NVGPUTableGen
+    NVGPUAttrDefsIncGen
     TleTableGen
     TritonGPUTypeInterfacesIncGen
     TritonGPUOpInterfacesIncGen
