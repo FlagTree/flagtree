@@ -285,28 +285,6 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 // within a warp.  No data exchange across warps or blocks is needed.
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 
-#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
-// A route from destination hardware locations to equivalent source locations
-// in the same block and warp.  Register broadcasting is removed from the
-// layouts in the plan and restored by lowering after the unique values have
-// been shuffled.
-struct SameWarpShufflePlan {
-  triton::LinearLayout srcLayout;
-  triton::LinearLayout dstLayout;
-  triton::LinearLayout dstToSrc;
-  triton::ColumnAction removeBroadcastedSrcRegs;
-  triton::ColumnAction removeBroadcastedDstRegs;
-};
-
-// Find a same-block, same-warp indexed-shuffle route for a layout conversion.
-// Returns nullopt when no such route exists or when the route is not supported
-// profitably by the NVIDIA lowering.  Keeping the complete plan in Analysis
-// makes scratch allocation and lowering use exactly the same decision.
-std::optional<SameWarpShufflePlan>
-planSameWarpShuffleConversion(RankedTensorType srcTy,
-                              RankedTensorType dstTy);
-
-#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // Conversion from `srcTy` to `dstTy` involves data exchange across threads,
 // warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
