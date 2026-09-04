@@ -22,13 +22,13 @@ ENTRY_2 = {
 @pytest.fixture(autouse=True)
 def clean_manifest_environment(monkeypatch):
     for name in (
-        "FLAGTUNE_LOCAL_MANIFEST",
-        "FLAGTUNE_MODEL_CACHE",
-        "FLAGTUNE_MODEL_BASE_URL",
-        "FLAGTUNE_MANIFEST_URL",
-        "FLAGTUNE_MANIFEST_TTL",
-        "FLAGTUNE_MANIFEST_REFRESH",
-        "FLAGTUNE_DISABLE_REMOTE",
+            "FLAGTUNE_LOCAL_MANIFEST",
+            "FLAGTUNE_MODEL_CACHE",
+            "FLAGTUNE_MODEL_BASE_URL",
+            "FLAGTUNE_MANIFEST_URL",
+            "FLAGTUNE_MANIFEST_TTL",
+            "FLAGTUNE_MANIFEST_REFRESH",
+            "FLAGTUNE_DISABLE_REMOTE",
     ):
         monkeypatch.delenv(name, raising=False)
     # Keep fixture-created cache manifests offline; the default URL is tested
@@ -40,10 +40,8 @@ def test_default_manifest_url(monkeypatch):
     """Use the hosted FlagOS Manifest when no URL override is provided."""
     monkeypatch.delenv("FLAGTUNE_MANIFEST_URL", raising=False)
 
-    assert model_sources._manifest_url() == (
-        "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/"
-        "flagtune-xgb-manifest.tar.gz"
-    )
+    assert model_sources._manifest_url() == ("https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/"
+                                             "flagtune-xgb-manifest.tar.gz")
 
 
 def manifest_with(entry, *, platform_key=PLATFORM_KEY):
