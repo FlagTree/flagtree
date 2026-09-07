@@ -110,8 +110,7 @@ class FlagcxRuntimeConfig:
 
     def _get_bitcode_paths(self):
         return self._check_path_available(
-            (self.triton_path / 'backends' / 'nvidia' / 'backend' / 'lib' / 'libflagcx_device.bc',
-             self.flagcx_cache_dir / 'libflagcx_device.bc'),
+            (self.flagcx_cache_dir / 'libflagcx_device.bc',),
             'libflagcx_device.bc',
         )
 

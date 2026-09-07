@@ -87,6 +87,7 @@ class FlagCXRegistrar:
     _BACKEND_TO_FLAGCX_FLAG = {
         "nvidia": "NVIDIA",
         "mthreads": "MUSA",
+        "hcu": "AMD",
     }
 
     def get_compile_cmds(self):
@@ -150,7 +151,12 @@ class FlagCXRegistrar:
         self._copy_required_files()
 
 
-def handle_flagcx(*args, **kwargs):
-    global registrar
-    registrar = FlagCXRegistrar(kwargs)
-    registrar.run()
+def make_handle_flagcx(cls: type["FlagCXRegistrar"]):
+    def handle_flagcx_impl(*args, **kwargs):
+        global registrar
+        registrar = cls(kwargs)
+        registrar.run()
+
+    return handle_flagcx_impl
+
+handle_flagcx = make_handle_flagcx(FlagCXRegistrar)

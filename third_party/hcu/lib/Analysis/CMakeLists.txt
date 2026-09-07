@@ -6,6 +6,7 @@ add_triton_library(TritonHCUAnalysis
   DEPENDS
   TritonTableGen
   TritonHCUGPUTableGen
+  TleTableGen
 
   LINK_LIBS PUBLIC
   MLIRAnalysis

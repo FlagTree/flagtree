@@ -735,7 +735,7 @@ cache = FlagTreeCache()
    refer to https://github.com/flagos-ai/FlagCX
 '''
 
-FLAGCX_BACKENDS = {"nvidia", "mthreads"}
+FLAGCX_BACKENDS = {"nvidia", "mthreads", "hcu"}
 download_flagtree_third_party(
     "flagcx",
     condition=(not flagtree_backend or flagtree_backend in FLAGCX_BACKENDS),

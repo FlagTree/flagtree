@@ -25,6 +25,8 @@ python/triton/FileCheck
 third_party/mthreads/python/triton/_C/*.so
 third_party/mthreads/python/triton/FileCheck
 third_party/mthreads/python/*.egg-info
+third_party/mthreads/backend/flagcx*
+third_party/mthreads/backend/lib/libflagcx*
 third_party/xpu/python/triton/_C/*.so
 third_party/xpu/python/triton/FileCheck
 third_party/xpu/python/triton/instrumentation/*.so
@@ -134,5 +136,3 @@ third_party/mthreads/backend/bin/
 third_party/xpu.bak/
 third_party/xpu/backend/xpu3/
 .comate/
-third_party/mthreads/backend/flagcx*
-third_party/mthreads/backend/lib/libflagcx*

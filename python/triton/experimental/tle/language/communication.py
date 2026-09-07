@@ -29,8 +29,8 @@ _flagcx_allocator_failed_to_compile = False
 _init_communicator_ = False
 
 try:
-    flagtree_backend = os.environ.get('FLAGTREE_BACKEND', 'nvidia')
-    _mod = importlib.import_module(f'triton.backends.{flagtree_backend}.distributed')
+    from triton._flagtree_backend import FLAGTREE_BACKEND
+    _mod = importlib.import_module(f'triton.backends.{FLAGTREE_BACKEND}.distributed')
     flagcx_rt_conf = _mod.flagcx_rt_conf
     backend_adapter = _mod.backend_adapter
     device_type = backend_adapter.device_type
