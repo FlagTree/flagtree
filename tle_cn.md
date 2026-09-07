@@ -298,17 +298,129 @@ def distributed_barrier(mesh):
 
 ##### 3.2.4.4 远程访问
 
-`tle.remote` 获取其他设备上 Tensor 分片句柄，对应点对点通信或直接内存访问（RDMA/NVLink Load）。
+`tle.remote` 获取其他设备上数据分片的访问句柄，对应点对点通信或直接内存访问（RDMA/NVLink Load）。当前实现按 `space` 区分三种目标域：
 
 ```python
-def remote(tensor, shard_id, scope):
+def remote(
+    tensor,                    # cluster: shared-memory 指针或 buffered_tensor；
+                               # device/node: create_dist_tensor 返回的 DistributedRtContext
+    shard_id,                  # 支持编译期 int 常量：cluster 表示目标 Block id，
+                               # device 表示节点内 peer rank，node 表示 world rank；
+                               # 也支持运行时 int32 标量；编译期 mesh 坐标 tuple 需配合 scope
+    scope=None,                # device_mesh；node 路径下仅用于把坐标解析为 world rank
+    space="cluster",           # "cluster" | "device" | "node"
+    dtype=None,                # device/node 路径必填
+    offset=None,               # 仅 space="device" 支持
+    coopkind=None,             # 仅 node：thread/warp/block；缺省时为 GroupKind.BLOCK
+    netidx=0,                  # 仅 node：FlagCX 网络 context 索引 [0, 4)
+):
     """
-    获取指向特定设备分片的 Remote Tensor 句柄。
+    cluster 指针输入返回 cluster remote pointer，buffered_tensor 输入返回
+    remote-marked buffer；device/node 路径返回 global remote pointer。
+    指针结果可参与 tl.load / tl.store；cluster buffer 需先用 tle.gpu.local_ptr 物化指针。
+    """
+```
 
-    :param tensor: 逻辑分布式 Tensor（已被 tle.sharding 标记）
-    :param shard_id: tuple，目标设备在 Device Mesh 中的坐标
-    :return: RemoteTensor，可执行 load/store 等操作
-    """
+###### Cluster 路径（Cluster 内通信，DSMEM）
+
+cluster 路径面向同一线程块 cluster（CTA cluster）内跨 Block 的共享内存访问（Hopper 及以上架构的 DSMEM），`space` 缺省时即此路径。输入支持两种：
+
+- shared-memory 指针（标量或 tensor）：直接返回 cluster 地址空间的远端指针，可参与 `tl.load` / `tl.store`，输入为 block tensor 时保留 shape；
+- tle buffered_tensor：返回 remote-marked buffer，再用 `tle.gpu.local_ptr(...)` 物化远端指针视图。
+
+`shard_id` 是 cluster 内目标 Block 的 id；传 `scope` 时由 mesh 线性化坐标，并会按 mesh 推断 launch cluster 维度（要求 `num_ctas=1`，一个 program 映射一个 Block）。对已是 cluster-shared 空间的指针，`shard_id=0` 时直接返回本地访问。cluster / device 路径不支持 node 专用参数 `coopkind` / `netidx`。
+
+示例（读邻居 Block 的 SMEM tile）：
+
+```python
+# 此处 smem 是 buffered_tensor，例如由 tle.gpu.alloc 返回
+remote_smem = tle.remote(smem, shard_id=(node_rank, next_device), scope=mesh)
+remote_ptr = tle.gpu.local_ptr(remote_smem, (rows, cols))
+vals = tl.load(remote_ptr)
+```
+
+###### Device 路径（节点内跨 GPU 通信，NVLink P2P）
+
+device 路径面向同一节点内 GPU 之间、经 FlagCX 注册窗口（对称内存）的直接内存访问（NVLink P2P）。与 node 路径类似，`tensor` 传 `create_dist_tensor` 返回的 `DistributedRtContext`，但返回的是普通全局地址空间的远端指针，`offset` 参数**必填**——指定远端窗口内的元素偏移（Python int 或标量整数 tensor，内部归一为 i64）。
+
+与 node 路径的关键区别：device 路径的远端指针就是普通全局指针，后续 `tl.load` / `tl.store` 支持任意的 tiled / 多维访存，**没有"仅连续传输"的限制**；偏移基准由 `offset` 一次固定，之后的指针运算按普通全局指针处理。
+
+示例（把本地输入分片 scatter 到节点内对端 GPU）：
+
+```python
+remote_base = tle.remote(scatter_ctx, space="device",
+                         dtype=input_ptr.dtype.element_ty,
+                         shard_id=target_rank,
+                         offset=SCATTER_NODE_SLICE_OFFSET_ELEMS + source_slot_offset_elems)
+scatter_ptrs = (remote_base +
+                (scatter_row + row_offs[:, None]) * N + input_col + col_offs[None, :])
+tl.store(scatter_ptrs, values, mask=scatter_row_mask & col_mask)
+```
+
+###### Node 路径（node 间通信，FlagCX/RDMA）
+
+node 路径面向跨节点点对点传输，数据面基于 FlagCX 注册内存（对称窗口）。
+
+当前版本**仅支持连续数据传输**，使用前请注意：
+
+- Host 侧必须先用 `tle.create_dist_tensor(comm_buf)` 把通信 buffer 注册到 FlagCX 对称内存窗口，返回的 `DistributedRtContext` 作为 kernel 参数传入；device 间 scatter 与 node 间 P2P 可共用同一注册窗口。本地侧使用的 buffer 必须是该 context 所注册的同一个 buffer，并作为全局指针参数直接传给 kernel。
+- `dtype` 必填；**不支持 `offset` 参数**——偏移要加在返回的指针上。
+- 传输形状受限：标量拷贝一次传一个元素；tensor 拷贝两侧必须复用同一个连续区间 `tl.arange(0, N)`，mask 只支持无 mask 或复用同一个共享前缀 mask `offsets < valid_n`（`1 <= valid_n <= N`）。
+- load 的结果必须直接且仅供配对的 store 使用；二者必须位于同一 basic block，load 在前、store 在后，期间不能插入访存、原子操作、barrier 或其他通信操作；并且恰好一侧使用 node remote pointer。
+- 不支持稀疏访问、多维 tiled load/store、strided 访问、非零起点区间、两侧范围不一致——编译期直接拒绝，动态违规则触发 device assert。
+- `coopkind` 支持 `thread` / `warp` / `block`，默认 `block`（整个 CTA 收敛地发出一次传输）；`netidx` 为网络 context 索引，编译期整数必须在 `[0, 4)`，运行时值必须是标量 `tl.int32`。
+- 由于 device 侧没有 `rank()` / `num_ranks()`，拓扑由 host 以 constexpr 传入 kernel；`shard_id` 推荐直接传 host 预计算的 world rank int，也可以传 mesh 坐标 tuple + `scope`（经 `physical_ids` 解析为 world rank）。node 路径下 `scope` 不影响 launch 配置。
+
+使用方式：先用 `tle.remote` 拿到指向对端节点的远端指针，再用一对 load/store 完成传输，传输方向由 load/store 的位置决定：
+
+- **PUT（本地 → 远程）**：先从本地 buffer load，再 store 到远端指针，数据即从本节点写入远程节点。
+- **GET（远程 → 本地）**：写法与 PUT 完全对称，方向相反——从远端指针 load，再 store 进本地 buffer，数据即从远程节点读回本地。
+
+PUT 示例（本地 load + 远端 store）：
+
+```python
+remote_dst = tle.remote(ctx, space="node", dtype=DTYPE,
+                        shard_id=remote_rank, coopkind=tle.GroupKind.BLOCK)
+offsets = tl.arange(0, BLOCK_SIZE)
+mask = offsets < nelems
+vals = tl.load(comm_buf + src_offset + offsets, mask=mask)     # 本地 load
+tl.store(remote_dst + dst_offset + offsets, vals, mask=mask)   # 远端 store = PUT：数据写到远程节点
+```
+
+GET 示例（远端 load + 本地 store），用法与 PUT 相同，只是 load/store 方向反过来：
+
+```python
+remote_src = tle.remote(ctx, space="node", dtype=DTYPE,
+                        shard_id=remote_rank, coopkind=tle.GroupKind.BLOCK)
+offsets = tl.arange(0, BLOCK_SIZE)
+mask = offsets < nelems
+vals = tl.load(remote_src + src_offset + offsets, mask=mask)   # 远端 load = GET：从远程节点读数据
+tl.store(comm_buf + dst_offset + offsets, vals, mask=mask)     # 本地 store
+```
+
+常见错误写法：
+
+```python
+# 错：多维 / tiled 访问
+vals = tl.load(remote_dst + rows[:, None] * N + cols[None, :])  # 编译期拒绝
+# 原因：node 路径把 load/store 对整体 lowering 为一次 RDMA put/get，
+# 接口只支持连续数据（1D 线性区间），无法表达 2D tile 的离散地址。
+# 需要传输二维数据时，先在本地 buffer 中按连续布局排好，再整体传输。
+
+# 错：把偏移传给 remote
+remote_dst = tle.remote(ctx, space="node", dtype=DTYPE, shard_id=r, offset=1024)  # 报错
+# 原因：node 路径下 tle.remote 只负责解析目标 peer，返回的是指向对端
+# 窗口基址的指针；源/目的偏移由后续 load/store 时的 src_offset / dst_offset 表达。
+
+# 对：偏移加到返回的指针上
+tl.store(remote_dst + dst_offset + offsets, vals, mask=mask)
+
+# 错：两侧区间不一致，或 mask 不是共享前缀
+vals = tl.load(local + tl.arange(0, N), mask=mask)             # arange(0, N)
+tl.store(remote + tl.arange(0, M), vals, mask=mask2)           # 另一个 range → 拒绝
+# 原因：传输长度和两侧偏移是从 load/store 的指针表达式共同推导的，
+# arange 区间表达的就是本次传输的数据量（mask 表达有效长度）；
+# 两侧 range / mask 不一致时，传多少、从哪传到哪无法确定，编译期拒绝。
 ```
 
 ##### 3.2.4.5 重分片
