@@ -242,19 +242,15 @@ static LogicalResult rewritePredicatedLoad(LLVM::CallOp callOp,
       rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
   afterLoad->addArgument(elemTy, loc);
   Block *trueBlock = rewriter.createBlock(afterLoad);
-  Block *falseBlock =
-      rewriter.splitBlock(trueBlock, rewriter.getInsertionPoint());
 
   rewriter.setInsertionPointToEnd(currentBlock);
-  LLVM::CondBrOp::create(rewriter, loc, pred, trueBlock, falseBlock);
+  LLVM::CondBrOp::create(rewriter, loc, pred, trueBlock, ValueRange{},
+                         afterLoad, ValueRange{falseVal});
 
   rewriter.setInsertionPointToStart(trueBlock);
   Value loaded =
       emitPredicatedLoadBody(ptr, elemTy, useCacheHint, loc, rewriter);
   LLVM::BrOp::create(rewriter, loc, loaded, afterLoad);
-
-  rewriter.setInsertionPointToStart(falseBlock);
-  LLVM::BrOp::create(rewriter, loc, falseVal, afterLoad);
 
   rewriter.setInsertionPointToStart(afterLoad);
   rewriter.replaceOp(callOp, afterLoad->getArgument(0));

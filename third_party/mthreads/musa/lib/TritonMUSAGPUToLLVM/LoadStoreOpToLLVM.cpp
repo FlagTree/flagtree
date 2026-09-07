@@ -766,8 +766,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp> {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto *ctx = rewriter.getContext();
     auto typeConverter = getTypeConverter();
-    auto valueElemTy =
-        typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+    Type logicalValueElemTy = getElementTypeOrSelf(op.getType());
+    auto valueElemTy = typeConverter->convertType(logicalValueElemTy);
 
     Value ptr = op.getPtr();
     Value llPtr = adaptor.getPtr();
@@ -818,7 +818,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp> {
     SmallVector<Value> loaded;
     loaded.reserve(numElems);
 
-    if (vec == 1) {
+    bool useVectorCarrier =
+        !maskElems.empty() && logicalValueElemTy.isIntOrIndex();
+    if (vec == 1 && !useVectorCarrier) {
       for (unsigned i = 0; i < numElems; ++i) {
         if (auto canonical = getCanonicalIndex(i, regMask); i != canonical) {
           loaded.push_back(loaded[canonical]);
