@@ -58,7 +58,10 @@ submodule_registrar = SubmoduleRegistrar(submodules=(
         "name": "triton_shared", "url": "https://github.com/microsoft/triton-shared.git", "commit_id":
         "5842469a16b261e45a2c67fbfc308057622b03ee"
     },
-    {"name": "flir", "url": "https://github.com/tsingmicro-public-e/flir.git", "commit_id": "5452aa58d5712cee22267c743f2e54c9c49d5fb9"},
+    {
+        "name": "flir", "url": "https://github.com/tsingmicro-public-e/flir.git", "commit_id":
+        "5452aa58d5712cee22267c743f2e54c9c49d5fb9"
+    },
     #{"name": "flir", "url": "https://github.com/FlagTree/flir.git"},
     # FlagPrism: register the external component without vendoring its sources.
     {"name": "FlagPrism", "url": "https://github.com/flagos-ai/FlagPrism.git"},

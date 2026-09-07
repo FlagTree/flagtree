@@ -8,6 +8,7 @@ def _get_backend_root() -> str:
 
 
 def register_cache(cache, flagtree_backend, check_env, set_llvm_env):
+
     def set_env(env_dict: dict):
         for env_k, env_v in env_dict.items():
             os.environ[env_k] = str(env_v)
