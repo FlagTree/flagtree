@@ -62,7 +62,15 @@ from .distributed import (
     sharding,
 )
 from . import communication
-from .communication import get_mem_pool, create_dist_tensor, cleanup_communicator
+from .communication import get_mem_pool, cleanup_communicator
+
+
+def create_dist_tensor(buf_tensor):
+    """Create a distributed tensor context and bind it to ``buf_tensor``."""
+    ctx = communication.create_dist_tensor(buf_tensor)
+    ctx.register_buffer(buf_tensor)
+    return ctx
+
 
 _EXTENSION_APIS = frozenset({
     "make_tensor_view",
@@ -115,6 +123,7 @@ __all__ = [
     "distributed_dot",
     "distributed",
     "gpu",
+    "dsa",
     "raw",
     "mem_pool",
     "get_mem_pool",
@@ -125,7 +134,7 @@ __all__ = [
     "GroupKind",
 ]
 
-from . import distributed, gpu, raw
+from . import distributed, dsa, gpu, raw
 
 # TLE-specific loop iterator: tl.range plus the `reorder` extension hint.
 from .gpu import range

@@ -22,7 +22,7 @@ from pathlib import Path
 import importlib.util
 import os
 from . import tools, default
-from .tools import flagtree_configs, OfflineBuildManager
+from .tools import flagtree_configs, OfflineBuildManager, is_skip_cuda_toolkits
 
 
 class SubmoduleRegistrar:
@@ -59,6 +59,8 @@ submodule_registrar = SubmoduleRegistrar(submodules=(
         "5842469a16b261e45a2c67fbfc308057622b03ee"
     },
     {"name": "flir", "url": "https://github.com/FlagTree/flir.git"},
+    # FlagPrism: register the external component without vendoring its sources.
+    {"name": "FlagPrism", "url": "https://github.com/flagos-ai/FlagPrism.git"},
     {"name": "flagcx", "url": "https://github.com/flagos-ai/FlagCX.git", "relative_path": "tle/third_party/flagcx"},
     {
         "name": "tileir", "url": "https://github.com/NVIDIA/cuda-tile", "relative_path": "tileir/third_party/cuda-tile",

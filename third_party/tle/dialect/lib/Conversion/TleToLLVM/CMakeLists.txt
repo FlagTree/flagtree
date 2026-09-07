@@ -4,6 +4,7 @@ set(TLE_TO_LLVM_SRC
     ExclusiveCumsumOpToLLVM.cpp
     ExtractOpToLLVM.cpp
     LocalPointersOpToLLVM.cpp
+    NodeTransferOpToLLVM.cpp
     PackOpToLLVM.cpp
     RemotePointerUtils.cpp
     SignalOpToLLVM.cpp
@@ -27,6 +28,9 @@ add_triton_library(TleToLLVM
     NVGPUTableGen
     NVGPUAttrDefsIncGen
     TleTableGen
+    TritonGPUTableGen
+    TritonGPUAttrDefsIncGen
+    ${TLE_TRITON_GPU_ATTR_DEPENDS}
     TritonGPUTypeInterfacesIncGen
     TritonGPUOpInterfacesIncGen
     TleTools
