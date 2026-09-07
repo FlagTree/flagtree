@@ -297,7 +297,12 @@ macro(flagtree_configure_flir_dependency)
     # TsingMicro only consumes FLIR's C++ targets; do not build its Python/CPU plugin.
     set(TRITON_SHARED_BUILD_CPU_BACKEND OFF)
     list(REMOVE_ITEM TRITON_CODEGEN_BACKENDS "flir")
-    list(PREPEND TRITON_CODEGEN_BACKENDS "flir")
+    if(NOT TARGET TritonSharedUtils)
+      add_subdirectory(
+        "${PROJECT_SOURCE_DIR}/third_party/flir"
+        "${PROJECT_BINARY_DIR}/third_party/flir"
+      )
+    endif()
   endif()
 endmacro()
 
