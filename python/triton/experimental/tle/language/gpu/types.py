@@ -22,10 +22,13 @@
 
 from __future__ import annotations
 
+from math import prod
+
 import triton.language.core as tl
 from typing import Optional, List, Tuple, TYPE_CHECKING
 from abc import abstractmethod
 from triton._C.libtriton import ir
+from triton._utils import TRITON_MAX_TENSOR_NUMEL, is_power_of_two
 from triton.language.semantic import TritonSemantic
 
 if TYPE_CHECKING:
@@ -456,6 +459,32 @@ def _make_slot_layout(src_layout: shared_layout, slot_shape: List[int]) -> share
     raise ValueError(f"buffered_tensor.slot does not support layout {type(src_layout).__name__}")
 
 
+def _make_subslice_layout(src_layout: shared_layout, subslice_shape: List[int]) -> shared_layout:
+    if isinstance(src_layout, swizzled_shared_layout):
+        return swizzled_shared_layout(
+            src_layout.vectorSize,
+            src_layout.perPhase,
+            src_layout.maxPhase,
+            list(src_layout.order),
+            list(src_layout.numCTAs),
+            list(src_layout.numCTAsPerCGA),
+            list(src_layout.numCTASplit),
+            list(src_layout.numCTAOrder),
+        )
+    if isinstance(src_layout, nv_mma_shared_layout):
+        return nv_mma_shared_layout(
+            list(subslice_shape),
+            list(src_layout.order),
+            src_layout.elemType,
+            list(src_layout.numCTAsPerCGA),
+            list(src_layout.numCTASplit),
+            list(src_layout.numCTAOrder),
+            src_layout.fp4Padded,
+            src_layout.swizzled,
+        )
+    raise ValueError(f"buffered_tensor.subslice does not support layout {type(src_layout).__name__}")
+
+
 class buffered_tensor(tl.base_value):
     """
     A symbolic type representing a tensor allocated in a manually managed buffer
@@ -517,6 +546,50 @@ class buffered_tensor(tl.base_value):
         return buffered_tensor(slot_handle, self.dtype, slot_shape, self.type.storage, slot_layout, _semantic,
                                alloc_shape=slot_ty.alloc_shape)
 
+    @tl.builtin
+    def subslice(self, offsets, shape, _semantic: TLESemantic | None = None):
+        """Return a static shared-memory subview without copying its payload."""
+        offsets = _unwrap_pipe_constexpr(offsets)
+        shape = _unwrap_pipe_constexpr(shape)
+        if not isinstance(offsets, (tuple, list)) or not isinstance(shape, (tuple, list)):
+            raise ValueError("buffered_tensor.subslice offsets and shape must be compile-time tuples/lists")
+        offsets = list(offsets)
+        shape = list(shape)
+        if len(offsets) != len(self.shape) or len(shape) != len(self.shape):
+            raise ValueError("buffered_tensor.subslice offsets and shape must match the buffer rank")
+        for index, (offset, size, extent) in enumerate(zip(offsets, shape, self.shape)):
+            if isinstance(offset, bool) or not isinstance(offset, int):
+                raise ValueError(f"buffered_tensor.subslice offset {index} must be a compile-time integer")
+            if isinstance(size, bool) or not isinstance(size, int):
+                raise ValueError(f"buffered_tensor.subslice shape {index} must be a compile-time integer")
+            if offset < 0 or size <= 0 or offset + size > extent:
+                raise ValueError(
+                    f"buffered_tensor.subslice dimension {index} [{offset}, {offset + size}) "
+                    f"is outside extent {extent}")
+            if size != extent and (size & (size - 1) or offset % size):
+                raise ValueError(
+                    f"buffered_tensor.subslice dimension {index} must use an aligned power-of-two tile")
+        subslice_layout = _make_subslice_layout(self.type.layout, shape)
+        subslice_ty = buffered_tensor_type(
+            self.dtype,
+            shape,
+            self.type.storage,
+            subslice_layout,
+            _semantic,
+            alloc_shape=self.type.alloc_shape,
+        )
+        handle = _semantic.builder.create_memdesc_subslice(
+            subslice_ty.to_ir(_semantic.builder), self.handle, offsets)
+        return buffered_tensor(
+            handle,
+            self.dtype,
+            shape,
+            self.type.storage,
+            subslice_layout,
+            _semantic,
+            alloc_shape=self.type.alloc_shape,
+        )
+
     def make_permute(self, handle, dims):
         permuted_layout = self.type.layout.make_permute(dims)
         return buffered_tensor(
@@ -533,7 +606,36 @@ class buffered_tensor_type(tl.block_type):
 
     def __init__(self, element_ty: tl.dtype, shape: List, storage: scope, layout: Optional[shared_layout] = None,
                  semantic: TritonSemantic = None, alloc_shape: List = None):
-        super().__init__(element_ty, shape)
+        # MemDescType deliberately permits a non-power-of-two leading
+        # dimension (the stage/allocation dimension), while ordinary Triton
+        # register tensors require every dimension to be a power of two.  A
+        # buffered tensor is a memory descriptor, not a register tensor, so do
+        # not apply block_type's stronger rule to that leading dimension.
+        shape = tuple(shape)
+        if not shape:
+            raise TypeError("0d buffered_tensor_type is forbidden")
+        for index, extent in enumerate(shape):
+            if not isinstance(extent, int):
+                raise TypeError(
+                    f"Shape element {index} must have type `constexpr[int]`, "
+                    f"got `constexpr[{type(extent)}]`"
+                )
+            if extent <= 0:
+                raise ValueError(f"Shape element {index} must be positive")
+            if index > 0 and not is_power_of_two(extent):
+                raise ValueError(
+                    f"Shape element {index} must be a power of 2"
+                )
+        numel = prod(shape)
+        if numel > TRITON_MAX_TENSOR_NUMEL:
+            raise ValueError(
+                f"numel ({numel}) exceeds triton maximum tensor numel "
+                f"({TRITON_MAX_TENSOR_NUMEL})"
+            )
+        self.element_ty = element_ty
+        self.shape = shape
+        self.numel = numel
+        self.name = f"<{self.shape}, {self.element_ty}>"
         # Storage
         self.storage = storage
         # layout encoding
@@ -912,26 +1014,30 @@ class pipe_value_type(tl.base_type):
         self.one_shot = one_shot
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple["pipe_value", int]:
+        identity = handles[cursor]
+        cursor += 1
         values = {}
         for field_name, ty in self.fields:
             value, cursor = ty._unflatten_ir(handles, cursor)
             values[field_name] = value
-        return pipe_value(self.capacity, self.scope, self.name, values, self.readers, one_shot=self.one_shot), cursor
+        return pipe_value(
+            self.capacity, self.scope, self.name, values, self.readers,
+            one_shot=self.one_shot, identity=identity), cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        tl.int32._flatten_ir_types(builder, out)
         for _, ty in self.fields:
             ty._flatten_ir_types(builder, out)
 
     def mangle(self) -> str:
-        name = "anon" if self.name is None else self.name
         fields = "_".join(f"{field_name}_{ty.mangle()}" for field_name, ty in self.fields)
         readers = "spsc" if self.readers is None else "readers_" + "_".join(self.readers)
         mode = "oneshot" if self.one_shot else "cyclic"
-        return f"pipe_{self.scope}_{self.capacity}_{name}_{mode}_{readers}_{fields}"
+        return f"pipe_{self.scope}_{self.capacity}_{mode}_{readers}_{fields}"
 
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.capacity == other.capacity and self.scope == other.scope
-                and self.name == other.name and self.fields == other.fields and self.readers == other.readers
+                and self.fields == other.fields and self.readers == other.readers
                 and self.one_shot == other.one_shot)
 
     def __str__(self) -> str:
@@ -943,7 +1049,8 @@ class pipe_value_type(tl.base_type):
 
 class pipe_value(tl.base_value):
 
-    def __init__(self, capacity: int, scope: str, name: Optional[str], fields, readers=None, one_shot=False):
+    def __init__(self, capacity: int, scope: str, name: Optional[str], fields, readers=None, one_shot=False,
+                 identity=None):
         super().__init__()
         self.capacity = capacity
         self.scope = scope
@@ -951,8 +1058,12 @@ class pipe_value(tl.base_value):
         self.fields = dict(fields)
         self.readers = None if readers is None else tuple(readers)
         self.one_shot = one_shot
+        self.identity = identity
 
     def _flatten_ir(self, handles) -> None:
+        if self.identity is None:
+            raise ValueError("tle.pipe value is missing its SSA identity")
+        handles.append(self.identity)
         for field in self.fields.values():
             field._flatten_ir(handles)
 
@@ -1001,6 +1112,14 @@ class pipe_value(tl.base_value):
         reader_name = _validate_pipe_reader_name(self, name)
         field_names = _validate_pipe_reader_fields(self, fields)
         return pipe_reader(self, reader_name=reader_name, field_names=field_names)
+
+    @tl.builtin
+    def wait_drained(self, _semantic: TLESemantic | None = None):
+        if self.one_shot:
+            raise ValueError("tle.pipe one_shot pipes do not support wait_drained")
+        _semantic.builder.create_pipe_drain(self.identity, self._field_handles(), self.capacity, self.scope,
+                                            self._ir_name(),
+                                            self._field_names())
 
 
 class _pipe_endpoint_type(tl.base_type):
@@ -1089,7 +1208,8 @@ class pipe_writer(_pipe_endpoint):
     @tl.builtin
     def acquire(self, iter, _semantic: TLESemantic | None = None):
         stage, phase = self.pipe._stage_phase(iter, _semantic=_semantic)
-        _semantic.builder.create_pipe_writer_acquire(self.pipe._field_handles(), stage.handle, phase.handle,
+        _semantic.builder.create_pipe_writer_acquire(self.pipe.identity, self.pipe._field_handles(),
+                                                     stage.handle, phase.handle,
                                                      self.pipe.capacity, self.pipe.scope, self.pipe._ir_name(),
                                                      self.pipe._field_names())
         return self.pipe._make_slot(stage, _semantic=_semantic)
@@ -1097,7 +1217,8 @@ class pipe_writer(_pipe_endpoint):
     @tl.builtin
     def commit(self, iter, _semantic: TLESemantic | None = None):
         stage, _ = self.pipe._stage_phase(iter, _semantic=_semantic)
-        _semantic.builder.create_pipe_writer_commit(self.pipe._field_handles(), stage.handle, self.pipe.capacity,
+        _semantic.builder.create_pipe_writer_commit(self.pipe.identity, self.pipe._field_handles(), stage.handle,
+                                                    self.pipe.capacity,
                                                     self.pipe.scope, self.pipe._ir_name(), self.pipe._field_names())
 
     @tl.builtin
@@ -1105,7 +1226,8 @@ class pipe_writer(_pipe_endpoint):
         if self.pipe.one_shot:
             raise ValueError("tle.pipe one_shot pipes do not support close")
         stage, phase = self.pipe._stage_phase(iter, _semantic=_semantic)
-        _semantic.builder.create_pipe_writer_close(self.pipe._field_handles(), stage.handle, phase.handle,
+        _semantic.builder.create_pipe_writer_close(self.pipe.identity, self.pipe._field_handles(), stage.handle,
+                                                   phase.handle,
                                                    self.pipe.capacity, self.pipe.scope, self.pipe._ir_name(),
                                                    self.pipe._field_names())
 
@@ -1122,7 +1244,8 @@ class pipe_reader(_pipe_endpoint):
     @tl.builtin
     def wait(self, iter, _semantic: TLESemantic | None = None):
         stage, phase = self.pipe._stage_phase(iter, _semantic=_semantic)
-        is_closed = _semantic.builder.create_pipe_reader_wait(self.pipe._field_handles(), stage.handle, phase.handle,
+        is_closed = _semantic.builder.create_pipe_reader_wait(self.pipe.identity, self.pipe._field_handles(),
+                                                              stage.handle, phase.handle,
                                                               self.pipe.capacity, self.pipe.scope, self.pipe._ir_name(),
                                                               self.pipe._field_names(), self.reader_name or "",
                                                               self._reader_field_names())
@@ -1132,7 +1255,7 @@ class pipe_reader(_pipe_endpoint):
     @tl.builtin
     def release(self, iter, _semantic: TLESemantic | None = None):
         stage, _ = self.pipe._stage_phase(iter, _semantic=_semantic)
-        _semantic.builder.create_pipe_reader_release(self.pipe._field_handles(), stage.handle,
+        _semantic.builder.create_pipe_reader_release(self.pipe.identity, self.pipe._field_handles(), stage.handle,
                                                      self.pipe.capacity, self.pipe.scope, self.pipe._ir_name(),
                                                      self.pipe._field_names(), self.reader_name or "",
                                                      self._reader_field_names())

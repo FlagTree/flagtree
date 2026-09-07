@@ -102,6 +102,109 @@ static void createAllBarrier(TritonLLVMIRRewriter &b, unsigned barIdx) {
                                   void_ty(b.getContext()), b.i32_val(barIdx));
 }
 
+#ifdef __TLE__
+struct WarpGroupBarrierScope {
+  unsigned barrierIdx;
+  unsigned numThreads;
+};
+
+struct ScopedHelperWorkItem {
+  LLVM::LLVMFuncOp func;
+  WarpGroupBarrierScope scope;
+};
+
+static std::string getScopedHelperName(LLVM::LLVMFuncOp callee,
+                                       WarpGroupBarrierScope scope) {
+  return (callee.getSymName() + "__tle_ws_barrier_" +
+          Twine(scope.barrierIdx) + "_" + Twine(scope.numThreads))
+      .str();
+}
+
+static llvm::DenseSet<Operation *>
+collectBarrierDependentFunctions(ModuleOp module) {
+  DenseMap<Operation *, SmallVector<Operation *>> callers;
+  llvm::DenseSet<Operation *> dependent;
+  SmallVector<Operation *> worklist;
+  for (auto function : module.getOps<LLVM::LLVMFuncOp>()) {
+    function.walk([&](NVVM::Barrier0Op) {
+      if (dependent.insert(function).second)
+        worklist.push_back(function);
+    });
+    function.walk([&](LLVM::CallOp call) {
+      if (auto name = call.getCallee())
+        if (auto callee = module.lookupSymbol<LLVM::LLVMFuncOp>(*name))
+          callers[callee].push_back(function);
+    });
+  }
+  // Reverse reachability also handles cycles without recursively revisiting
+  // a call DAG for every root. Barrier-free callees remain shared unchanged.
+  for (unsigned i = 0; i < worklist.size(); ++i)
+    for (Operation *caller : callers[worklist[i]])
+      if (dependent.insert(caller).second)
+        worklist.push_back(caller);
+  return dependent;
+}
+
+// A noinline Triton helper is lowered to a sibling LLVM function.  Barriers
+// created by reductions in that helper are therefore outside the syntactic
+// ttg.warp_specialize region, even though only one warp group calls them. Clone
+// the helper call graph per execution scope so each barrier can use the
+// caller's hardware barrier ID and participant count.  Cloning also handles a
+// helper reused by the default and worker groups without conflating scopes.
+static void scopeWarpGroupHelperBarriers(
+    ModuleOp module,
+    ArrayRef<std::pair<LLVM::CallOp, WarpGroupBarrierScope>> rootCalls,
+    const llvm::DenseSet<Operation *> &barrierDependent) {
+  SmallVector<ScopedHelperWorkItem> worklist;
+  llvm::DenseSet<Operation *> visited;
+
+  auto retargetCall = [&](LLVM::CallOp call, WarpGroupBarrierScope scope) {
+    std::optional<StringRef> calleeName = call.getCallee();
+    if (!calleeName)
+      return;
+    auto callee = module.lookupSymbol<LLVM::LLVMFuncOp>(*calleeName);
+    if (!callee || callee.isExternal() || !barrierDependent.contains(callee))
+      return;
+
+    std::string scopedName = getScopedHelperName(callee, scope);
+    auto scoped = module.lookupSymbol<LLVM::LLVMFuncOp>(scopedName);
+    if (!scoped) {
+      scoped = callee.clone();
+      scoped.setSymName(scopedName);
+      OpBuilder builder(callee);
+      builder.setInsertionPointAfter(callee);
+      builder.insert(scoped);
+    }
+    call.setCalleeAttr(FlatSymbolRefAttr::get(module.getContext(), scopedName));
+    if (visited.insert(scoped).second)
+      worklist.push_back({scoped, scope});
+  };
+
+  for (auto [call, scope] : rootCalls)
+    retargetCall(call, scope);
+
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    LLVM::LLVMFuncOp scoped = worklist[i].func;
+    WarpGroupBarrierScope scope = worklist[i].scope;
+
+    SmallVector<LLVM::CallOp> nestedCalls;
+    scoped.walk([&](LLVM::CallOp call) { nestedCalls.push_back(call); });
+    for (LLVM::CallOp call : nestedCalls)
+      retargetCall(call, scope);
+
+    SmallVector<NVVM::Barrier0Op> barriers;
+    scoped.walk([&](NVVM::Barrier0Op barrier) {
+      barriers.push_back(barrier);
+    });
+    for (NVVM::Barrier0Op barrier : barriers) {
+      TritonLLVMIRRewriter b(barrier.getLoc(), barrier);
+      createBarrier(b, scope.barrierIdx, scope.numThreads);
+      barrier.erase();
+    }
+  }
+}
+#endif
+
 //===----------------------------------------------------------------------===//
 // elideTrivialCaptures
 //===----------------------------------------------------------------------===//
@@ -286,12 +389,23 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
                                               ArrayRef<WarpSpecializeOp> wsOps,
                                               unsigned threadsPerWarp,
                                               unsigned defaultWarpGroupSize) {
+#ifdef __TLE__
+  ModuleOp module = cast<ModuleOp>(func->getParentOp());
+  // Snapshot dependencies before rewriting direct barriers in this function.
+  auto barrierDependent = collectBarrierDependentFunctions(module);
+  SmallVector<std::pair<LLVM::CallOp, WarpGroupBarrierScope>> helperCalls;
+#endif
   // HACK: Turn all `nvvm.barrier0` ops into warp group barriers.
   func.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
     // Walk into default regions but not partition regions.
     if (isa<WarpSpecializePartitionsOp>(op))
       return WalkResult::skip();
 
+#ifdef __TLE__
+    if (auto call = dyn_cast<LLVM::CallOp>(op))
+      helperCalls.push_back(
+          {call, {kDefaultWarpGroupBarrierIdx, defaultWarpGroupSize}});
+#endif
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
       TritonLLVMIRRewriter b(bar.getLoc(), bar);
       createBarrier(b, kDefaultWarpGroupBarrierIdx, defaultWarpGroupSize);
@@ -312,6 +426,11 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
                << " warp group partitions";
       }
       unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
+#ifdef __TLE__
+      partition->walk([&](LLVM::CallOp call) {
+        helperCalls.push_back({call, {barIdx, warpGroupSize}});
+      });
+#endif
       partition->walk([&](NVVM::Barrier0Op bar) {
         TritonLLVMIRRewriter b(bar.getLoc(), bar);
         createBarrier(b, barIdx, warpGroupSize);
@@ -320,6 +439,9 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
     }
   }
 
+#ifdef __TLE__
+  scopeWarpGroupHelperBarriers(module, helperCalls, barrierDependent);
+#endif
   return success();
 }
 

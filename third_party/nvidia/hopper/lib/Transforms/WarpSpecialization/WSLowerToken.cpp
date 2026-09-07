@@ -5,6 +5,10 @@
 
 #include <optional>
 #include <set>
+#ifdef __TLE__
+#include <functional>
+#include <map>
+#endif
 
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -616,6 +620,10 @@ static void coalesceMBarrierInitBarriers(Operation *parentOp) {
 }
 
 #ifdef __TLE__
+#include "tle/dialect/include/Transforms/LowerTokenCalls.h"
+#endif
+
+#ifdef __TLE__
 LogicalResult lowerTokenOperations(Operation *parentOp, int numCTAs,
                                    int numConsumerGroups)
 #else
@@ -623,6 +631,9 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
                           int numConsumerGroups)
 #endif
 {
+#ifdef __TLE__
+  return lowerTokenOperationsThroughCalls(parentOp, numCTAs);
+#else
   SmallVector<Operation *> deprecatedOps;
   SmallVector<Operation *> deprecatedTokenOps;
   DenseSet<Operation *> warpSpecOps;
@@ -936,6 +947,7 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
   });
 #ifdef __TLE__
   return success();
+#endif
 #endif
 }
 

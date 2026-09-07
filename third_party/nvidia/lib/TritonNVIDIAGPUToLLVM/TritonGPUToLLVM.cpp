@@ -112,7 +112,7 @@ public:
           }
           return hasLegalRegions && typeConverter.isLegal(op);
         });
-    addLegalOp<tle::RemotePointersOp>();
+    addLegalOp<tle::LocalPointersOp, tle::RemotePointersOp>();
     // Allow non-TLE ops to remain during this partial conversion.
     markUnknownOpDynamicallyLegal([](Operation *) -> bool { return true; });
   }
@@ -177,8 +177,6 @@ struct ConvertTritonGPUToLLVM
                                                       benefit);
       mlir::triton::tle::populateDistributedBarrierOpToLLVMPatterns(
           typeConverter, patterns, benefit);
-      mlir::triton::tle::populateLocalPointersOpToLLVMPatterns(
-          typeConverter, targetInfo, patterns, benefit);
       mlir::triton::tle::populateExtractTileOpToLLVMPatterns(
           typeConverter, patterns, targetInfo, benefit);
       mlir::triton::tle::populateInsertTileOpToLLVMPatterns(
@@ -224,6 +222,11 @@ struct ConvertTritonGPUToLLVM
                                       computeCapability, patterns,
                                       axisInfoAnalysis, benefit);
 #ifdef __TLE__
+    // Keep local pointer SSA values alive until load/store patterns consume
+    // their AxisInfo. A preceding partial conversion replaces them by casts
+    // absent from the analysis and loses the proven vector alignment.
+    mlir::triton::tle::populateLocalPointersOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, benefit);
     mlir::triton::tle::populateRemotePointersOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit + 1);
 #endif

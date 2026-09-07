@@ -164,8 +164,11 @@ public:
                                 "positive expect_bytes");
         rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(
             loc, userBarrier, static_cast<int32_t>(expectBytes.getInt()), pred);
-        rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-            op.getLoc(), op.getSrc(), indices, userBarrier, dstMemDesc, pred);
+        auto tmaLoad =
+            rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
+                op.getLoc(), op.getSrc(), indices, userBarrier, dstMemDesc,
+                pred);
+        tmaLoad.setEvict(op.getEvict());
       } else {
         if (op->hasAttr(op.getExpectBytesAttrName()))
           return op.emitOpError("expect_bytes requires an explicit completion "
@@ -200,8 +203,11 @@ public:
                                                              sizeInBytes, pred);
 
         // Perform async TMA copy from global to existing shared memory
-        rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-            op.getLoc(), op.getSrc(), indices, mbarrierAlloc, dstMemDesc, pred);
+        auto tmaLoad =
+            rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
+                op.getLoc(), op.getSrc(), indices, mbarrierAlloc, dstMemDesc,
+                pred);
+        tmaLoad.setEvict(op.getEvict());
 
         // Wait for completion and invalidate barrier
         Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
@@ -212,6 +218,9 @@ public:
 #endif
 
     } else {
+      if (op.getEvict() != triton::EvictionPolicy::NORMAL)
+        return op.emitOpError(
+            "eviction policies are supported only for global-to-shared TMA copies");
 #if !defined(__HCU__)
       if (op.getBarrier())
         return op.emitOpError(
