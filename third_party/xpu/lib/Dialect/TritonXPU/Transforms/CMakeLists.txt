@@ -6,13 +6,16 @@ add_triton_library(TritonXPUTransforms
   DtypeConvert.cpp
   Legalize.cpp
   TLELegalize.cpp
+  TLECoreTiling.cpp
   LoopGrid.cpp
   LoopInvariantStaging.cpp
   LowerPrint.cpp
   Mask.cpp
+  MaterializeDeferredRaw.cpp
   OffsetAnalysis.cpp
   ScalarAnalysis.cpp
   TileAnalysisPass.cpp
+  TileDecidePass.cpp
   VectorizabilityAnalysisPass.cpp
   Normalize.cpp
   Vectorize.cpp

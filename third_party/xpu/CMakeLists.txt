@@ -131,6 +131,15 @@ endif()
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL
   target_compile_definitions triton PRIVATE TRITON_CONCEAL_IR=1)
 
+# The XPU overlay's python/src/gluon_ir.cc includes
+# triton/Dialect/TritonXPU/IR/Dialect.h for the `triton_xpu.raw` builders
+# (tle.raw on the cluster path), which pulls in the TableGen'd Ops.h.inc /
+# TritonXPUAttrDefs.h.inc. `triton` only links TritonXPUIR, so without an
+# explicit dependency the generation can race with compiling that source.
+# Deferred for the same reason as above: the target does not exist yet here.
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL
+  add_dependencies triton TritonXPUTableGen TritonXPUAttrDefsIncGen)
+
 add_subdirectory(lib)
 
 # ==================== FLAGTREE XPU SYNC MARK ====================
@@ -182,4 +191,14 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_xpu_sdnn_object(TritonXPUSDNN
       ${CMAKE_CURRENT_SOURCE_DIR}/triton_xpu_sdnn.cc.o
     )
+endif()
+
+# Bind libtriton's own ~1800 weak (template/inline) LLVM symbols to its own
+# definitions so that a foreign libLLVM loaded into the global scope first
+# (e.g. torch_xmlir's libLLVM-15.so) cannot interpose them; llvm::Module::
+# getDataLayout() then reads a wrong offset and link_extern_libs dies with
+# std::bad_alloc (internal XPUTC-7923). XPU-only, mirroring the internal fix
+# without touching the shared top-level CMakeLists.
+if(TRITON_BUILD_PYTHON_MODULE AND UNIX AND NOT APPLE AND TARGET triton)
+  target_link_options(triton PRIVATE "-Wl,-Bsymbolic-functions")
 endif()

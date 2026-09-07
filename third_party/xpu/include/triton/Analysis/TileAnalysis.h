@@ -53,6 +53,33 @@ struct RegPressure {
   // has to keep alive.
   int64_t vecTotal = 0;
   int64_t scalarTotal = 0;
+  // The part of the peak that a tile loop cannot shrink: values defined outside
+  // the segment are live on entry and stay live across every iteration, so they
+  // sit in the file whatever the trip count is. `vrfBudgetTarget` divides the
+  // whole peak, which charges these registers as if they scaled -- step 3.7 is
+  // about subtracting them first instead. Measured before it is used, because
+  // `vrfBudget=24` was calibrated against the dividing formula and has absorbed
+  // whatever bias this introduces.
+  int64_t vecInvariant = 0;
+  int64_t scalarInvariant = 0;
+  // The same two peaks with each value's last use taken from its liveness range
+  // instead of from the last direct use inside the op set (step 3.7b). A value
+  // defined outside a loop body and read inside it looks dead from that read
+  // on, while the implicit backedge keeps it live for every remaining
+  // iteration, so the peaks above understate exactly the registers the tile
+  // loop cannot shrink. These are what the decision runs on since 2026-08-14 --
+  // the flip was measured neutral on all 10 sites of the golden suite first, so
+  // `vrfBudget=24` did not have to be re-calibrated off the understated peak it
+  // was fitted on. Both stay measured, and `TRITONXPU_LIVE_RANGE=0` restores
+  // the direct-use peak, which is what `[LiveRange]` compares against.
+  int64_t vecPeakLive = 0;
+  int64_t scalarPeakLive = 0;
+  // The direct-use replay, kept even when it is not the one in charge:
+  // `vecPeak` holds whichever of the two the switch selected, so without this
+  // the number the model used to run on would be gone by the time `[LiveRange]`
+  // prints and the report could no longer say what the correction changed.
+  int64_t vecPeakUse = 0;
+  int64_t scalarPeakUse = 0;
   // Widest per-core last dim among *vector* values only. Widths of the two
   // files are in different units (registers vs elements) and must never be
   // maxed together, or a width conversion against this divides the target down
@@ -154,6 +181,44 @@ void tilePlanRecord(ModuleOp mod, Operation *root, StringRef site,
 // Resolve every entry against the IR as it now stands, report per-entry how
 // many live ops each key found, and erase everything the probe wrote.
 void tilePlanCheck(ModuleOp mod);
+
+//===----------------------------------------------------------------------===//
+// The tile decision carrier -- same two keys, separate array.
+//
+// `tritonxpu-tile-decide` produces ahead of CoreTiling, the step-1.6 probe
+// above produces immediately before Vectorize, and both are read at
+// `tritonxpu-tile-analysis`. They cannot share one array: the id is the entry's
+// index, so a store seen by both producers would be stamped twice and the first
+// stamp lost, which would show up as the *probe's* id key failing to survive.
+// Separate names keep the two measurements independent.
+//
+// The payload here is not a placeholder -- it is the decision M2 reached (the
+// terminal state of the root's value, and the boundary count that feeds tier
+// 3). Tiers 1 and 2 cannot be evaluated at this position (no sizePerCore, hence
+// no peak pressure), so they are recorded as deferred rather than guessed.
+//
+// Off unless TRITONXPU_TILE_DECIDE=1, and `tileDecisionCheck` erases both keys
+// unconditionally for the same C1 reason as above.
+//===----------------------------------------------------------------------===//
+
+constexpr llvm::StringLiteral kTileDecisionAttrName =
+    "triton_xpu.tile_decision";
+constexpr llvm::StringLiteral kTileDecisionIdAttrName =
+    "triton_xpu.tile_decision_id";
+
+bool tileDecideEnabled();
+
+// One entry per root. `state` is the terminal state of the root's value in the
+// Vector-Flow partition; `matIn` / `matOut` are the pack / unpack sites the
+// decision would create, counted separately because they are priced separately.
+void tileDecisionRecord(ModuleOp mod, Operation *root, StringRef site,
+                        StringRef state, int64_t closure, int64_t term,
+                        int64_t matIn, int64_t matOut);
+
+// Same resolution and the same two hit rates as `tilePlanCheck`, over the
+// decision array, plus the payload so the verdict can be diffed against what
+// UnrollControl decides afterwards.
+void tileDecisionCheck(ModuleOp mod);
 
 } // namespace xpu
 } // namespace triton

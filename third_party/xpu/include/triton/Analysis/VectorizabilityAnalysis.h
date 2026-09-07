@@ -109,33 +109,74 @@ using OperationTree = llvm::SetVector<mlir::Operation *>;
 // Does this op kind have a vector form, per the table above? Op kind only.
 bool hasVectorForm(Operation *op);
 
+// The ops `processOpVecTy` retypes in place (or deliberately leaves alone)
+// rather than replacing through the table above. Split out because the two
+// halves answer different questions: the table is "is there a Vv* op to build",
+// this list is "does the rewrite know what to do with this kind at all".
+#define TTX_VECTORIZE_RETYPE_OPS                                               \
+  triton::xpu::GM2LMOp, triton::xpu::GM2LMMaskOp, triton::xpu::LoadOp,         \
+      triton::xpu::LM2GMOp, triton::xpu::LM2GMMaskOp, triton::xpu::StoreOp,    \
+      triton::xpu::ConvertLayoutOp, triton::xpu::BroadcastOp,                  \
+      triton::xpu::CmpFOp, triton::SplatOp, triton::ExpandDimsOp,              \
+      arith::ConstantOp, arith::SelectOp, arith::CmpFOp, scf::ForOp,           \
+      scf::IfOp, scf::YieldOp
+
+// How much of `processOpVecTy`'s dispatch applies to this op (step 3.2).
+//
+// The distinction that matters for M4 is not "supported / unsupported" but
+// where the rewrite stops being total:
+//
+//   Full        -- a Case exists and its body handles every instance.
+//   Conditional -- a Case exists whose body handles only some instances, and
+//                  is silent or asserts on the rest. Three of them today:
+//                  ExternElementwiseOp only knows 7 symbols and *silently
+//                  leaves the op scalar* otherwise (its users still get
+//                  retyped, so this is a latent type mismatch, not a crash),
+//                  TruncIOp `cast<>`s its producer to ExternElementwiseOp
+//                  without checking, and SelectOp builds a VSelectOp that only
+//                  lowers for f16/f32/i32 element types. SelectOp is the one
+//                  kind classified per instance rather than per kind, because
+//                  its partiality is exactly the element type and f16/f32
+//                  selects are the common, working case.
+//   None        -- falls to `.Default`, which is `llvm_unreachable`.
+//
+// Under the all-or-nothing closure walk `None` is unreachable by construction:
+// the walk only ever admits kinds the rewrite handles. Per-op decision removes
+// that coupling, which is why §3.2 calls the `.Default` a timed bomb -- this
+// predicate is how the blast radius gets measured before the coupling goes.
+enum class VecTyCoverage { None, Full, Conditional };
+VecTyCoverage processOpVecTyCoverage(Operation *op);
+const char *toString(VecTyCoverage coverage);
+
 // Is the region-interpreting reduce lowering in use?
 //
-// **Default off.** It was flipped on 2026-08-05 and flipped back on 2026-08-06:
-// with it on, a *vectorized* welford reduce silently drops the lane-0
-// contribution of most cores, and which cores are affected changes from run to
-// run. Minimal repro (FlagGems `var_mean_kernel_2`, one f32 vector per core):
-// feed every partial `acc=1, average=0, count=1` so the exact fold must yield
-// `nvar == BLOCK_NUM`; at BLOCK_NUM=1024 it yields 970 / 977 on successive
-// runs, and sweeping the payload lane by lane shows the losses land exactly on
-// the multiples of 16, i.e. the seed element `collapseVectorsJointly` extracts
-// first. BLOCK_NUM <= 128 puts fewer than 16 elements on a core, skips the
-// within-core fold, and stays exact. Observable as
+// **Default on since 2026-08-10.** History: on 2026-08-05, off again on
+// 2026-08-06, on again now. What took it back off was a *vectorized* welford
+// reduce silently dropping the lane-0 contribution of most cores,
+// nondeterministically, observable as
 // `test_accuracy_varmean[dtype1-*-*-{dim2,dim3}-shape1]` in
-// third_party/xpu/test/FlagGems/tests/test_reduction_ops.py: those eight are
-// the only regressions in that 3187-case suite, and TRITONXPU_REDUCE_REGION=0
-// fixes all eight while TRITONXPU_BUDGET_TILING=0 fixes none.
+// third_party/xpu/test/FlagGems/tests/test_reduction_ops.py -- the only eight
+// regressions in that 3187-case suite.
 //
-// The default is off rather than the admission gate in
-// ReduceOpToLLVM::canInterpretCombine being narrowed, because the run-to-run
-// variation means the real boundary is not known yet; a gate drawn around the
-// one shape we happened to measure would be a made-up bound.
+// That was **not** a defect in this lowering. It was a write-after-read hazard
+// on an LM buffer that MemoryInplace had folded across the three loads a
+// welford keeps live at once: the next load's other-fill rewrote word 0 while
+// the `vload_mask16` was still in flight. Multi-operand combines were only the
+// first shape that made the reuse observable. Fixed on the load side (see the
+// fence in XPULoadOpConversion, LoadStoreOpToLLVM.cpp) and re-gated, all on
+// xpu3 hardware (findings.md 1.74): those eight are 8 passed in the default
+// configuration, and the full 3187-case suite is 354 failed / 2623 passed / 210
+// skipped against a 482 / 2495 / 210 baseline -- **0 regressions, 129 fixed**
+// (the one apparent regression, `masked_scatter_[dtype1-0.3-shape0]`,
+// reproduces 3-in-6 with the region path *off*: its input is random and
+// unseeded). The 129 are `std`, `var`, `trace`, `varmean` and
+// `bincount_weighted` shapes that only the region path can compile, i.e. the
+// XPUTC-7851 masking effect, now cashed in rather than hidden.
 //
-// `TRITONXPU_REDUCE_REGION=1` opts back in. The measured upside is real and
-// waiting on that defect, all on xpu3 hardware: welford 801.4us vs 1319us all
-// scalar = 1.65x (findings.md 1.17), pairmax 910.6us vs 1058.8us = 1.16x
-// (1.22), and of the eleven golden probes only those two plus `bitred` change
-// code at all
+// The measured upside, also on xpu3: welford 801.1us vs 1315us all scalar =
+// 1.64x (findings.md 1.17, re-measured 1.74), pairmax 910.6us vs 1058.8us
+// = 1.16x (1.22), and of the eleven golden probes only those two plus `bitred`
+// change code at all
 // -- the other eight are byte-identical either way, and `bitred` only differs
 // in emission order (same instruction multiset). Combine-op coverage is closed
 // in 1.24: twelve of the thirteen ops `isSupportedCombineOp` admits have a
@@ -147,8 +188,8 @@ bool hasVectorForm(Operation *op);
 inline bool reduceCombineRegionEnabled() {
   static const bool enabled =
       mlir::triton::tools::isEnvValueBool(
-          mlir::triton::tools::getStrEnv("TRITONXPU_REDUCE_REGION"))
-          .value_or(false);
+          mlir::triton::tools::getStrEnvXPU("TRITONXPU_REDUCE_REGION"))
+          .value_or(true);
   return enabled;
 }
 
@@ -334,7 +375,7 @@ struct VectorFlowStats {
   int64_t unions = 0;          // equality edges that actually merged
   int64_t vectorPins = 0;
   int64_t scalarPins = 0;
-  int64_t externPins = 0;  // extern_elementwise, pinned Scalar for now
+  int64_t externPins = 0;  // extern_elementwise, pinned per symbol whitelist
   int64_t unknownPins = 0; // op kind not modelled, pinned Scalar
   // Step 2.2: the reduce entry as a boundary rather than a veto.
   int64_t reduceOps = 0; // reduces with at least one data operand
@@ -379,6 +420,42 @@ private:
   llvm::SmallVector<VState> pins; // per class root, valid after `find`
   VectorFlowStats stats;
 };
+
+// The domain a per-op decision is taken over, for one root. Single-sourced
+// because two places need exactly the same set: the step-3.2 measurement
+// (`[VecSet]`) and the decision itself in Vectorize.
+//
+//   cone -- the root's producer cone, with the closure folded in. The closure
+//   is
+//     *not* a subset of the cone: from a reduce-operand root the walk drags in
+//     the consumer side too, and leaving those out would hide the ops a
+//     decision change would drop. Walked with no vectorizability test, because
+//     the walk stops at its first veto.
+//   term -- the subset whose result the partition put in a Vector class. A
+//     zero-result op has no class of its own and follows its data operand,
+//     which is how the rewrite treats store / lm2gm.
+//   offCone -- the closure members the cone walk never reached, kept as a set
+//     (not just a count) so the report can say *which* kinds arrive that way
+//     without rebuilding the pre-fold cone.
+struct VecSetDomain {
+  OperationTree cone;
+  OperationTree term;
+  OperationTree offCone;
+};
+VecSetDomain buildVecSetDomain(Value keyValue, const VectorFlowAnalysis &vflow,
+                               const OperationTree &closure);
+
+// The kinds whose `processOpVecTy` Case is `(void)op;` (Vectorize.cpp:240-251).
+// The rewrite does nothing to them, so gaining or losing one cannot change the
+// output -- which is what makes "the two sets decide the same thing" checkable
+// on the ops that actually get rewritten.
+// ⚠️Mirror of that dispatch. If one of these starts doing work, this goes stale
+// in the unsafe direction.
+bool rewriteNoopKind(Operation *op);
+
+// Whether two candidate sets rewrite the same ops, i.e. differ only in members
+// `rewriteNoopKind` covers.
+bool sameActingSet(const OperationTree &lhs, const OperationTree &rhs);
 
 // Off unless TRITONXPU_VFLOW_REPORT=1.
 bool vflowReportEnabled();

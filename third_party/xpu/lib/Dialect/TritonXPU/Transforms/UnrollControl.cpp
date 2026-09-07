@@ -61,28 +61,34 @@ public:
   // Backs `pinReason` when the knob renames it; a plain literal otherwise.
   std::string pinReasonStorage;
 
-  // Step 3.5b: make the two pinned constants reachable from a knob, so they can
-  // be shown to be wrong. `pinUnrollNum` < 0 keeps the constant (the default,
-  // so artifacts stay byte-identical), 0 drops the pin and lets the pressure
-  // model decide, > 0 overrides it so its time curve can be swept.
+  // Step 3.5: the two pins are gone by default. What each one was standing in
+  // for is now a legality predicate the model consults itself -- the multi-row
+  // segment shape in `isMultiRowLegal` and the fused i8 store's trip count in
+  // `isFusedI8StoreLegal` -- so a pinned constant can only either agree with
+  // the model or be worse than it. On device it is worse at both sites by ~19%
+  // with bit-identical results (`findings.md` §1.47), and the corruption that
+  // used to appear when `bool-store-vectorize` was dropped was a width
+  // conversion in `LoadStoreOpToLLVM.cpp`, unrelated to tiling (§1.46).
+  //
+  // The constants stay reachable as an escape hatch rather than being deleted:
+  // `pinUnrollNum` == 0 (the default) ignores them, < 0 restores them, and > 0
+  // overrides one so its time curve can be swept -- the sweeps in `findings.md`
+  // §1.31/§1.44/§1.47 are all reproduced through this knob.
   //
   // Both numbers move together on purpose: the pin's factor equals the legacy
   // one only while `unrollNum == pinnedUnrollNum` (`findings.md` §1.30 proves
   // the identity via `getNumUnroll`), so splitting them would make a sweep
   // measure two things at once.
   //
-  // Dropping a pin is not silent: the site then goes through the model, which
-  // remarks its own decision. `emitRemark` alone is not enough here -- nothing
-  // in this pipeline installs a handler for it, so those remarks never reach
-  // the log -- hence the `[PinKnob]` line, printed whenever the knob is doing
-  // something (`pinUnrollNum >= 0`). A default run prints nothing.
+  // A default run prints nothing -- the site goes through the model, which
+  // remarks its own decision. Restoring or overriding a pin does print, because
+  // `emitRemark` alone never reaches the log here (nothing in this pipeline
+  // installs a handler for it).
   void applyPin(ModuleOp m, int64_t constant, const char *reason) {
     if (this->pinUnrollNum == 0) {
       m->emitRemark("[UnrollControl] pin " + std::string(reason) +
-                    " suppressed by pin-unroll-num=0 (constant was " +
+                    " is not applied (constant was " +
                     std::to_string(constant) + "); the model decides instead");
-      llvm::errs() << "[PinKnob] pin=" << reason << " constant=" << constant
-                   << " action=dropped(model-decides)\n";
       return;
     }
     int64_t value = this->pinUnrollNum > 0 ? this->pinUnrollNum : constant;
@@ -92,9 +98,10 @@ public:
     if (value != constant)
       pinReasonStorage += ":pin-override=" + std::to_string(value);
     pinReason = pinReasonStorage.c_str();
-    if (this->pinUnrollNum > 0)
-      llvm::errs() << "[PinKnob] pin=" << reason << " constant=" << constant
-                   << " action=override unrollNum=" << value << "\n";
+    llvm::errs() << "[PinKnob] pin=" << reason << " constant=" << constant
+                 << (this->pinUnrollNum > 0 ? " action=override unrollNum="
+                                            : " action=restored unrollNum=")
+                 << value << "\n";
   }
 
   template <typename T> static decltype(auto) createCombineVectorizedOp(T op) {
@@ -500,11 +507,85 @@ public:
   // is vecSize times wider. Slicing by a factor the vector row cannot express
   // saturates it at one slot while the scalar row keeps dividing, and the two
   // then cover a different number of lanes per iteration.
+  // `rowsPerCore` carries the multi-row constraint (`isMultiRowLegal`) and
+  // `fusedI8Store` the compare-fusion store constraint (`isFusedI8StoreLegal`).
+  // Both default to the inert value, so callers without the segment's value
+  // type or op tree at hand keep the old behaviour.
   bool isLegalIterNum(int64_t iterNum, int64_t numCol, int64_t widthPerCore,
-                      int64_t minVecWidth = 0) {
+                      int64_t minVecWidth = 0, int64_t rowsPerCore = 1,
+                      bool fusedI8Store = false) {
     return iterNum >= 1 && numCol % iterNum == 0 &&
            widthPerCore % iterNum == 0 &&
-           (minVecWidth == 0 || minVecWidth % iterNum == 0);
+           (minVecWidth == 0 || minVecWidth % iterNum == 0) &&
+           isMultiRowLegal(iterNum, rowsPerCore, widthPerCore) &&
+           isFusedI8StoreLegal(iterNum, widthPerCore, fusedI8Store);
+  }
+
+  // Rows per core of the segment's own value type -- the exact quantity the
+  // `core-deal-multi-rows` pin tests before it fires (`:2435`, off the reduce's
+  // input type).
+  int64_t getRowsPerCore(Type valTy) {
+    if (auto tensorTy = dyn_cast<RankedTensorType>(valTy))
+      if (tensorTy.getShape().size() == 2)
+        if (auto clusterEncoding = getClusterLayout(tensorTy))
+          return clusterEncoding.getSizePerCore()[0];
+    return 1;
+  }
+
+  // `ExtractSliceOp`'s lowering asserts `sizePerCore[1] == 1` whenever
+  // `sizePerCore[0] > 1` (`XPUUtilityOpToLLVM.cpp:81`), and `createEncoding`
+  // only ever divides the *last* dim, so a segment holding more than one row
+  // per core is expressible at exactly two trip counts: 1, where no slice is
+  // created at all, and `widthPerCore`, where the column count collapses to
+  // one. Everything in between asserts -- measured on shortrow, whose
+  // `legal={1,2,4}` has the compilable subset `{1,4}` (`findings.md` 1.31).
+  //
+  // This is what the pin encodes by hand, and 3.5c measured the pin's factor to
+  // be 18.9% *slower* than `iterNum=1` on that probe (1.44), so the site should
+  // be handed to the model -- which first requires the constraint to live here
+  // rather than in the pin: before this predicate existed an out-of-set factor
+  // was not filtered at all, it asserted in `ConvertTritonXPUToLLVM`.
+  bool isMultiRowLegal(int64_t iterNum, int64_t rowsPerCore,
+                       int64_t widthPerCore) {
+    return rowsPerCore <= 1 || iterNum == 1 || iterNum >= widthPerCore;
+  }
+
+  // Does the segment store through a compare fusion? `Normalize` rewrites
+  // [cmpf, extui] into a compare that leaves its result in *mask* registers
+  // typed i32 and records the compared width in the store's `dtype`; the store
+  // is then recognised by exactly this shape -- i32 value, i8 pointee -- both
+  // here and by the `bool-store-vectorize` pin (`:2425`).
+  bool hasFusedI8Store(const SetVector<Operation *> &unrollOpTree) {
+    for (auto *op : unrollOpTree) {
+      auto storeOp = dyn_cast<triton::xpu::StoreOp>(op);
+      if (!storeOp)
+        continue;
+      auto valElemTy = getElementTypeOrSelf(
+          getElementTypeOrSelf(storeOp.getValue().getType()));
+      auto ptrElemTy = getElementTypeOrSelf(
+          getElementTypeOrSelf(storeOp.getPtr().getType()));
+      auto ptrTy = dyn_cast<triton::PointerType>(ptrElemTy);
+      if (valElemTy.isInteger(32) && ptrTy &&
+          ptrTy.getPointeeType().isInteger(8))
+        return true;
+    }
+    return false;
+  }
+
+  // Step 3.5 prerequisite (b). Such a store lowers to
+  // `vstorei8` calls that each consume exactly *four* mask registers
+  // (`LoadStoreOpToLLVM.cpp`, `for (i = 0; i < valueNumElems; i += 4)`), so a
+  // tile leaving a count that is not a multiple of four indexes past the end of
+  // the value list and asserts in `SmallVector.h:293`. Measured on boolfused,
+  // whose `widthPerCore=8` gives the compilable subset `{1,2}` out of
+  // `legal={1,2,4,8}` (`findings.md` 1.31); 1.46 fixed the *silent* half of
+  // that site (the untiled store's byte stride) but not this one, which is a
+  // real expressibility limit of the emission loop.
+  bool isFusedI8StoreLegal(int64_t iterNum, int64_t widthPerCore,
+                           bool fusedI8Store) {
+    if (!fusedI8Store)
+      return true;
+    return iterNum >= 1 && (widthPerCore / iterNum) % 4 == 0;
   }
 
   // Does the segment straddle a vector->scalar boundary? Only there do the two
@@ -514,6 +595,48 @@ public:
   // rather than just the widest thing in the tree.
   bool hasVecScalarBoundary(const SetVector<Operation *> &unrollOpTree) {
     return false;
+  }
+
+  // How many times the segment crosses between vector and scalar form. Packs
+  // and unpacks are counted one by one rather than paired up: the tier-3 price
+  // is per crossing, and once M4 places these there is no guarantee a segment
+  // holds a whole number of pairs.
+  int64_t countBoundaryCrossings(const SetVector<Operation *> &unrollOpTree) {
+    int64_t n = 0;
+    for (auto *op : unrollOpTree)
+      if (isa<triton::xpu::UnpackOp, triton::xpu::PackOp>(op))
+        ++n;
+    return n;
+  }
+
+  // Lanes in one hardware vector at the boundary, taken from the vector side of
+  // the pack/unpack (`tensor<256xvector<16xf32>>` -> 16). The narrowest one
+  // wins when a segment has crossings of more than one element type, because
+  // the narrower vector is the one that costs more memory ops per element.
+  //
+  // Read from the type rather than from RegPressure::maxVecWidth: that field is
+  // the widest vector *row per core in elements*, which happens to equal
+  // `widthPerCore` in every geometry measured, so using it made the `N/W` term
+  // of the boundary price collapse to 1 without any visible error.
+  int64_t boundaryVecLanes(const SetVector<Operation *> &unrollOpTree) {
+    int64_t lanes = 0;
+    auto note = [&](Value val) {
+      auto tensorTy = dyn_cast<RankedTensorType>(val.getType());
+      if (!tensorTy)
+        return;
+      auto vecTy = dyn_cast<VectorType>(tensorTy.getElementType());
+      if (!vecTy)
+        return;
+      int64_t n = vecTy.getNumElements();
+      lanes = lanes ? std::min(lanes, n) : n;
+    };
+    for (auto *op : unrollOpTree) {
+      if (auto pack = dyn_cast<triton::xpu::PackOp>(op))
+        note(pack.getResult());
+      else if (auto unpack = dyn_cast<triton::xpu::UnpackOp>(op))
+        note(unpack.getSrc());
+    }
+    return lanes;
   }
 
   // Is this the LM buffer tritonxpu-alloca attached to a vector<->scalar
@@ -548,7 +671,8 @@ public:
     int64_t widthPerCore = 1, coresPerGroup = 1;
     getTileGeometry(valTy, numCol, widthPerCore, coresPerGroup);
     for (int64_t iterNum = 2; iterNum <= widthPerCore; ++iterNum)
-      if (isLegalIterNum(iterNum, numCol, widthPerCore))
+      if (isLegalIterNum(iterNum, numCol, widthPerCore, /*minVecWidth=*/0,
+                         getRowsPerCore(valTy)))
         return true;
     return false;
   }
@@ -557,7 +681,8 @@ public:
                       int64_t widthPerCore, int64_t peakVRegs, int64_t target,
                       int64_t chosen, int64_t maxLegal, const char *why,
                       int64_t scalarPeak = -1, int64_t minVecWidth = -1,
-                      const triton::xpu::Decision *decision = nullptr) {
+                      const triton::xpu::Decision *decision = nullptr,
+                      int64_t crossings = 0, int64_t vecLanes = 0) {
     std::string msg;
     llvm::raw_string_ostream os(msg);
     os << "[UnrollControl] site=" << site << " numCol=" << numCol
@@ -566,6 +691,12 @@ public:
        << " budget=" << this->vrfBudget << " target=" << target
        << " maxLegal=" << maxLegal << " -> iterNum=" << chosen << " (" << why
        << ")";
+    // The two inputs of the boundary price, printed only where there is a
+    // boundary: the price is `crossings * (widthPerCore +
+    // iterNum*ceil(widthPerCore/(iterNum*lanes)) + iterNum)`, so with these the
+    // reported cost can be recomputed by hand.
+    if (crossings > 0)
+      os << " crossings=" << crossings << " vecLanes=" << vecLanes;
     // Every criterion that took part has to be visible, feasible or not: a
     // criterion nobody can read is a criterion nobody can falsify.
     if (decision) {
@@ -574,10 +705,33 @@ public:
            << "->" << t.candidatesOut;
         if (t.chosenCost)
           os << " cost=" << *t.chosenCost;
+        // A report-only criterion has to say what it would have done, otherwise
+        // "it did not move anything" is unfalsifiable. `n/a` is the case where
+        // it had no opinion at this site at all -- which is what every probe in
+        // the suite shows today for boundary-price, since none materialises a
+        // vector<->scalar crossing.
+        if (t.reportOnly) {
+          os << " report-only pick=";
+          if (t.shadowPick)
+            os << *t.shadowPick
+               << " moved=" << (*t.shadowPick != chosen ? "yes" : "no");
+          else
+            os << "n/a";
+        }
         if (!t.why.empty())
           os << " veto=" << t.why;
         os << "]";
       }
+      // What the soft tier would pick if tier 1 only priced instead of
+      // filtering. §3.2.1 plans exactly that demotion now that the boundary
+      // unit price exists, so this says per site what it would cost today --
+      // before the change, not after.
+      os << " budget-off pick=";
+      if (decision->budgetOffPick)
+        os << *decision->budgetOffPick
+           << " moved=" << (*decision->budgetOffPick != chosen ? "yes" : "no");
+      else
+        os << "n/a";
     }
     insertPt->emitRemark(msg);
     if (dryRun)
@@ -599,23 +753,91 @@ public:
   // between these two numbers. A site where the tree-only replay picks the same
   // factor therefore cannot be moved by 3.4 in the loosening direction either,
   // which is what makes this a usable filter rather than a guess.
+  // The decision the model would make with the block half of the peak dropped,
+  // i.e. the loosest end of the range a real per-segment peak can land in.
+  // Shared by the report below and by the `TRITONXPU_SEG_PEAK` hatch, so the
+  // hatch cannot drift from the point the report predicts will move.
+  static triton::xpu::Decision treeOnlyDecision(
+      const RegPressure &treeP, const triton::xpu::TileContext &ctx,
+      llvm::ArrayRef<int64_t> candidates, triton::xpu::TileContext &altCtx) {
+    altCtx = ctx;
+    altCtx.peakVRegs = treeP.vecPeak;
+    altCtx.maxVecWidth = treeP.maxVecWidth;
+    return triton::xpu::TileDecider().decide(candidates, altCtx);
+  }
+
+  // Names one decision point. `site` alone is not enough: layernorm has two
+  // `reduce` sites and 3.4's four movable points include both of them, so the
+  // key carries the geometry that tells them apart, plus the decision's ordinal
+  // in this pass run. The ordinal is what makes the key usable as a filter:
+  // `blockPeak` is *not* invariant under the hatch -- forcing layernorm's first
+  // reduce site retiles it, which drops the block pressure the second one
+  // measures from 36 to 32, and a filter written without the ordinal then
+  // matches both sites instead of one (measured, findings 1.73).
+  static std::string segPointKey(StringRef kernel, const char *site,
+                                 const triton::xpu::TileContext &ctx,
+                                 const RegPressure &treeP,
+                                 const RegPressure &blockP, int64_t ordinal) {
+    std::string key;
+    llvm::raw_string_ostream os(key);
+    os << kernel << ":" << site << ":" << ctx.numCol << ":" << treeP.vecPeak
+       << ":" << blockP.vecPeak << ":#" << ordinal;
+    return key;
+  }
+
+  // Step 3.4 calibration hatch.
+  //   TRITONXPU_SEG_PEAK=tree           tree-only peak at every site
+  //   TRITONXPU_SEG_PEAK=tree:<substr>  only where <substr> matches a point key
+  // Unset (the default) keeps `max(treeP, blockP)`. This is a calibration hatch
+  // and not a mode: the dominance replay says exactly four sites can move and
+  // all four move 2->1 (findings 1.29), but three of them live in one kernel,
+  // so timing the whole-kernel difference would mix them. The filter is what
+  // makes one point measurable at a time. It changes generated code, so it is
+  // deliberately not cache-neutral -- switch it with TRITON_ALWAYS_COMPILE=1.
+  //
+  // It stays a hatch because the measurement came back negative
+  // (findings 1.73): of the four points, layernorm's three are flat to within
+  // 0.1% -- that shape is bandwidth bound at ~300 GB/s, so dropping the reduce
+  // strip-mine hides behind the loads -- and only mixedwidth's narrow pointwise
+  // wins, by 1.07%. A 1% win on one synthetic probe does not pay for changing
+  // what feeds the one *hard* criterion in the chain. None of the four spills
+  // either way, so the re-test went to a shape whose segment peak does cross
+  // the budget
+  // (`spillseg`): there the two movable points move in *opposite* directions --
+  // -9.1% on the reduce segment, +1.8% on the pointwise one -- so the hatch
+  // stays a hatch for a second reason, that the sign is not predictable from
+  // anything the model holds (findings 1.78, 1.81).
+  int64_t segPointCounter = 0;
+
+  static bool segPeakHatchApplies(StringRef key) {
+    static const char *spec = std::getenv("TRITONXPU_SEG_PEAK");
+    if (!spec)
+      return false;
+    StringRef s(spec);
+    if (!s.consume_front("tree"))
+      return false;
+    if (s.empty())
+      return true;
+    return s.consume_front(":") && key.contains(s);
+  }
+
   void reportSegDominance(const char *site, Operation *insertPt,
                           const RegPressure &treeP, const RegPressure &blockP,
                           const triton::xpu::TileContext &ctx,
                           llvm::ArrayRef<int64_t> candidates,
-                          const triton::xpu::Decision &decision) {
-    if (!std::getenv("TRITONXPU_TILE_REPORT"))
+                          const triton::xpu::Decision &decision,
+                          int64_t ordinal) {
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
       return;
-    triton::xpu::TileContext altCtx = ctx;
-    altCtx.peakVRegs = treeP.vecPeak;
-    altCtx.maxVecWidth = treeP.maxVecWidth;
+    triton::xpu::TileContext altCtx;
     triton::xpu::Decision alt =
-        triton::xpu::TileDecider().decide(candidates, altCtx);
+        treeOnlyDecision(treeP, ctx, candidates, altCtx);
     StringRef kernel = "<unknown>";
     if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
       kernel = funcOp.getName();
     llvm::errs()
         << "[SegDominance] " << kernel << " site=" << site
+        << " key=" << segPointKey(kernel, site, ctx, treeP, blockP, ordinal)
         << " treePeak=" << treeP.vecPeak << " blockPeak=" << blockP.vecPeak
         << " dominant="
         << (treeP.vecPeak > blockP.vecPeak
@@ -628,6 +850,117 @@ public:
         << " iterNum=" << decision.iterNum << " treeOnlyIterNum=" << alt.iterNum
         << " moved=" << (alt.iterNum != decision.iterNum ? "yes" : "no")
         << " why=" << decision.why << " treeOnlyWhy=" << alt.why << "\n";
+  }
+
+  // Step 3.4, the measurement findings 1.78 asked for. The two movable points
+  // of the `spillseg` probe move in *opposite* directions on hardware --
+  // relaxing the reduce segment -9.1%, the pointwise one +1.8% -- while both
+  // add the same 6~7 vector spills, so neither `vspill` nor `treePeak`
+  // separates the win from the loss. The one measured quantity that ordered
+  // with time was the trip-weighted dynamic instruction count (-13.2% against
+  // -3.3%), and its difference between two trip counts is by construction the
+  // part of the body that does *not* shrink when the trip count does:
+  //
+  //     dyn(k) ~= W + k * F   =>   dyn(k1) - dyn(k2) = (k1 - k2) * F
+  //
+  // so `F`, the per-iteration fixed cost, is the candidate discriminator. It is
+  // read off the lowering rather than fitted: a reduce segment whose combine is
+  // interpreted as a region pays one horizontal collapse per tile iteration
+  // (`ReduceOpToLLVM.cpp:981`, one `collapseVectorsJointly` per accumulator
+  // key), which is `(regionOps + numOutputs) * lanes` -- the same term
+  // `Vectorize.cpp:585` already charges this shape. Any other segment kind pays
+  // only the loop overhead the soft tier already prices.
+  //
+  // **Measured on all six movable points, and refuted** (findings 1.81). `F`
+  // separates the two `spillseg` arms (240 against 2) but *inverts* the two
+  // points whose opposite signs are both real: `mixedwidth` #2 wins 1.07 % at
+  // save=1 while `spillseg` #2 loses 1.8 % at save=2, so no threshold on
+  // `dTrips * F` orders them. The collapse term also only matches the point it
+  // was read off (120 against a measured 143); on `layernorm`'s two reduce
+  // points the same formula says 16 and the dynamic count does not move at all.
+  // And the premise itself does not hold: relaxing `mixedwidth` *raises* dyn by
+  // 5 and still gets faster, so dyn is not monotone with time either.
+  //
+  // Kept, printing only what it measures and no verdict, for the reason
+  // `TRITONXPU_SEG_PEAK` was kept after 1.73: the next attempt at this
+  // judgement needs these six rows, and re-deriving them costs more than the
+  // report does. Report-only and behind `TRITONXPU_TILE_REPORT`; nothing here
+  // narrows the candidate set, so no emitted code can move.
+  struct SegRelaxTerms {
+    const char *fixedKind = "loop";
+    int64_t regionOps = 0;
+    int64_t numOutputs = 0;
+    int64_t lanes = 0;
+    int64_t fixedPerIter = 0;
+  };
+
+  static SegRelaxTerms segRelaxTerms(Operation *insertPt,
+                                     const triton::xpu::TileContext &ctx,
+                                     const RegPressure &treeP) {
+    SegRelaxTerms t;
+    auto redOp = dyn_cast<triton::xpu::ReduceOp>(insertPt);
+    if (redOp && triton::xpu::reduceCombineRegionEnabled()) {
+      for (Block &block : redOp.getCombineOp().getBlocks())
+        for (Operation &op : block)
+          if (!isa<triton::xpu::ReduceReturnOp>(op))
+            ++t.regionOps;
+      t.numOutputs = redOp.getNumResults();
+      // The collapse runs over one accumulator vector, so the lane count is
+      // this tree's own vector row -- not `ctx.maxVecWidth`, which is the
+      // block's.
+      t.lanes = std::max<int64_t>(treeP.maxVecWidth, 1);
+      t.fixedKind = "collapse";
+      t.fixedPerIter = (t.regionOps + t.numOutputs) * t.lanes;
+      return t;
+    }
+    // Mirrors `loop-overhead` (TileDecision.cpp:79) rather than restating it in
+    // other terms: one index update plus a carry in and out per iter_arg.
+    t.fixedPerIter = 1 + 2 * std::max<int64_t>(ctx.loopResults, 0);
+    return t;
+  }
+
+  void reportSegRelax(const char *site, Operation *insertPt,
+                      const RegPressure &treeP, const RegPressure &blockP,
+                      const triton::xpu::TileContext &ctx,
+                      llvm::ArrayRef<int64_t> candidates,
+                      const triton::xpu::Decision &decision, int64_t ordinal) {
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
+      return;
+    triton::xpu::TileContext altCtx;
+    triton::xpu::Decision alt =
+        treeOnlyDecision(treeP, ctx, candidates, altCtx);
+    StringRef kernel = "<unknown>";
+    if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
+      kernel = funcOp.getName();
+    SegRelaxTerms t = segRelaxTerms(insertPt, ctx, treeP);
+    int64_t before = std::max<int64_t>(decision.iterNum, 1);
+    int64_t after = std::max<int64_t>(alt.iterNum, 1);
+    // What relaxing buys: the fixed cost of the iterations it removes.
+    int64_t save = (before - after) * t.fixedPerIter;
+    // The risk side, in the model's own currency: relaxing decides against the
+    // tree peak, but the register file still holds the whole block, so the
+    // pressure the relaxed trip count really runs at is the block peak at that
+    // trip count. Reported raw and deliberately *not* priced: 1.81 measured
+    // this delta at 12 both for `mixedwidth` #2, which spills nothing, and for
+    // `spillseg` #2, which goes 8 -> 15 vector spills, so it does not predict
+    // spilling and multiplying it by a constant only hides that.
+    int64_t overBefore = std::max<int64_t>(
+        triton::xpu::pressureAtTrip(ctx, blockP.vecPeak, before) -
+            ctx.vrfBudget,
+        0);
+    int64_t overAfter = std::max<int64_t>(
+        triton::xpu::pressureAtTrip(ctx, blockP.vecPeak, after) - ctx.vrfBudget,
+        0);
+    llvm::errs() << "[SegRelax] " << kernel << " site=" << site << " key="
+                 << segPointKey(kernel, site, ctx, treeP, blockP, ordinal)
+                 << " moved=" << (after != before ? "yes" : "no")
+                 << " trips=" << before << "->" << after
+                 << " fixed{kind=" << t.fixedKind
+                 << ",regionOps=" << t.regionOps << ",outputs=" << t.numOutputs
+                 << ",lanes=" << t.lanes << ",perIter=" << t.fixedPerIter << "}"
+                 << " over{before=" << overBefore << ",after=" << overAfter
+                 << "}"
+                 << " save=" << save << "\n";
   }
 
   // One run of the pressure model, from the two measurements to the decider's
@@ -647,17 +980,20 @@ public:
     bool noVectorValues = false;
   };
 
-  void runModel(Operation *insertPt, const SetVector<Operation *> &unrollOpTree,
+  void runModel(const char *site, Operation *insertPt,
+                const SetVector<Operation *> &unrollOpTree, Type valTy,
                 int64_t numCol, int64_t widthPerCore, int64_t loopResults,
                 ModelRun &run) {
     getRegPressure(getOperation(), unrollOpTree, run.treeP);
     // A tree that holds no vector value (a bool store, say) puts no pressure on
-    // the vector file, so this model has nothing to say about it: what tiling
-    // buys there is code size, which is not modelled.
-    if (run.treeP.vecPeak == 0) {
-      run.noVectorValues = true;
-      return;
-    }
+    // the vector file *of its own*, so the budget criterion has nothing to say
+    // about it: what tiling buys there is code size, which is not modelled.
+    // The rest of the model still runs, because the block around the tree may
+    // hold vector values and because tier 3 has an opinion regardless -- the
+    // caller keeps falling back to the legacy factor, and `[DecisionEntry]`
+    // reports what admitting these sites would cost. Measured on `bool`: the
+    // legacy path is 15.8% off the real-machine optimum (`findings.md` §1.41).
+    run.noVectorValues = run.treeP.vecPeak == 0;
     getBlockRegPressure(getOperation(), insertPt, run.blockP);
     // Everything the criteria may read, and nothing else: the target itself is
     // computed by the tier-1 criterion out of these numbers
@@ -679,6 +1015,8 @@ public:
         hasVecScalarBoundary(unrollOpTree) ? run.treeP.minVecWidth : 0;
     run.ctx.vrfBudget = this->vrfBudget;
     run.ctx.loopResults = loopResults;
+    run.ctx.boundaryCrossings = countBoundaryCrossings(unrollOpTree);
+    run.ctx.vecLanes = boundaryVecLanes(unrollOpTree);
 
     // A per-candidate pressure term for reduce segments that collapse an
     // interpreted combine region (step 3.4b) lived here and was reverted on
@@ -692,13 +1030,278 @@ public:
     // The candidate set is the expressible trip counts; which one to take is
     // the decider's business, tier by tier.
     for (int64_t iterNum = 1; iterNum <= widthPerCore; ++iterNum) {
-      if (!isLegalIterNum(iterNum, numCol, widthPerCore, run.ctx.vecRow))
+      if (!isLegalIterNum(iterNum, numCol, widthPerCore, run.ctx.vecRow,
+                          getRowsPerCore(valTy), hasFusedI8Store(unrollOpTree)))
         continue;
       run.candidates.emplace_back(iterNum);
       run.maxLegal = iterNum;
     }
     triton::xpu::TileDecider decider;
     run.decision = decider.decide(run.candidates, run.ctx);
+    // These four report on how the model's own decision was reached, so they
+    // stay off the sites where the caller throws that decision away.
+    if (run.noVectorValues)
+      return;
+    reportMultiRow(site, insertPt, valTy, numCol, widthPerCore, run);
+    reportFusedI8(site, insertPt, unrollOpTree, valTy, numCol, widthPerCore,
+                  run);
+    reportDivisibility(site, insertPt, valTy, unrollOpTree, numCol,
+                       widthPerCore, run);
+    reportInvariant(site, insertPt, run);
+    reportLiveRange(site, insertPt, run);
+  }
+
+  // Companion report of `isFusedI8StoreLegal`, same shape as `[MultiRow]`:
+  // `legal=` is recomputed with this one constraint switched off so `dropped=`
+  // says what it cost. `kept={1,2}` on boolfused is the compilable set measured
+  // by sweeping the pin, which is what let it be enforced.
+  void reportFusedI8(const char *site, Operation *insertPt,
+                     const SetVector<Operation *> &unrollOpTree, Type valTy,
+                     int64_t numCol, int64_t widthPerCore,
+                     const ModelRun &run) {
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
+      return;
+    bool fusedI8 = hasFusedI8Store(unrollOpTree);
+    if (!fusedI8)
+      return;
+    StringRef kernel = "<unknown>";
+    if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
+      kernel = funcOp.getName();
+    int64_t legal = 0;
+    for (int64_t iterNum = 1; iterNum <= widthPerCore; ++iterNum)
+      if (isLegalIterNum(iterNum, numCol, widthPerCore, run.ctx.vecRow,
+                         getRowsPerCore(valTy), /*fusedI8Store=*/false))
+        ++legal;
+    std::string kept;
+    for (int64_t c : run.candidates)
+      kept += (kept.empty() ? "" : ",") + std::to_string(c);
+    llvm::errs() << "[FusedI8] " << kernel << " site=" << site
+                 << " widthPerCore=" << widthPerCore << " legal=" << legal
+                 << " kept={" << kept
+                 << "} dropped=" << (legal - (int64_t)run.candidates.size())
+                 << " iterNum=" << run.decision.iterNum << "\n";
+  }
+
+  // Step 3.7, report-only: how much of the peak a tile loop cannot shrink.
+  //
+  // `vrfBudgetTarget` divides the whole peak by the budget, which charges the
+  // entry-live registers as if tiling made them smaller. It does not: values
+  // defined outside the segment stay live across every iteration. The honest
+  // model subtracts them first -- pressure at trip count `i` is
+  // `I + (P - I) / i`, so fitting the budget needs `i >= ceil(P - I, B - I)`,
+  // and when `I >= B` no trip count fits at all.
+  //
+  // This only measures the gap. `vrfBudget=24` was calibrated by device time
+  // *against the dividing formula*, so it has already absorbed whatever bias
+  // this introduces; swapping the formula in without recalibrating would move
+  // every target at once with nothing to attribute the change to. The step
+  // table says as much, and the numbers here are what decides whether the
+  // recalibration is worth running.
+  void reportInvariant(const char *site, Operation *insertPt,
+                       const ModelRun &run) {
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
+      return;
+    StringRef kernel = "<unknown>";
+    if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
+      kernel = funcOp.getName();
+    int64_t peak = run.ctx.peakVRegs;
+    int64_t budget = run.ctx.vrfBudget;
+    // Same `max` convention `peakVRegs` itself uses, then clamped: the two
+    // measurements come from different op sets, so the block invariant can in
+    // principle exceed the tree peak.
+    int64_t inv = std::min(
+        std::max(run.treeP.vecInvariant, run.blockP.vecInvariant), peak);
+    llvm::errs() << "[Invariant] " << kernel << " site=" << site
+                 << " peak=" << peak << " treeInv=" << run.treeP.vecInvariant
+                 << " blockInv=" << run.blockP.vecInvariant
+                 << " invariant=" << inv << " budget=" << budget
+                 << " target=" << triton::xpu::vrfBudgetTarget(run.ctx)
+                 << " targetIfSubtract=";
+    if (budget <= 0)
+      llvm::errs() << "n/a";
+    else if (inv >= budget)
+      llvm::errs() << "unreachable";
+    else
+      llvm::errs() << triton::xpu::vrfBudgetTargetFrom(
+          run.ctx, llvm::divideCeil(peak - inv, budget - inv));
+    llvm::errs() << " pick=" << run.decision.iterNum << "\n";
+  }
+
+  // Step 3.7b, report-only: what taking each value's last use from its liveness
+  // range instead of from its last direct use inside the op set changed.
+  //
+  // The two peaks differ exactly on values that are defined outside a loop body
+  // and read inside it: the direct-use walk calls them dead from that read on,
+  // while the implicit backedge keeps them live for every remaining iteration.
+  // So `livePeak >= usePeak` always, and where it is strictly larger the
+  // direct-use walk was under-counting the file.
+  //
+  // Since 2026-08-14 the live peak is the one the decision runs on, so the
+  // replay goes the other way: it re-decides with the direct-use peak, and
+  // `moved=` says where the correction changed the factor. On the golden suite
+  // that is nowhere at `vrfBudget=24` -- the understatement is real but lands
+  // on the same side of every `ceil` -- which is why both numbers have to stay
+  // printed and not just the picks.
+  void reportLiveRange(const char *site, Operation *insertPt,
+                       const ModelRun &run) {
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
+      return;
+    StringRef kernel = "<unknown>";
+    if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
+      kernel = funcOp.getName();
+    triton::xpu::TileContext altCtx = run.ctx;
+    altCtx.peakVRegs = std::max(run.treeP.vecPeakUse, run.blockP.vecPeakUse);
+    altCtx.scalarPeak =
+        std::max(run.treeP.scalarPeakUse, run.blockP.scalarPeakUse);
+    triton::xpu::Decision alt =
+        triton::xpu::TileDecider().decide(run.candidates, altCtx);
+    llvm::errs() << "[LiveRange] " << kernel << " site=" << site
+                 << " peak=" << run.ctx.peakVRegs
+                 << " usePeak=" << altCtx.peakVRegs
+                 << " treeLive=" << run.treeP.vecPeakLive
+                 << " treeUse=" << run.treeP.vecPeakUse
+                 << " blockLive=" << run.blockP.vecPeakLive
+                 << " blockUse=" << run.blockP.vecPeakUse
+                 << " scalarPeak=" << run.ctx.scalarPeak
+                 << " scalarUse=" << altCtx.scalarPeak
+                 << " target=" << triton::xpu::vrfBudgetTarget(run.ctx)
+                 << " useTarget=" << triton::xpu::vrfBudgetTarget(altCtx)
+                 << " pick=" << run.decision.iterNum
+                 << " usePick=" << alt.iterNum << " moved="
+                 << (alt.iterNum != run.decision.iterNum ? "yes" : "no")
+                 << " why=" << run.decision.why << " useWhy=" << alt.why
+                 << "\n";
+  }
+
+  // Step 2.6, report-only: what admitting the `no-vector-values` sites into the
+  // criteria chain would decide. Those sites keep falling back to the legacy
+  // factor -- which is derived from the `unroll_num` *width* knob and moves
+  // opposite to `iterNum` -- so this is the one entry where the model is not
+  // merely outvoted but never asked. `bool` is the measured case: the factory
+  // default lands 15.8% off the real-machine optimum (`findings.md` §1.41).
+  // `treePeak=0` means tier 1 cannot bind (`target` collapses to 1), so any
+  // move here comes from tier 3, and `blockPeak` says whether the block around
+  // the tree holds vector values that tier 1 could have priced.
+  void reportDecisionEntry(const char *site, Operation *insertPt,
+                           int64_t numCol, int64_t widthPerCore,
+                           int64_t legacyIterNum, const ModelRun &run) {
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
+      return;
+    StringRef kernel = "<unknown>";
+    if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
+      kernel = funcOp.getName();
+    std::string cands;
+    for (int64_t c : run.candidates)
+      cands += (cands.empty() ? "" : ",") + std::to_string(c);
+    llvm::errs() << "[DecisionEntry] " << kernel << " site=" << site
+                 << " numCol=" << numCol << " widthPerCore=" << widthPerCore
+                 << " treePeak=" << run.treeP.vecPeak
+                 << " blockPeak=" << run.blockP.vecPeak
+                 << " treeScalarPeak=" << run.treeP.scalarPeak
+                 << " peakVRegs=" << run.ctx.peakVRegs
+                 << " budget=" << run.ctx.vrfBudget
+                 << " target=" << triton::xpu::vrfBudgetTarget(run.ctx)
+                 << " cands={" << cands << "}"
+                 << " legacyIterNum=" << legacyIterNum
+                 << " modelIterNum=" << run.decision.iterNum
+                 << " modelWhy=" << run.decision.why << " moved="
+                 << (run.decision.iterNum != legacyIterNum ? "yes" : "no")
+                 << "\n";
+  }
+
+  // Step 3.6, report-only: what the three divisibility terms in
+  // `isLegalIterNum` cost, per site. The model's pick is the smallest candidate
+  // at or above `vrfBudgetTarget` (tier 1 admits >= target, tier 3 takes the
+  // smallest back), so if divisibility were relaxed it would take the target
+  // itself -- which makes `slack = pick - relaxedPick` the entire price of
+  // these terms here, with nothing to calibrate.
+  //
+  // The relaxed set keeps `isMultiRowLegal` and `isFusedI8StoreLegal`: those
+  // two are shape constraints on how a segment can be sliced at all
+  // (§1.45/§1.46), and a main/tail split cannot express them either. Only the
+  // three `%` terms are what a tail loop would buy back.
+  //
+  // `blockedBy=` names which of the three actually excludes the relaxed factor.
+  // Relaxing an inert term buys nothing, and `minVecWidth` in particular must
+  // be argued on its own (§3.6(3)) -- so it has to be visible which term is
+  // binding before any of them is touched.
+  void reportDivisibility(const char *site, Operation *insertPt, Type valTy,
+                          const SetVector<Operation *> &unrollOpTree,
+                          int64_t numCol, int64_t widthPerCore,
+                          const ModelRun &run) {
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
+      return;
+    StringRef kernel = "<unknown>";
+    if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
+      kernel = funcOp.getName();
+    int64_t target = triton::xpu::vrfBudgetTarget(run.ctx);
+    int64_t rowsPerCore = getRowsPerCore(valTy);
+    bool fusedI8 = hasFusedI8Store(unrollOpTree);
+    // Smallest factor the shape constraints alone allow at or above the target.
+    int64_t relaxed = 0;
+    for (int64_t i = std::max<int64_t>(target, 1); i <= widthPerCore; ++i)
+      if (isMultiRowLegal(i, rowsPerCore, widthPerCore) &&
+          isFusedI8StoreLegal(i, widthPerCore, fusedI8)) {
+        relaxed = i;
+        break;
+      }
+    std::string blockedBy;
+    if (relaxed) {
+      auto note = [&](const char *term) {
+        blockedBy += (blockedBy.empty() ? "" : "+") + std::string(term);
+      };
+      if (numCol % relaxed != 0)
+        note("numCol");
+      if (widthPerCore % relaxed != 0)
+        note("widthPerCore");
+      if (run.ctx.vecRow != 0 && run.ctx.vecRow % relaxed != 0)
+        note("minVecWidth");
+    }
+    if (blockedBy.empty())
+      blockedBy = "none";
+    int64_t pick = run.decision.iterNum;
+    llvm::errs() << "[Divisibility] " << kernel << " site=" << site
+                 << " numCol=" << numCol << " widthPerCore=" << widthPerCore
+                 << " minVecWidth=" << run.ctx.vecRow << " target=" << target
+                 << " pick=" << pick << " relaxedPick=";
+    if (relaxed)
+      llvm::errs() << relaxed;
+    else
+      llvm::errs() << "none";
+    llvm::errs() << " slack=" << (relaxed ? pick - relaxed : 0)
+                 << " blockedBy=" << blockedBy << "\n";
+  }
+
+  // Per decision site: how much of the divisor set the multi-row constraint
+  // removes, and which factor the model then takes. `run.candidates` is already
+  // filtered, so `legal=` is recomputed here with the constraint switched off
+  // -- that is the only way to see what it cost. `dropped=0` everywhere means
+  // the constraint is inert on the probe set, which is what let it be enforced
+  // without moving a decision.
+  void reportMultiRow(const char *site, Operation *insertPt, Type valTy,
+                      int64_t numCol, int64_t widthPerCore,
+                      const ModelRun &run) {
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
+      return;
+    int64_t rowsPerCore = getRowsPerCore(valTy);
+    StringRef kernel = "<unknown>";
+    if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
+      kernel = funcOp.getName();
+    int64_t legal = 0;
+    for (int64_t iterNum = 1; iterNum <= widthPerCore; ++iterNum)
+      if (isLegalIterNum(iterNum, numCol, widthPerCore, run.ctx.vecRow,
+                         /*rowsPerCore=*/1))
+        ++legal;
+    std::string kept;
+    for (int64_t c : run.candidates)
+      kept += (kept.empty() ? "" : ",") + std::to_string(c);
+    llvm::errs() << "[MultiRow] " << kernel << " site=" << site
+                 << " rowsPerCore=" << rowsPerCore
+                 << " widthPerCore=" << widthPerCore
+                 << " binds=" << (rowsPerCore > 1 ? "yes" : "no")
+                 << " legal=" << legal << " kept={" << kept
+                 << "} dropped=" << (legal - (int64_t)run.candidates.size())
+                 << " iterNum=" << run.decision.iterNum << "\n";
   }
 
   // Step 3.5 groundwork, report-only. `pinnedUnrollNum` short-circuits the
@@ -715,14 +1318,15 @@ public:
   // on both pin sites (`findings.md` §1.30). That is why 3.5b only has to stop
   // the early return -- the pin's arithmetic contributes nothing of its own.
   void reportPinShadow(const char *site, Operation *insertPt,
-                       const SetVector<Operation *> &unrollOpTree,
+                       const SetVector<Operation *> &unrollOpTree, Type valTy,
                        int64_t numCol, int64_t widthPerCore,
                        int64_t coresPerGroup, int64_t legacyIterNum,
                        int64_t pinned, int64_t loopResults) {
     if (!std::getenv("TRITONXPU_TILE_REPORT"))
       return;
     ModelRun run;
-    runModel(insertPt, unrollOpTree, numCol, widthPerCore, loopResults, run);
+    runModel(site, insertPt, unrollOpTree, valTy, numCol, widthPerCore,
+             loopResults, run);
     StringRef kernel = "<unknown>";
     if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
       kernel = funcOp.getName();
@@ -763,6 +1367,30 @@ public:
                  << "\n";
   }
 
+  // Applies the 3.4 hatch at this site if the filter names it. Returns false
+  // when it does not, so the default path keeps the model's own decision
+  // untouched. `remarkDecision` has already reported that decision, so the log
+  // shows both what the model said and what the hatch overrode it with.
+  bool applySegPeakHatch(const char *site, Operation *insertPt, ModelRun &run,
+                         int64_t ordinal, triton::xpu::Decision &out) {
+    StringRef kernel = "<unknown>";
+    if (auto funcOp = insertPt->getParentOfType<triton::FuncOp>())
+      kernel = funcOp.getName();
+    std::string key =
+        segPointKey(kernel, site, run.ctx, run.treeP, run.blockP, ordinal);
+    if (!segPeakHatchApplies(key))
+      return false;
+    triton::xpu::TileContext altCtx;
+    out = treeOnlyDecision(run.treeP, run.ctx, run.candidates, altCtx);
+    llvm::errs() << "[SegPeakForce] key=" << key
+                 << " iterNum=" << run.decision.iterNum << "->" << out.iterNum
+                 << " peak=" << run.ctx.peakVRegs << "->" << altCtx.peakVRegs
+                 << " maxVecWidth=" << run.ctx.maxVecWidth << "->"
+                 << altCtx.maxVecWidth << " why=" << out.why << "\n";
+    out.why = "seg-peak-tree:" + out.why;
+    return true;
+  }
+
   // The register file is shared by everything simultaneously live in the block,
   // not by one op tree: sibling trees hold their values at the same time (the
   // mean and var accumulators of a layernorm, say). Measuring per tree
@@ -779,6 +1407,9 @@ public:
                 const SetVector<Operation *> &unrollOpTree, Type valTy,
                 int64_t numCol, int64_t numUnroll, int64_t loopResults = 0) {
     int64_t legacyIterNum = ceil<int64_t>(numCol, numUnroll);
+    // Counts every decision this pass makes, in walk order, so one point can be
+    // named even after the hatch has changed the pressure the later ones see.
+    const int64_t ordinal = ++segPointCounter;
     if (dryRun)
       reportDryRun(site, insertPt, unrollOpTree, valTy, numCol, numUnroll,
                    legacyIterNum);
@@ -830,26 +1461,48 @@ public:
       pinned = std::max<int64_t>(pinned, 1);
       remarkDecision(site, insertPt, numCol, widthPerCore, /*peakVRegs=*/-1,
                      /*target=*/-1, pinned, maxLegal, pinReason);
-      reportPinShadow(site, insertPt, unrollOpTree, numCol, widthPerCore,
+      reportPinShadow(site, insertPt, unrollOpTree, valTy, numCol, widthPerCore,
                       coresPerGroup, legacyIterNum, pinned, loopResults);
       return {pinned, pinReason, {}};
     }
 
     ModelRun run;
-    runModel(insertPt, unrollOpTree, numCol, widthPerCore, loopResults, run);
-    // Nothing for the model to say: keep the legacy factor.
+    runModel(site, insertPt, unrollOpTree, valTy, numCol, widthPerCore,
+             loopResults, run);
+    // Nothing for the model to say about the vector file: keep the legacy
+    // factor. What the chain *would* have decided is reported, not applied --
+    // step 2.6 has to prove the other probes do not move before this entry can
+    // be opened.
     if (run.noVectorValues) {
-      remarkDecision(site, insertPt, numCol, widthPerCore, /*peakVRegs=*/0,
-                     /*target=*/-1, legacyIterNum, /*maxLegal=*/-1,
-                     "no-vector-values:legacy", run.treeP.scalarPeak);
-      return {legacyIterNum, "no-vector-values:legacy", {}};
+      reportDecisionEntry(site, insertPt, numCol, widthPerCore, legacyIterNum,
+                          run);
+      if (!this->openDecisionEntry) {
+        remarkDecision(site, insertPt, numCol, widthPerCore, /*peakVRegs=*/0,
+                       /*target=*/-1, legacyIterNum, /*maxLegal=*/-1,
+                       "no-vector-values:legacy", run.treeP.scalarPeak);
+        return {legacyIterNum, "no-vector-values:legacy", {}};
+      }
+      triton::xpu::Decision opened = run.decision;
+      opened.why = "no-vector-values:model";
+      remarkDecision(site, insertPt, numCol, widthPerCore, run.ctx.peakVRegs,
+                     triton::xpu::vrfBudgetTarget(run.ctx), opened.iterNum,
+                     run.maxLegal, opened.why.c_str(), run.ctx.scalarPeak,
+                     run.ctx.vecRow, &opened, run.ctx.boundaryCrossings,
+                     run.ctx.vecLanes);
+      return opened;
     }
     remarkDecision(site, insertPt, numCol, widthPerCore, run.ctx.peakVRegs,
                    triton::xpu::vrfBudgetTarget(run.ctx), run.decision.iterNum,
                    run.maxLegal, run.decision.why.c_str(), run.ctx.scalarPeak,
-                   run.ctx.vecRow, &run.decision);
+                   run.ctx.vecRow, &run.decision, run.ctx.boundaryCrossings,
+                   run.ctx.vecLanes);
     reportSegDominance(site, insertPt, run.treeP, run.blockP, run.ctx,
-                       run.candidates, run.decision);
+                       run.candidates, run.decision, ordinal);
+    reportSegRelax(site, insertPt, run.treeP, run.blockP, run.ctx,
+                   run.candidates, run.decision, ordinal);
+    triton::xpu::Decision forced;
+    if (applySegPeakHatch(site, insertPt, run, ordinal, forced))
+      return forced;
     return run.decision;
   }
 
@@ -985,8 +1638,13 @@ public:
               isOperandOperationInSameForBlock(&inBlockOp, i) ||
               (inBlockOp.getOperand(i).getType() == ifOpResTy);
           if (!isOperandValidInSameForBlock[i]) {
-            assert(isa<arith::ConstantOp>(
-                       inBlockOp.getOperand(i).getDefiningOp()) &&
+            // triton_xpu.vconst is what TritonXPUVectorize turns a top-level
+            // arith.constant into, and it is just as pure and loop-invariant,
+            // so the hoisted extract_slice below is equally safe for it.
+            assert((isa<arith::ConstantOp>(
+                        inBlockOp.getOperand(i).getDefiningOp()) ||
+                    isa<triton::xpu::VConstOp>(
+                        inBlockOp.getOperand(i).getDefiningOp())) &&
                    "Unable to extract the non-constant operand.");
             auto extractSliceOp =
                 getExtractedOperand(context, builder, loc, yieldOp, i, iterNum);
@@ -1007,8 +1665,10 @@ public:
                 (inBlockOp.getOperand(i).getType() ==
                  inBlockOp.getOperand(i ^ 1).getType());
             if (!isOperandValidInSameForBlock[i]) {
-              assert(isa<arith::ConstantOp>(
-                         inBlockOp.getOperand(i).getDefiningOp()) &&
+              assert((isa<arith::ConstantOp>(
+                          inBlockOp.getOperand(i).getDefiningOp()) ||
+                      isa<triton::xpu::VConstOp>(
+                          inBlockOp.getOperand(i).getDefiningOp())) &&
                      "Unable to extract the non-constant operand.");
               auto extractSliceOp = getExtractedOperand(context, builder, loc,
                                                         &inBlockOp, i, iterNum);
@@ -2058,6 +2718,21 @@ public:
         // narrowed back to its splat value here rather than handed over as a
         // vector. Ops are created at `anchor` because the cloned combine block
         // sits ahead of the builder's insertion point.
+        // Both arith.constant and triton_xpu.vconst keep the constant in a
+        // DenseElementsAttr over the *scalar* type: VConstOp is what
+        // TritonXPUVectorize rewrites a top-level arith.constant into, and it
+        // is built from exactly that attribute (Vectorize.cpp
+        // processOpVecTy). Its result is TTX_VectorLike, so it may be a bare
+        // vector<NxT> -- precisely the non-tensor operand shape the two
+        // broadcasts below have to fix up.
+        auto getConstDense = [](mlir::Value src) -> mlir::DenseElementsAttr {
+          auto *defOp = src.getDefiningOp();
+          if (auto cstOp = dyn_cast_or_null<arith::ConstantOp>(defOp))
+            return mlir::dyn_cast<mlir::DenseElementsAttr>(cstOp.getValue());
+          if (auto vConstOp = dyn_cast_or_null<triton::xpu::VConstOp>(defOp))
+            return mlir::dyn_cast<mlir::DenseElementsAttr>(vConstOp.getValue());
+          return {};
+        };
         auto createCombineSplat = [&](mlir::Type resTy, mlir::Value src,
                                       mlir::Operation *anchor) -> mlir::Value {
           OpBuilder b(anchor);
@@ -2065,11 +2740,10 @@ public:
               mlir::cast<mlir::RankedTensorType>(resTy).getElementType();
           if (!mlir::isa<mlir::VectorType>(elemTy))
             return b.create<triton::SplatOp>(loc, resTy, src).getResult();
-          auto cstOp = src.getDefiningOp<arith::ConstantOp>();
-          auto dense = mlir::cast<mlir::DenseElementsAttr>(cstOp.getValue());
-          assert(dense.isSplat() && "combine constant is not uniform");
+          auto dense = getConstDense(src);
+          assert(dense && dense.isSplat() && "combine constant is not uniform");
           auto scalar = b.create<arith::ConstantOp>(
-              cstOp.getLoc(),
+              src.getLoc(),
               mlir::cast<mlir::TypedAttr>(dense.getSplatValue<Attribute>()));
           return b.create<triton::xpu::VSplatOp>(loc, resTy, scalar)
               .getResult();
@@ -2096,10 +2770,10 @@ public:
                 operandNeedReserved = tensorTy0;
               }
               assert(
-                  operandIndexNeedModify >= 0 &&
-                  isa<arith::ConstantOp>(
-                      op.getOperand(operandIndexNeedModify).getDefiningOp()) &&
-                  "Unable to extract the non-constant operand.");
+                  (operandIndexNeedModify >= 0 &&
+                   isa_and_nonnull<arith::ConstantOp, triton::xpu::VConstOp>(
+                       op.getOperand(operandIndexNeedModify).getDefiningOp()) &&
+                   "Unable to extract the non-constant operand."));
               op.setOperand(operandIndexNeedModify,
                             createCombineSplat(
                                 operandNeedReserved,
@@ -2120,11 +2794,11 @@ public:
                 operandIndexNeedModify = 2;
                 operandNeedReserved = tensorTy1;
               }
-              assert(operandIndexNeedModify >= 0 &&
-                     isa<arith::ConstantOp>(
-                         selOp.getOperand(operandIndexNeedModify)
-                             .getDefiningOp()) &&
-                     "Unable to extract the non-constant operand.");
+              assert((operandIndexNeedModify >= 0 &&
+                      isa_and_nonnull<arith::ConstantOp, triton::xpu::VConstOp>(
+                          selOp.getOperand(operandIndexNeedModify)
+                              .getDefiningOp()) &&
+                      "Unable to extract the non-constant operand."));
 
               selOp.setOperand(
                   operandIndexNeedModify,
@@ -2322,6 +2996,44 @@ public:
     // byte-identical to the legacy pipeline, and a leftover attribute is a
     // visible difference (10/10 probes' .ttxir differed on just this line).
     m.walk([&](scf::ForOp forOp) { forOp->removeAttr(kUnrollLoopAttr); });
+
+    // Report-only LM accounting, second of three observation points (step 2.5).
+    // The `[Alloca]` line is emitted by the alloca pass, and that pass runs
+    // *before* this one (`tritonxpu-alloca, tritonxpu-tile-analysis,
+    // tritonxpu-unroll-control`), so it is invariant to the tile decision by
+    // construction -- measured: 11 probes x 4 widths, identical to the byte,
+    // and `bitred` prints it even on the runs that then die inside this pass
+    // (findings.md 1.43). Counting again here attributes to the decision only
+    // the buffers this pass itself creates, which is a strict subset: measured
+    // on 11 probes x {u8, u2}, exactly one cell moves (layernorm u2, 5 allocas
+    // /2560 B -> 7/3584 B, all 1024 B of the delta `inLoopBytes`), while
+    // add and mixedwidth grow only later in the pipeline. The number that is
+    // comparable to what XTDK finally sees is `[MemoryInplace][lm]`, after the
+    // reuse pass. `inLoopBytes` breaks out the part that sits inside a loop,
+    // which is the part a per-tile rewrite (M4) would move. Never a veto: no
+    // LM capacity check exists in this pipeline to compare against, and the
+    // ceiling (KERNEL_STACK_SIZE, 8000 B) is enforced elsewhere, on a
+    // different quantity.
+    if (mlir::triton::tools::getBoolEnvXPU("TRITONXPU_LM_REPORT")) {
+      int64_t totalBytes = 0;
+      int64_t inLoopBytes = 0;
+      unsigned numAllocas = 0;
+      m.walk([&](triton::xpu::AllocaOp allocaOp) {
+        auto ty = allocaOp.getResult().getType();
+        int64_t bytes =
+            getTotalElemsPerThread(ty) * triton::getPointeeBitWidth(ty) / 8;
+        bytes = (bytes + 63) / 64 * 64; // LM allocas are 64-byte aligned
+        totalBytes += bytes;
+        ++numAllocas;
+        if (allocaOp->getParentOfType<scf::ForOp>())
+          inLoopBytes += bytes;
+      });
+      llvm::errs() << "[UnrollControl][lm] allocas=" << numAllocas
+                   << " lmBytes=" << totalBytes
+                   << " inLoopBytes=" << inLoopBytes
+                   << " (post-tiling, per core, 64B-aligned, before "
+                      "memory-inplace reuse)\n";
+    }
   }
 };
 

@@ -9,6 +9,7 @@ include "triton/Dialect/TritonXPU/IR/TritonXPUAttrDefs.td"   // For Attr
 include "triton/Dialect/TritonXPU/IR/TritonXPUEnums.td"      // For XPU op enums
 include "triton/Dialect/TritonXPU/IR/TritonXPUTypes.td"      // For types
 include "triton/Dialect/TritonXPU/IR/TritonXPUInterfaces.td" // For types
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td" // For TTG_MemDescType (TLE ops)
 
 //===----------------------------------------------------------------------===//
 // TRITONXPU op definitions
@@ -506,6 +507,187 @@ def TTX_XPUPrintOp
     attr-dict `:`
     type($args)
   }];
+}
+
+//[FlagTree-klx-sync] ops referenced by per-op vectorization / Vectorize,
+// synced from internal d116bdf4 (were omitted from the #992 baseline).
+def TTX_VSigmoidFOp : TTX_VUnaryFOp<"vsigmoidf">;
+def TTX_PackOp : TTX_Op<"pack", [MemoryEffects<[MemRead, MemWrite]>]> {
+    let summary = "scalar tensor -> vector tensor, through an LM buffer";
+    let description = [{
+        Reinterprets a scalar-element tensor as a tensor of vectors of the
+        same total element count. The scalar form is stored to $bufPtr and
+        reloaded as whole vectors, one vector memory op per result slot.
+    }];
+    let arguments = (ins TT_Type:$src, Optional<TT_PtrLike>:$bufPtr);
+    let results = (outs TTX_VectorLike:$result);
+}
+
+def TTX_UnpackOp : TTX_Op<"unpack", [MemoryEffects<[MemRead, MemWrite]>]> {
+    let summary = "vector tensor -> scalar tensor, through an LM buffer";
+    let description = [{
+        Inverse of triton_xpu.pack. The vector form is stored to $bufPtr with
+        one vector memory op per source slot and reloaded element-wise.
+    }];
+    let arguments = (ins TTX_VectorLike:$src, Optional<TT_PtrLike>:$bufPtr);
+    let results = (outs TT_Type:$result);
+}
+
+//===----------------------------------------------------------------------===//
+// TLE Ops — continuous DMA copy (descriptor-based)
+//===----------------------------------------------------------------------===//
+
+def TTX_TLECopyGlobalToLocalOp : TTX_Op<"tle_copy_g2l", [AttrSizedOperandSegments, MemoryEffects<[MemRead<GlobalMemory>, MemWrite]>]> {
+    let summary = "TLE continuous DMA copy from global memory to local memory";
+    let description = [{
+      Copy a rectangular block from global memory (described by tensor_descriptor)
+      to local memory buffer (memdesc). Offsets specify the tile position in GM.
+      Strides are the GM tensor strides (in elements) per dimension.
+      This op is the XPU equivalent of ttng.async_tma_copy_global_to_local.
+    }];
+    let arguments = (ins
+        TT_TensorDescType:$desc,
+        Variadic<I32>:$offsets,
+        TTG_MemDescType:$dst_buffer,
+        Variadic<I64>:$strides,
+        Variadic<I32>:$shapes,
+        DefaultValuedAttr<BoolAttr, "true">:$is_sync
+    );
+    // The per-core partition is fully driven by the tile's ClusterLayout, which
+    // tritonxpu-tle-core-tiling stamps as a discardable attribute
+    // "xpu.tile_layout". Absent => legacy default cluster encoding (flat
+    // row-major cut, unchanged behavior).
+}
+
+def TTX_TLELocalPtrOp : TTX_Op<"tle_local_ptr", [Pure]> {
+    let summary = "Materialize LM pointers from buffer + multi-dim indices";
+    let description = [{
+      Given a local memory buffer (memdesc) and index tensors, compute a tensor
+      of LM pointers: base_ptr + linearize(indices). The result is used with
+      tl.load/tl.store for element-wise access to local memory.
+    }];
+    let arguments = (ins
+        TTG_MemDescType:$buffer,
+        Variadic<TT_IntLike>:$indices
+    );
+    let results = (outs TT_Type:$result);
+}
+
+def TTX_TLECopyLocalToGlobalOp : TTX_Op<"tle_copy_l2g", [AttrSizedOperandSegments, MemoryEffects<[MemRead, MemWrite<GlobalMemory>]>]> {
+    let summary = "TLE continuous DMA copy from local memory to global memory";
+    let description = [{
+      Copy a rectangular block from local memory buffer (memdesc) to global memory
+      (described by tensor_descriptor). Offsets specify the tile position in GM.
+      Strides are the GM tensor strides (in elements) per dimension.
+      This op is the XPU equivalent of ttng.async_tma_copy_local_to_global.
+    }];
+    let arguments = (ins
+        TT_TensorDescType:$desc,
+        Variadic<I32>:$offsets,
+        TTG_MemDescType:$src_buffer,
+        Variadic<I64>:$strides,
+        Variadic<I32>:$shapes
+    );
+    // Per-core partition driven by the tile's ClusterLayout ("xpu.tile_layout"
+    // discardable attr, stamped by tritonxpu-tle-core-tiling). Absent => legacy
+    // default cluster encoding (flat row-major cut).
+}
+
+def TTX_TLENormCopyGlobalToLocalOp : TTX_Op<"tle_normcopy_g2l", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite]>]> {
+    let summary = "TLE element-wise (permuted) gather copy from a GM pointer tensor to local memory";
+    let description = [{
+      Copy elements from global memory addressed by a tensor of pointers into a
+      local memory buffer (memdesc). Unlike tle_copy_g2l this does NOT require an
+      affine/rectangular tile: the per-element GM addresses are arbitrary (e.g. a
+      permuted gather), so a TensorDescriptor cannot express it. Element i of the
+      per-core lane set is copied to local slot i, matching tle_local_ptr layout.
+    }];
+    let arguments = (ins
+        TT_Type:$src_ptrs,
+        TTG_MemDescType:$dst_buffer
+    );
+}
+
+def TTX_TLENormCopyLocalToGlobalOp : TTX_Op<"tle_normcopy_l2g", [MemoryEffects<[MemRead, MemWrite<GlobalMemory>]>]> {
+    let summary = "TLE element-wise (permuted) scatter copy from local memory to a GM pointer tensor";
+    let description = [{
+      Copy elements from a local memory buffer (memdesc) to global memory addressed
+      by a tensor of pointers. The scatter counterpart of tle_normcopy_g2l.
+    }];
+    let arguments = (ins
+        TTG_MemDescType:$src_buffer,
+        TT_Type:$dst_ptrs
+    );
+}
+
+// Vectorized local-memory load/store for the TLE compute segment. Unlike
+// tt.load/tt.store, these carry NO pointee-type constraint, so their result /
+// value tensor element type can be a VectorType<W x elem> produced by the
+// tritonxpu-vectorize TLE branch. They read/write W contiguous elements per
+// slot directly from the per-core LM buffer (no GM2LMOp / DMA involved).
+def TTX_TLEVLoadOp : TTX_Op<"tle_vload", [Pure]> {
+    let summary = "TLE vectorized load from a local-memory buffer";
+    let description = [{
+      Load a per-core local-memory buffer as a tensor whose element type is a
+      VectorType<W x elem>. Element i maps to LM[i*W : (i+1)*W].
+    }];
+    let arguments = (ins TTG_MemDescType:$buffer);
+    let results = (outs TT_Type:$result);
+}
+
+def TTX_TLEVStoreOp : TTX_Op<"tle_vstore"> {
+    let summary = "TLE vectorized store to a local-memory buffer";
+    let description = [{
+      Store a tensor whose element type is a VectorType<W x elem> back into a
+      per-core local-memory buffer. Element i maps to LM[i*W : (i+1)*W].
+    }];
+    let arguments = (ins TTG_MemDescType:$buffer, TT_Type:$value);
+}
+
+//===----------------------------------------------------------------------===//
+// tle.raw payload injection on the cluster path.
+//===----------------------------------------------------------------------===//
+
+def TTX_RawOp : TTX_Op<"raw", []> {
+    let summary = "call a user-provided LLVM IR payload from a cluster kernel";
+
+    let description = [{
+      `triton_xpu.raw` calls the function `$callee`, whose definition is carried
+      as LLVM-dialect IR text (or textual LLVM IR, what `xpu-clang -S
+      -emit-llvm` produces) in the `$llvm_ir` attribute. Late binding: the
+      payload is only spliced into the module during TritonXPU->LLVM conversion,
+      so the arch is known by then and a deferred payload can be filled in first
+      by `tritonxpu-materialize-deferred-raw`.
+
+      This is the xpu3 cluster counterpart of `sdnn.raw`, and mirrors
+      `txcn.raw` on the houyi cluster path. The cluster path never sees
+      memrefs, so the calling convention is much simpler: every operand is
+      passed through as-is after type conversion -- `tt.ptr<T>` becomes an
+      `!llvm.ptr` in the global address space and scalars stay scalars. Tensor
+      operands are not supported: a tensor lives in per-core registers/LM here,
+      so there is no address to hand over -- stage the data through pointers.
+
+      Example:
+      ```mlir
+      triton_xpu.raw "my_add"(%out, %in, %n)
+        {llvm_ir = "llvm.func @my_add(...) {...}"}
+        : (!tt.ptr<f32>, !tt.ptr<f32>, i32) -> ()
+      ```
+
+      The op has no results and no declared memory effects, so it is never
+      speculated or dead-code eliminated: the payload is assumed to write
+      through the pointers it is handed.
+    }];
+
+    let arguments = (ins
+        StrAttr:$callee,
+        StrAttr:$llvm_ir,
+        Variadic<AnyType>:$args
+    );
+
+    let assemblyFormat = [{
+      $callee `(` $args `)` attr-dict `:` functional-type($args, results)
+    }];
 }
 
 #endif // TRITONXPU_OPS

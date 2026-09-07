@@ -56,8 +56,46 @@ bool hasVectorForm(Operation *op) {
   return false;
 }
 
+VecTyCoverage processOpVecTyCoverage(Operation *op) {
+  if (!op)
+    return VecTyCoverage::None;
+  // Order matters: the two conditional kinds must be tested before the blanket
+  // lists, or `arith::TruncIOp` would read as uncovered and
+  // ExternElementwiseOp as fully covered.
+  if (isa<triton::ExternElementwiseOp, arith::TruncIOp>(op))
+    return VecTyCoverage::Conditional;
+  // The one instance-aware arm. The arith::SelectOp Case builds a VSelectOp for
+  // any element type, but VSelect only lowers f32/i32/f16 and is
+  // `llvm_unreachable` otherwise (VectorizedOpToLLVM.cpp). The growth walk
+  // never reached that because its own select gate (`vectorize()` below)
+  // already requires f16/f32; the segment cut has no such gate, so dropout's i8
+  // mask select was admitted and crashed ConvertTritonXPUToLLVM
+  // (findings 1.71). Mirror the growth gate rather than VSelect's wider i32
+  // support: f16/f32 is what has actually been exercised.
+  if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
+    Type elemTy = getElementTypeOrSelf(selectOp.getTrueValue().getType());
+    return (elemTy.isF16() || elemTy.isF32()) ? VecTyCoverage::Full
+                                              : VecTyCoverage::Conditional;
+  }
+  if (hasVectorForm(op) || isa<TTX_VECTORIZE_RETYPE_OPS>(op))
+    return VecTyCoverage::Full;
+  return VecTyCoverage::None;
+}
+
+const char *toString(VecTyCoverage coverage) {
+  switch (coverage) {
+  case VecTyCoverage::None:
+    return "none";
+  case VecTyCoverage::Full:
+    return "full";
+  case VecTyCoverage::Conditional:
+    return "conditional";
+  }
+  return "?";
+}
+
 bool vecReportEnabled() {
-  return mlir::triton::tools::getBoolEnv("TRITONXPU_VEC_REPORT");
+  return mlir::triton::tools::getBoolEnvXPU("TRITONXPU_VEC_REPORT");
 }
 
 void reportVecRoot(const char *stage, const char *site, Operation *root,
@@ -530,7 +568,7 @@ const char *toString(VState state) {
 }
 
 bool vflowReportEnabled() {
-  return mlir::triton::tools::getBoolEnv("TRITONXPU_VFLOW_REPORT");
+  return mlir::triton::tools::getBoolEnvXPU("TRITONXPU_VFLOW_REPORT");
 }
 
 namespace {
@@ -609,6 +647,32 @@ VState VectorFlowAnalysis::stateOf(Value value) const {
   while (parent[id] != id)
     id = parent[id];
   return pins[id];
+}
+
+// Mirrors the closure walk's own gate (this file, the
+// `.Case<triton::ExternElementwiseOp>` at ~:427), which is the source of truth
+// for whether a libdevice call has a vector form: processOpVecTy's table
+// (Vectorize.cpp:404-455) is wider -- it also rewrites isinf -- but the gate
+// rejects isinf, so those entries are unreachable and admitting them here would
+// pin Vector on a chain that cannot vectorize.
+//
+// Element type is checked the same way as for the element-wise table above: i1
+// has no vector form, which drops isnan to Scalar. isnan is the one entry whose
+// rewrite retypes to a vector of the *input* bitwidth (Vectorize.cpp:436-440),
+// fused with the trunci that consumes it; that fused boundary is its own step
+// (the `truncint` probe is its minimal shape), so keep the conservative answer.
+static bool externSymbolHasVectorForm(triton::ExternElementwiseOp extOp) {
+  if (extOp->getNumResults() != 1)
+    return false;
+  Type elemTy = getElementTypeOrSelf(extOp.getResult().getType());
+  if (!isa<VectorType>(elemTy) && !vectorizedTyValid(elemTy))
+    return false;
+  StringRef symbol = extOp.getSymbol();
+  if (symbol == "_ZN3xpu6rsqrtfEf")
+    return elemTy.isF32(); // guarded by outType.isF32() in the gate
+  return symbol == "_ZN3xpu5tanhfEf" || symbol == "_ZN3xpu4tanfEf" ||
+         symbol == "_ZN3xpu3erfEf" || symbol == "_ZN3xpu5atanfEf" ||
+         symbol == "_ZN3xpu5isnanEf";
 }
 
 void VectorFlowAnalysis::visit(Operation *op) {
@@ -752,15 +816,25 @@ void VectorFlowAnalysis::visit(Operation *op) {
         }
       })
       .Case<triton::ExternElementwiseOp>([&](auto extOp) {
-        // Pinned Scalar on purpose. The symbol -> vector-symbol table lives
-        // inside processOpVecTy, and one of its entries (isnan) carries
-        // bitwidth-specific handling that a plain pair list cannot express, so
-        // single-sourcing it is its own step. Until then the conservative pin
-        // is the only answer that cannot drift; nothing consumes this yet.
+        // The pin follows the symbol whitelist, not the op kind. Pinning every
+        // extern Scalar (what step 2.1 did) mis-states a chain that vectorizes
+        // *today*: `libdev` (tanhf) becomes vtanhf on
+        // tensor<512xvector<16xf32>>, so the unconditional pin turned the store
+        // class Conflict and would make a per-op decision either cut a boundary
+        // mid-chain or drop the chain to scalar -- both regressions. Measured
+        // in findings §1.54.
+        bool vectorSymbol = externSymbolHasVectorForm(extOp);
         for (Value result : extOp->getResults()) {
-          pin(result, VState::Scalar);
+          pin(result, vectorSymbol ? VState::Vector : VState::Scalar);
           ++stats.externPins;
         }
+        // Equality edge, only on the shape the rewrite actually rewires: it
+        // hands the vector symbol `extElemwiseOp.getOperands().front()`
+        // (Vectorize.cpp:370-372) and the vector symbols are unary
+        // (`...EDv16_f`), so a multi-operand extern gets the pin without the
+        // edge rather than an edge the rewrite does not make.
+        if (vectorSymbol && extOp->getNumOperands() == 1)
+          unite(extOp->getResult(0), extOp->getOperand(0));
       })
       .Case<scf::YieldOp, triton::xpu::GM2LMOp, triton::xpu::GM2LMMaskOp,
             triton::xpu::LM2GMOp, triton::xpu::LM2GMMaskOp>(
@@ -776,6 +850,71 @@ void VectorFlowAnalysis::visit(Operation *op) {
           ++stats.unknownPins;
         }
       });
+}
+
+bool rewriteNoopKind(Operation *op) {
+  return isa<triton::xpu::GM2LMOp, triton::xpu::GM2LMMaskOp,
+             triton::xpu::LM2GMOp, triton::xpu::LM2GMMaskOp,
+             triton::xpu::StoreOp>(op);
+}
+
+bool sameActingSet(const OperationTree &lhs, const OperationTree &rhs) {
+  auto acting = [](const OperationTree &set) {
+    llvm::SmallVector<Operation *> ops;
+    for (Operation *op : set)
+      if (!rewriteNoopKind(op))
+        ops.push_back(op);
+    return ops;
+  };
+  llvm::SmallVector<Operation *> a = acting(lhs), b = acting(rhs);
+  if (a.size() != b.size())
+    return false;
+  llvm::SmallPtrSet<Operation *, 16> seen(a.begin(), a.end());
+  for (Operation *op : b)
+    if (!seen.count(op))
+      return false;
+  return true;
+}
+
+VecSetDomain buildVecSetDomain(Value keyValue, const VectorFlowAnalysis &vflow,
+                               const OperationTree &closure) {
+  VecSetDomain domain;
+  if (!keyValue)
+    return domain;
+
+  llvm::SmallVector<Value> worklist{keyValue};
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    Operation *def = value.getDefiningOp();
+    if (!def || !domain.cone.insert(def))
+      continue;
+    for (Value operand : def->getOperands())
+      worklist.push_back(operand);
+    // Region-carrying ops contribute their terminator operands, matching the
+    // closure walk's ForOp / YieldOp cases.
+    for (Region &region : def->getRegions())
+      for (Block &block : region)
+        if (Operation *terminator = block.getTerminator())
+          for (Value operand : terminator->getOperands())
+            worklist.push_back(operand);
+  }
+  for (Operation *op : closure)
+    if (!domain.cone.count(op)) {
+      domain.offCone.insert(op);
+      domain.cone.insert(op);
+    }
+
+  for (Operation *op : domain.cone) {
+    bool wantsVector = false;
+    for (Value result : op->getResults())
+      wantsVector |= vflow.stateOf(result) == VState::Vector;
+    if (op->getNumResults() == 0)
+      for (Value operand : op->getOperands())
+        wantsVector |= vflow.stateOf(operand) == VState::Vector;
+    if (wantsVector)
+      domain.term.insert(op);
+  }
+  return domain;
 }
 
 void VectorFlowAnalysis::run(triton::FuncOp func) {

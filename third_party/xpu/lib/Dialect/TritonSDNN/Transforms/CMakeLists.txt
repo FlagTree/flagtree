@@ -6,10 +6,14 @@ add_xpu_sdnn_object(TritonSDNNTransforms
   ${CMAKE_CURRENT_SOURCE_DIR}/EWActTable.cpp.o
   ${CMAKE_CURRENT_SOURCE_DIR}/Legalize.cpp.o
   ${CMAKE_CURRENT_SOURCE_DIR}/MergeExternEW.cpp.o
-  ${CMAKE_CURRENT_SOURCE_DIR}/Combine.cpp.o
   ${CMAKE_CURRENT_SOURCE_DIR}/CombinePatterns.cpp.o
   ${CMAKE_CURRENT_SOURCE_DIR}/CombineBefore.cpp.o
   ${CMAKE_CURRENT_SOURCE_DIR}/ResolveLayoutConflict.cpp.o
+  # internal d116bdf4: Combine.cpp removed; new Transforms added
+  ${CMAKE_CURRENT_SOURCE_DIR}/FlattenMxScale.cpp.o
+  ${CMAKE_CURRENT_SOURCE_DIR}/LowerDotScaled.cpp.o
+  ${CMAKE_CURRENT_SOURCE_DIR}/MxTmLayout.cpp.o
+  ${CMAKE_CURRENT_SOURCE_DIR}/WrapFallbackCompute.cpp.o
   ${CMAKE_CURRENT_SOURCE_DIR}/HoistDS.cpp.o
   ${CMAKE_CURRENT_SOURCE_DIR}/TransposeMMA.cpp.o
   ${CMAKE_CURRENT_SOURCE_DIR}/TransposeEW.cpp.o

@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonXPU/Transforms/Passes.h"
 
 #include <climits>
+#include <limits>
 
 #define DEBUG_TYPE "tritonxpu-offset-analysis"
 
@@ -35,6 +36,11 @@ public:
     this->dumpFlag = dumpFlag;
     this->bufferSize = bufferSize;
   }
+
+  // Program ids walked by the offset mock: the physical cluster count, plus a
+  // few tiles picked for the wraps that fall outside that dense range.
+  static constexpr int numMockProgramIds = 12;
+  static constexpr size_t maxExtraProgramIds = 4;
 
   struct MockData {
     Operation *mockOp;
@@ -209,10 +215,120 @@ public:
     }
   }
 
+  // Constant integer behind `v`, either a scalar or a splatted tensor. 0 when
+  // `v` is not a constant.
+  int64_t getConstIntVal(Value v) {
+    auto constOp = v.getDefiningOp<arith::ConstantOp>();
+    if (!constOp)
+      return 0;
+    if (auto splatAttr = dyn_cast<SplatElementsAttr>(constOp.getValue()))
+      return splatAttr.getSplatValue<APInt>().getSExtValue();
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+      return intAttr.getInt();
+    return 0;
+  }
+
+  // True when `v` is the program id itself, up to the casts that may wrap it.
+  // Deliberately not transitive: an index rebuilt from the program id (e.g.
+  // `(pid * tile + lane) / D`) is scaled by a stride of the tensor, not by the
+  // distance between two program ids.
+  bool isProgramId(Value v) {
+    Operation *op = v.getDefiningOp();
+    while (op && isa<arith::IndexCastOp, arith::ExtSIOp, arith::TruncIOp>(op))
+      op = op->getOperand(0).getDefiningOp();
+    return op && isa<triton::GetProgramIdOp>(op);
+  }
+
+  // Linear-index distance between two consecutive program ids: the constant the
+  // program id is scaled by in `pid * tile_size + tl.arange(0, tile_size)`, or
+  // the range width when that multiply is not a constant.
+  int64_t getProgramIdStride(const SetVector<Operation *> &opChain) {
+    int64_t rangeSpan = 0;
+    for (auto *op : opChain) {
+      if (auto rangeOp = dyn_cast<triton::MakeRangeOp>(op))
+        rangeSpan =
+            std::max<int64_t>(rangeSpan, rangeOp.getEnd() - rangeOp.getStart());
+    }
+    for (auto *op : opChain) {
+      auto mulOp = dyn_cast<arith::MulIOp>(op);
+      if (!mulOp)
+        continue;
+      int64_t scale = getConstIntVal(mulOp.getRhs());
+      Value scaled = mulOp.getLhs();
+      if (scale == 0) {
+        scale = getConstIntVal(mulOp.getLhs());
+        scaled = mulOp.getRhs();
+      }
+      if (scale > 0 && isProgramId(scaled))
+        return scale;
+    }
+    return rangeSpan;
+  }
+
+  // Linear-index positions where a multi-dimensional index reconstruction can
+  // break the offset sequence. `i = (idx / D) % C` holds still for D
+  // consecutive indices, so the offsets it feeds can only jump at a multiple of
+  // D -- or of D * C, where the next dimension out advances.
+  SmallVector<int64_t> getWrapPeriods(const SetVector<Operation *> &opChain) {
+    SmallVector<int64_t> periods;
+    for (auto *op : opChain) {
+      if (!isa<arith::DivSIOp, arith::RemSIOp>(op))
+        continue;
+      int64_t modulus = getConstIntVal(op->getOperand(1));
+      if (modulus <= 1)
+        continue;
+      // Divisors already applied to the value this op consumes: the index
+      // reconstruction divides the linear index down one dimension at a time.
+      int64_t divisor = 1;
+      Operation *lhsOp = op->getOperand(0).getDefiningOp();
+      while (auto divOp = dyn_cast_or_null<arith::DivSIOp>(lhsOp)) {
+        int64_t step = getConstIntVal(divOp.getRhs());
+        if (step <= 1)
+          break;
+        divisor *= step;
+        lhsOp = divOp.getLhs().getDefiningOp();
+      }
+      periods.emplace_back(divisor);
+      periods.emplace_back(divisor * modulus);
+    }
+    return periods;
+  }
+
   SmallVector<MockData> getMockDataItems(SetVector<Operation *> opChain) {
-    auto getProgramIdMockVals = []() {
-      SmallVector<int> mockVals(12);
+    // The mocked program ids cover the physical cluster count, so the sampled
+    // linear index only reaches numMockProgramIds * <program id stride>. The
+    // launcher wraps the kernel in a cluster loop, which makes
+    // tt.get_program_id the *logical* tile id, so a wider grid can wrap an
+    // index reconstruction outside that window: every sampled tile then looks
+    // perfectly continuous and the gm2lm burst keeps reading past the wrap
+    // instead of restarting at the row the wrap points at. Sample the tiles
+    // that hold such a wrap too.
+    auto getExtraProgramIdMockVals = [&]() {
+      SmallVector<int> extraVals;
+      int64_t pidStride = getProgramIdStride(opChain);
+      if (pidStride <= 0)
+        return extraVals;
+      // Keep the mocked offsets far away from the int32 the mock walks them in.
+      int64_t maxPeriod = std::numeric_limits<int32_t>::max() / 4;
+      for (int64_t period : getWrapPeriods(opChain)) {
+        if (period <= 0 || period > maxPeriod)
+          continue;
+        int pid = period / pidStride;
+        if (pid < numMockProgramIds || llvm::is_contained(extraVals, pid))
+          continue; // already sampled by the dense range below
+        extraVals.emplace_back(pid);
+        if (extraVals.size() == maxExtraProgramIds)
+          break;
+      }
+      llvm::sort(extraVals);
+      return extraVals;
+    };
+
+    auto getProgramIdMockVals = [&]() {
+      SmallVector<int> mockVals(numMockProgramIds);
       std::iota(mockVals.begin(), mockVals.end(), 0);
+      for (int extraVal : getExtraProgramIdMockVals())
+        mockVals.emplace_back(extraVal);
       return mockVals;
     };
 
@@ -1201,53 +1317,25 @@ public:
           memoryStateTransfer(memoryState, allOffsetStateResult[token]);
     }
 
-    // Step 3.3. Guard Discrete against a wrapping offset chain.
-    // The offsets above are mocked over a small program-id range, so a `remsi`
-    // by a large constant in the chain never wraps during the analysis. A
-    // gather offset such as `(xindex % C) // K` therefore looks like a
-    // well-behaved Discrete access, whose invariant is that every lane of a
-    // core lies within [base, base + numElems) of that core's first lane (see
-    // the multiBank / negative-offset guards in checkOffset).
-    // UnrollControl::findDiscretePtrChain relies on that invariant and rewrites
-    // the gather into a contiguous gm2lm plus `lmPtr[offset - offset0]`. At the
-    // real wrap the offset jumps backwards by C, the LM index goes far out of
-    // range and the kernel traps. Fall back to Unknown so the safe per-element
-    // gather path is used instead.
-    if (memoryState == OffsetState::Discrete &&
-        isa<triton::xpu::GM2LMOp>(memoryOp)) {
-      for (auto *op : opChain) {
-        auto remOp = dyn_cast<arith::RemSIOp>(op);
-        if (!remOp)
-          continue;
-        auto constOp = remOp.getRhs().getDefiningOp<arith::ConstantOp>();
-        if (!constOp)
-          continue;
-        int64_t remConst = 0;
-        if (auto denseAttr =
-                mlir::dyn_cast<DenseElementsAttr>(constOp.getValue())) {
-          if (!denseAttr.isSplat())
-            continue;
-          remConst = denseAttr.getSplatValue<APInt>().getSExtValue();
-        } else if (auto intAttr =
-                       mlir::dyn_cast<IntegerAttr>(constOp.getValue())) {
-          remConst = intAttr.getValue().getSExtValue();
-        } else {
-          continue;
-        }
-        if (remConst > static_cast<int64_t>(numElems)) {
-          fixedStride = -1;
-          rowLen = -1;
-          rowStride = -1;
-          LLVM_DEBUG(llvm::dbgs()
-                     << "[OffsetState]: Detected remsi pattern, override "
-                        "Discrete to Unknown (wrap period "
-                     << remConst << ")\n");
-          return OffsetState::Unknown;
-        }
-      }
-    }
-
-    if (memoryState == OffsetState::Continuous &&
+    // Monkey patch: if memoryState is Continuous/Discrete but the offset chain
+    // contains remsi by a constant, the mock pid range (0-11) may not have
+    // observed the wrap.
+    //   - Continuous: model x % C as LocallyContinuous with an unfixed row
+    //     stride so the lowering splits DMA by the actual pointer sequence at
+    //     wrap boundaries.
+    //   - Discrete: its invariant is that every lane of a core lies within
+    //     [base, base + numElems) of that core's first lane (see checkOffset's
+    //     multiBank / negative-offset guards). At the wrap the sequence jumps
+    //     backwards by C, so the invariant breaks for the tiles the mock never
+    //     visited. UnrollControl::findDiscretePtrChain trusts it and rewrites
+    //     the gather into `contiguous gm2lm + lmPtr[offset - offset0]`, which
+    //     then indexes far outside the LM buffer and traps the kernel
+    //     (err_code -714). Fall back to Unknown so the safe per-element gather
+    //     path is used instead.
+    // Only apply to gm2lm — for lm2gm the LocallyContinuous unfixed-stride
+    // lowering path does not handle all patterns correctly yet.
+    if ((memoryState == OffsetState::Continuous ||
+         memoryState == OffsetState::Discrete) &&
         isa<triton::xpu::GM2LMOp>(memoryOp)) {
       for (auto *op : opChain) {
         if (auto remOp = dyn_cast<arith::RemSIOp>(op)) {
@@ -1260,6 +1348,16 @@ public:
             else if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
               remConst = intAttr.getInt();
             if (remConst > 0 && remConst > (int64_t)numElems) {
+              if (memoryState == OffsetState::Discrete) {
+                fixedStride = INT32_MIN;
+                rowLen = -1;
+                rowStride = -1;
+                LLVM_DEBUG(llvm::dbgs()
+                           << "[OffsetState]: Detected remsi pattern, override "
+                              "Discrete to Unknown (wrap period "
+                           << remConst << ")\n");
+                return OffsetState::Unknown;
+              }
               rowLen = remConst;
               rowStride = -1;
               fixedStride = 1;

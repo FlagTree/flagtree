@@ -119,9 +119,15 @@ public:
     // nothing is left behind either way.)
     tilePlanCheck(mod);
 
+    // The other carrier: what `tritonxpu-tile-decide` concluded before
+    // CoreTiling, resolved here for the same reason -- this is the last slot
+    // before the decision is retaken from the real IR next door, and the keys
+    // must not reach the emitted module either.
+    tileDecisionCheck(mod);
+
     // Cheap by default: the walk below is pure measurement, so it is only worth
     // paying for when someone is reading the report.
-    if (!mlir::triton::tools::getBoolEnv("TRITONXPU_TILE_REPORT"))
+    if (!mlir::triton::tools::getBoolEnvXPU("TRITONXPU_TILE_REPORT"))
       return;
 
     mod.walk([&](triton::xpu::StoreOp storeOp) {
