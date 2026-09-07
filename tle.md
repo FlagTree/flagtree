@@ -365,6 +365,54 @@ def distributed_dot(a, b, c=None):
 
 Open question: what additional distributed primitives are needed?
 
+##### 3.2.4.7 `tle.signal`
+
+`tle.signal` atomically updates a synchronization slot on a remote peer. It only sends a signal; it neither transfers data nor waits for completion on the receiving peer.
+
+```python
+def signal(device_dptr, peer, slot_id, value=None, op="inc",
+          space="intra_node", group_kind="block", context_idx=0):
+    """
+    Atomically update a remote peer's synchronization slot.
+
+    :param device_dptr: distributed communicator handle
+    :param peer: target peer rank (int32 scalar)
+    :param slot_id: signal slot index (uint32 scalar)
+    :param value: optional uint64 scalar; required when op="add", must be omitted otherwise
+    :param op: "inc" to increment by one, "add" to add value
+    :param space: "intra_node", "inter_node", or "world"
+    :param group_kind: "thread", "warp", or "block" (default)
+    :param context_idx: compile-time int selecting a pre-allocated network context
+    """
+    pass
+```
+
+`op="inc"` increments the selected signal slot by one. `op="add"` adds `value` to the selected signal slot; `value` is required in that case and must be omitted otherwise. `space` selects the communication scope (`intra_node`, `inter_node`, or `world`), and `peer` is a rank within that scope. `context_idx` selects a pre-allocated network context.
+
+For `group_kind="block"` (the default), every thread in the CTA must execute this operation convergently; the group collectively emits one remote update.
+
+##### 3.2.4.8 `tle.signal_wait`
+
+`tle.signal_wait` waits until a local synchronization slot reaches its target value.
+
+```python
+def signal_wait(device_dptr, slot_id, wait_kind, target=None,
+               group_kind="block", context_idx=0):
+    """
+    Wait until a local synchronization slot reaches its target.
+
+    :param device_dptr: distributed communicator handle
+    :param slot_id: signal slot index (int32 scalar)
+    :param wait_kind: "signal", "counter", or "shadow"
+    :param target: required for "signal"/"counter", must be omitted for "shadow"
+    :param group_kind: "thread", "warp", or "block" (default)
+    :param context_idx: compile-time int selecting a pre-allocated network context
+    """
+    pass
+```
+
+`wait_kind` selects the waiting mode: `"signal"` waits until the slot value reaches `target`; `"counter"` waits until a counter at the slot reaches `target`; `"shadow"` reads the target from the runtime's locally maintained shadow buffer, so `target` must be omitted. `slot_id` is interpreted in the same signal slot namespace as `tle.signal`. `group_kind` and `context_idx` have the same semantics as in `tle.signal`.
+
 #### 3.2.5 API Reference and Practical Examples
 
 ##### 3.2.5.1 `tle.load`
@@ -609,6 +657,34 @@ next_device = (device_rank + 1) % mesh.shape[1]
 remote_x = tle.remote(x, shard_id=(node_rank, next_device), scope=mesh)
 tle.distributed_barrier(mesh)
 neighbor_vals = tl.load(remote_x)
+```
+
+##### 3.2.5.7 `tle.signal` + `tle.signal_wait`
+
+- `tle.signal`: atomically update a remote peer's synchronization slot without transferring data.
+- `tle.signal_wait`: block until a local slot reaches its target value.
+- Typical use: lightweight cross-device synchronization in pipelined producer/consumer kernels where the full cost of a collective barrier is unnecessary.
+- `wait_kind="signal"` waits for the signal in the slot to reach the target value. `wait_kind="shadow"` reads the target from the runtime's locally maintained shadow buffer, so no explicit `target` is needed.
+
+Example: cross-device one-shot synchronization
+
+```python
+@triton.jit
+def signal_kernel(device_dptr, peer: tl.constexpr):
+    # ... do work ...
+    tle.signal(
+        device_dptr, peer, slot_id=0,
+        op="inc", space="inter_node",
+    )
+
+
+@triton.jit
+def wait_kernel(device_dptr):
+    tle.signal_wait(
+        device_dptr, slot_id=0,
+        wait_kind="signal", target=1,
+    )
+    # ... safe to proceed ...
 ```
 
 ### 3.3 TLE-Struct

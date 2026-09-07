@@ -356,6 +356,54 @@ def distributed_dot(a, b, c=None):
 
 开放问题：还需要哪些分布式原语？
 
+##### 3.2.4.7 `tle.signal`
+
+`tle.signal` 原子更新远端 peer 的同步 slot。该原语仅发送信号，不传输数据，也不在接收端等待完成。
+
+```python
+def signal(device_dptr, peer, slot_id, value=None, op="inc",
+          space="intra_node", group_kind="block", context_idx=0):
+    """
+    原子更新远端 peer 的同步 slot。
+
+    :param device_dptr: 分布式通信器句柄
+    :param peer: 目标 peer rank（int32 标量）
+    :param slot_id: 信号 slot 索引（uint32 标量）
+    :param value: 可选 uint64 标量；op="add" 时必填，其他情况必须省略
+    :param op: "inc" 加一，"add" 加上 value
+    :param space: "intra_node"、"inter_node" 或 "world"
+    :param group_kind: "thread"、"warp" 或 "block"（默认）
+    :param context_idx: 编译期 int，选择预分配的网络上下文
+    """
+    pass
+```
+
+`op="inc"` 将目标信号 slot 加一。`op="add"` 将 `value` 加到目标信号 slot；后者必须提供 `value`，前者必须省略。`space` 选择通信范围（`intra_node`、`inter_node` 或 `world`），`peer` 是该范围内的 rank。`context_idx` 选择预分配的网络上下文。
+
+`group_kind="block"`（默认）时，CTA 内所有线程必须收敛执行该操作；整个 group 集合发出一次远端更新。
+
+##### 3.2.4.8 `tle.signal_wait`
+
+`tle.signal_wait` 等待本地同步 slot 达到目标值。
+
+```python
+def signal_wait(device_dptr, slot_id, wait_kind, target=None,
+               group_kind="block", context_idx=0):
+    """
+    等待本地同步 slot 达到目标值。
+
+    :param device_dptr: 分布式通信器句柄
+    :param slot_id: 信号 slot 索引（int32 标量）
+    :param wait_kind: "signal"、"counter" 或 "shadow"
+    :param target: "signal"/"counter" 时必填，"shadow" 时必须省略
+    :param group_kind: "thread"、"warp" 或 "block"（默认）
+    :param context_idx: 编译期 int，选择预分配的网络上下文
+    """
+    pass
+```
+
+`wait_kind` 选择等待模式：`"signal"` 等待 slot 值达到 `target`；`"counter"` 等待 slot 中的计数器达到 `target`；`"shadow"` 从运行时本地维护的 shadow buffer 读取目标值，因此必须省略 `target`。`slot_id` 与 `tle.signal` 共享同一信号 slot 命名空间。`group_kind` 和 `context_idx` 的语义与 `tle.signal` 一致。
+
 #### 3.2.5 API 说明与实战示例
 
 ##### 3.2.5.1 `tle.load`
@@ -598,6 +646,34 @@ next_device = (device_rank + 1) % mesh.shape[1]
 remote_x = tle.remote(x, shard_id=(node_rank, next_device), scope=mesh)
 tle.distributed_barrier(mesh)
 neighbor_vals = tl.load(remote_x)
+```
+
+##### 3.2.5.7 `tle.signal` + `tle.signal_wait`
+
+- `tle.signal`：原子更新远端 peer 的同步 slot，不传输数据。
+- `tle.signal_wait`：阻塞等待本地 slot 达到目标值。
+- 典型场景：在流水线 producer/consumer kernel 中做轻量级跨设备同步，避免完整 collective barrier 的开销。
+- `wait_kind="signal"` 等待 slot 中的信号达到目标值。`wait_kind="shadow"` 从运行时本地维护的 shadow buffer 读取目标值，无需显式指定 `target`。
+
+示例：跨设备一次性同步
+
+```python
+@triton.jit
+def signal_kernel(device_dptr, peer: tl.constexpr):
+    # ... 执行计算 ...
+    tle.signal(
+        device_dptr, peer, slot_id=0,
+        op="inc", space="inter_node",
+    )
+
+
+@triton.jit
+def wait_kernel(device_dptr):
+    tle.signal_wait(
+        device_dptr, slot_id=0,
+        wait_kind="signal", target=1,
+    )
+    # ... 安全继续 ...
 ```
 
 ### 3.3 TLE-Struct
