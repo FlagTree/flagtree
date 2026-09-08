@@ -158,7 +158,7 @@ jobs:
       - name: Update Latest Baseline
         id: update-latest
         shell: bash
-        if: success() 
+        if: success()
         run: |
           COMMIT_ID="${{ steps.set-commit.outputs.commit_id }}"
           BASELINE_DIR="${{ steps.set-commit.outputs.baseline_dir }}"
