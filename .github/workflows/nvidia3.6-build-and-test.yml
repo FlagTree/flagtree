@@ -82,7 +82,7 @@ jobs:
           echo "Date: $DATE"
 
           COMMIT_ID="${GITHUB_SHA}"
-          BASELINE_DIR="${FLAGGEMS_CI_DIR}/Baseline/$DATE_${COMMIT_ID}"
+          BASELINE_DIR="${FLAGGEMS_CI_DIR}/Baseline/${DATE}_${COMMIT_ID}"
           BASELINE_SUMMARY="${BASELINE_DIR}/summary.json"
           LATEST_DIR="${FLAGGEMS_CI_DIR}/Baseline/latest"
 
@@ -164,6 +164,7 @@ jobs:
         shell: bash
         if: success()
         run: |
+          DATE="${{ steps.set-commit.outputs.date }}"
           COMMIT_ID="${{ steps.set-commit.outputs.commit_id }}"
           BASELINE_DIR="${{ steps.set-commit.outputs.baseline_dir }}"
           BASELINE_SUMMARY="${{ steps.set-commit.outputs.baseline_summary }}"
@@ -180,7 +181,7 @@ jobs:
             cp -raf "$BASELINE_DIR"/* "$LATEST_DIR/" 2>/dev/null || true
 
             # Also copy the commit ID for reference
-            echo "$COMMIT_ID" > "${LATEST_DIR}/commit_id.txt"
+            echo "$DATE : $COMMIT_ID" > "${LATEST_DIR}/commit_id.txt"
 
             echo "✅ Latest baseline updated to commit: $COMMIT_ID"
             echo "📁 Latest baseline location: $LATEST_DIR"
