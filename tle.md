@@ -662,20 +662,17 @@ device_rank = tle.shard_id(mesh, "device")  # 0..3
 ##### 3.2.5.6 `tle.remote` + `tle.distributed_barrier`
 
 - `tle.remote` reads/writes explicit remote shards.
-- `tle.distributed_barrier` creates the phase boundary that makes a remote producer/consumer exchange safe. Select a cluster/sub-mesh or cooperative-grid mode for the local launch, or an explicit FlagCX `space` for a communicator team.
+- `tle.distributed_barrier` synchronizes only the mesh/sub-mesh you pass in.
 
-Example: publish local shared-memory data before reading a peer shard. The second barrier is needed only when either side may reuse or overwrite the storage after the read.
+Example: remote read from neighbor shard (ring-like exchange)
 
 ```python
-# Every participating program writes its local shared-memory shard first.
-tl.store(x + offsets, values)
-tle.distributed_barrier(mesh)  # publish writes before peer reads
-
-remote_x = tle.remote(x, shard_id=peer_shard, scope=mesh)
-neighbor_vals = tl.load(remote_x + offsets)
-
-# No participant reuses `x` until all peer reads are complete.
+node_rank = tle.shard_id(mesh, "node")
+device_rank = tle.shard_id(mesh, "device")
+next_device = (device_rank + 1) % mesh.shape[1]
+remote_x = tle.remote(x, shard_id=(node_rank, next_device), scope=mesh)
 tle.distributed_barrier(mesh)
+neighbor_vals = tl.load(remote_x)
 ```
 
 ### 3.3 TLE-Struct

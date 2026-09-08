@@ -651,20 +651,17 @@ device_rank = tle.shard_id(mesh, "device")  # 0..3
 ##### 3.2.5.6 `tle.remote` + `tle.distributed_barrier`
 
 - `tle.remote`：显式读取/写入远端分片。
-- `tle.distributed_barrier`：为远端 producer/consumer 交换建立阶段边界。局部启动可选择 cluster/sub-mesh 或 cooperative-grid 模式；通信组同步则使用显式 FlagCX `space`。
+- `tle.distributed_barrier`：仅同步传入 mesh/sub-mesh 对应的设备集合。
 
-示例：先发布本地 shared-memory 数据，再读取 peer shard。只有在读取后任一方可能复用或覆写该存储时，才需要第二次 barrier。
+示例：读取相邻 shard（ring 风格交换）
 
 ```python
-# 每个参与 program 先写入自己的 shared-memory shard。
-tl.store(x + offsets, values)
-tle.distributed_barrier(mesh)  # 发布写入，随后 peer 才可读取
-
-remote_x = tle.remote(x, shard_id=peer_shard, scope=mesh)
-neighbor_vals = tl.load(remote_x + offsets)
-
-# 所有 peer 读取完成前，任何参与者都不能复用 `x`。
+node_rank = tle.shard_id(mesh, "node")
+device_rank = tle.shard_id(mesh, "device")
+next_device = (device_rank + 1) % mesh.shape[1]
+remote_x = tle.remote(x, shard_id=(node_rank, next_device), scope=mesh)
 tle.distributed_barrier(mesh)
+neighbor_vals = tl.load(remote_x)
 ```
 
 ### 3.3 TLE-Struct
