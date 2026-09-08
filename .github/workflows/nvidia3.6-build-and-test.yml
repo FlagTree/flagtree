@@ -77,8 +77,12 @@ jobs:
         id: set-commit
         shell: bash
         run: |
+          DATE=$(date +'%Y%m%d_%H%M%S')
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "Date: $DATE"
+
           COMMIT_ID="${GITHUB_SHA}"
-          BASELINE_DIR="${FLAGGEMS_CI_DIR}/Baseline/${COMMIT_ID}"
+          BASELINE_DIR="${FLAGGEMS_CI_DIR}/Baseline/$DATE_${COMMIT_ID}"
           BASELINE_SUMMARY="${BASELINE_DIR}/summary.json"
           LATEST_DIR="${FLAGGEMS_CI_DIR}/Baseline/latest"
 
@@ -110,7 +114,7 @@ jobs:
         uses: flagos-ai/FlagTree/.github/actions/cleanup-flagtree-env@main
         if: success()
 
-      # Step 5: Build FlagTree
+      # Step 5: Install FlagTree
       - name: Install FlagTree
         id: install-flagtree
         shell: bash
@@ -149,7 +153,7 @@ jobs:
           flaggems-path: ${{ env.FLAGGEMS_CI_DIR }}/FlagGems
           gpus: ${{ steps.setup.outputs.gpus }}
           output-base-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline'
-          output-subdir: '${{ steps.set-commit.outputs.commit_id }}'
+          output-subdir: '${{ steps.set-commit.outputs.date }}_${{ steps.set-commit.outputs.commit_id }}'
           run-script: 'tools/ci/ci_run_tests.py'
           skip-file: 'tools/ci/skip_list.yaml'
           first-parameter-only: 'true'
@@ -365,7 +369,7 @@ jobs:
 
       - name: Compare with Latest Baseline
         if: ${{ steps.check_backend.outputs.should_skip != 'true' && github.event_name == 'pull_request' }}
-        uses: flagos-ai/FlagTree/.github/actions/compare-flaggems-test@main
+        uses: ./.github/actions/compare-flaggems-test
         with:
           baseline-dir: ${{ env.FLAGGEMS_CI_DIR }}/Baseline/latest
           candidate-dir: ${{ steps.run-flaggems-test.outputs.test-output-dir }}
