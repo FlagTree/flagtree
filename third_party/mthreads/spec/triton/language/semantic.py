@@ -1570,7 +1570,7 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(dot_cap.diag or f"tl.dot: {lhs.dtype} x {rhs.dtype} is not supported on this product")
             if not dot_cap.native:
                 warnings.warn(dot_cap.diag or f"tl.dot: {lhs.dtype} x {rhs.dtype} is not native on this "
-                              "product: emulated path (native=false)")
+                              "product: non-native path (native=false)")
         min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
         assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
             and rhs.shape[-1].value >= min_dot_size[1], \
@@ -1679,7 +1679,7 @@ class TritonSemantic(Generic[TensorTy]):
                                  or f"tl.dot_scaled: {lhs_format} x {rhs_format} is not supported on this product")
             if not scaled_cap.native:
                 warnings.warn(scaled_cap.diag or f"tl.dot_scaled: {lhs_format} x {rhs_format} is not native "
-                              "on this product: decomposed to an emulated path (native=false)")
+                              "on this product: decomposed to a non-native path (native=false)")
         rhs_scale_is_none = rhs_scale is None or (isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None)
         lhs_scale_is_none = lhs_scale is None or (isinstance(lhs_scale, tl.constexpr) and lhs_scale.value is None)
         lhs = self._bitcast_to_fp_type(lhs, lhs_format)

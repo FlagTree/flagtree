@@ -11,7 +11,7 @@ In doing so, you will learn about:
 * Casting to and from FP8 with satfinite saturation and strict RTNE/RTZ rounding,
   which works even on products without native FP8 cvt instructions (software cast).
 
-* FP8 matmul: native where declared, otherwise a preserved emulation path that
+* FP8 matmul: native where declared, otherwise a preserved non-native path that
   warns at compile time and is declared native=false.
 
 """
@@ -114,8 +114,8 @@ else:
     print("E4M3FN cast is not declared on this product -- skipping (as declared)")
 
 # %%
-# FP8 Matmul and the Emulation Warning
-# ------------------------------------
+# FP8 Matmul and the Non-Native Warning
+# -------------------------------------
 # `tl.dot` legality is resolved by the backend's capability rules. Products with
 # native FP8 matrix cores run it natively; products that keep the legacy
 # FP16-promotion path still execute it, but emit a compile-time warning and

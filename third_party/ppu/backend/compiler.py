@@ -98,7 +98,7 @@ def _product_name(capability: int) -> str:
 
 def _make_resolve_dot(capability: int):
     """resolve_dot rule: INT8xINT8->INT32 is native; FP8 dot is native
-    from cap89, and a preserved FP16-promotion path (EMULATED) below;
+    from cap89, and a preserved FP16-promotion path (NON_NATIVE) below;
     every other combination is a compile-time error."""
     product = _product_name(capability)
 
@@ -108,8 +108,8 @@ def _make_resolve_dot(capability: int):
         if a_dtype in _FP8_DOT_DTYPES and b_dtype in _FP8_DOT_DTYPES:
             if capability >= 89:
                 return DotCap(DotSupport.NATIVE)
-            return DotCap(DotSupport.EMULATED, diag=f"FP8 dot on {product} is not native: "
-                          "emulated via FP16 promotion (native=false)")
+            return DotCap(DotSupport.NON_NATIVE, diag=f"FP8 dot on {product} is not native: "
+                          "non-native FP16 promotion path (native=false)")
         if a_dtype == b_dtype and a_dtype in _NATIVE_SAME_TYPE_DOT_DTYPES:
             return DotCap(DotSupport.NATIVE)
         return DotCap(
@@ -122,14 +122,14 @@ def _make_resolve_dot(capability: int):
 def _make_resolve_dot_scaled(capability: int):
     """resolve_dot_scaled rule: cap89 has a native scaled-MMA path for
     mxfp4; everything else decomposes to a promoted fp16/bf16 dot and is
-    declared EMULATED with a compile-time warning."""
+    declared NON_NATIVE with a compile-time warning."""
     product = _product_name(capability)
 
     def resolve_dot_scaled(lhs_format, rhs_format):
         if capability >= 89 and "e2m1" in (lhs_format, rhs_format):
             return DotCap(DotSupport.NATIVE)
         return DotCap(
-            DotSupport.EMULATED, diag=f"tl.dot_scaled ({lhs_format} x {rhs_format}) on {product} is not native: "
+            DotSupport.NON_NATIVE, diag=f"tl.dot_scaled ({lhs_format} x {rhs_format}) on {product} is not native: "
             "decomposed to a promoted fp16/bf16 dot (native=false)")
 
     return resolve_dot_scaled

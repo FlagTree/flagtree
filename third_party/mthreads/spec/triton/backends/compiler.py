@@ -17,7 +17,7 @@ class GPUTarget(object):
 class DotSupport(Enum):
     """How a backend supports a dot dtype/format combination."""
     NATIVE = "native"
-    EMULATED = "emulated"
+    NON_NATIVE = "non-native"
     UNSUPPORTED = "unsupported"
 
 
@@ -26,7 +26,7 @@ class DotCap:
     """Answer to a backend `resolve_dot(a_dtype, b_dtype, acc_dtype, M, N, K)` /
     `resolve_dot_scaled(lhs_format, rhs_format)` codegen-function query: the
     semantic layer rejects UNSUPPORTED combinations with `diag` as the error
-    message and emits `diag` as a compile-time warning for EMULATED ones."""
+    message and emits `diag` as a compile-time warning for NON_NATIVE ones."""
     support: DotSupport
     diag: Optional[str] = None
 

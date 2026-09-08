@@ -58,7 +58,7 @@ def _make_resolve_dot(capability: int):
     """resolve_dot rule: INT8xINT8->INT32 is native; same-type FP8 dot with an
     fp32 accumulator is native from cap31 when the shape hits an instruction
     tile; mixed fp8 and instruction-shape misses keep the preserved FMA
-    fallback (EMULATED); every other combination is a compile-time error."""
+    fallback (NON_NATIVE); every other combination is a compile-time error."""
     product = _product_name(capability)
 
     def resolve_dot(a_dtype, b_dtype, acc_dtype, M, N, K):
@@ -76,8 +76,8 @@ def _make_resolve_dot(capability: int):
             else:
                 reason = f"shape {M}x{N}x{K} misses the 8-bit instruction tiles"
             return DotCap(
-                DotSupport.EMULATED, diag=f"FP8 dot on {product} is not native ({reason}): "
-                "emulated via the FMA software path (native=false)")
+                DotSupport.NON_NATIVE, diag=f"FP8 dot on {product} is not native ({reason}): "
+                "non-native FMA software path (native=false)")
         if a_dtype == b_dtype and a_dtype in _NATIVE_SAME_TYPE_DOT_DTYPES:
             return DotCap(DotSupport.NATIVE)
         return DotCap(
@@ -90,12 +90,12 @@ def _make_resolve_dot(capability: int):
 def _make_resolve_dot_scaled(capability: int):
     """resolve_dot_scaled rule: no MUSA capability has a native scaled-MMA
     path; every format combination decomposes to a promoted fp16/bf16 dot
-    and is declared EMULATED with a compile-time warning."""
+    and is declared NON_NATIVE with a compile-time warning."""
     product = _product_name(capability)
 
     def resolve_dot_scaled(lhs_format, rhs_format):
         return DotCap(
-            DotSupport.EMULATED, diag=f"tl.dot_scaled ({lhs_format} x {rhs_format}) on {product} is not native: "
+            DotSupport.NON_NATIVE, diag=f"tl.dot_scaled ({lhs_format} x {rhs_format}) on {product} is not native: "
             "decomposed to a promoted fp16/bf16 dot (native=false)")
 
     return resolve_dot_scaled

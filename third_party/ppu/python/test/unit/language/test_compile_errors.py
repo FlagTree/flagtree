@@ -364,7 +364,7 @@ def test_fp8_support(fresh_triton_cache, dtype):
         if cc >= (8, 9):
             supported_dtypes.append(tl.float8e4nv)
         elif is_ppu() and cc >= (8, 0):
-            # On PPU cap80-88, fp8e4nv compiles but tl.dot is emulated via FP16 promotion
+            # On PPU cap80-88, fp8e4nv compiles but tl.dot takes the non-native FP16 promotion path
             supported_dtypes.append(tl.float8e4nv)
             warning_dtypes.append(tl.float8e4nv)
     elif is_hip():
@@ -379,7 +379,7 @@ def test_fp8_support(fresh_triton_cache, dtype):
 
     if dtype in warning_dtypes:
         if dtype == tl.float8e4nv:
-            ctx = pytest.warns(UserWarning, match=r"emulated via FP16 promotion")
+            ctx = pytest.warns(UserWarning, match=r"non-native FP16 promotion path")
         elif is_cuda() or is_ppu():
             ctx = pytest.warns(UserWarning,
                                match=r"the use of fp8e4b15 is deprecated on Hopper and later architectures")
