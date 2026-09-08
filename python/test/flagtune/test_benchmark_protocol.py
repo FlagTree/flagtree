@@ -67,9 +67,7 @@ def test_cudagraph_helper_waits_for_caller_stream(use_default_stream):
 
     buf = torch.ones(1024, device="cuda")
     torch.cuda.synchronize()
-    caller_stream = (
-        torch.cuda.default_stream() if use_default_stream else torch.cuda.Stream()
-    )
+    caller_stream = (torch.cuda.default_stream() if use_default_stream else torch.cuda.Stream())
     with torch.cuda.stream(caller_stream):
         torch.cuda._sleep(100_000_000)
         prior_read = buf.clone()
