@@ -75,7 +75,7 @@ jobs:
         uses: flagos-ai/FlagTree/.github/actions/clear-cache-if-labeled@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          backend: hcu3.6
+          backend: hcu-qwen3.6
 
       - name: Start the service
         if: ${{ steps.check_backend.outputs.should_skip != 'true' }}

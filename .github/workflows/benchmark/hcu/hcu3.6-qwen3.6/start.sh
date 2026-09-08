@@ -53,7 +53,7 @@ nohup vllm serve ./Qwen3.6-27B/  \
     --tensor-parallel-size 2 \
     --port 8000  \
     --served-model-name qwen36 \
-    --gpu-memory-utilization 0.7 \
+    --gpu-memory-utilization 0.8 \
     --trust-remote-code \
     --dtype bfloat16 2>&1 >vllm.log &
 echo "$!" >pid.txt

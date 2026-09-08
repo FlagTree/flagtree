@@ -1,6 +1,3 @@
-bw1000 * 2
-harbor.baai.ac.cn/plugin/hygon-dtk26.04-tree0.6.0hcu3.6-triton3.6.0-cxnone-plugin0.3.0-vllm0.24.0-cp310-pt2100-x64:202609041747
-Driver Version:
 vllm==0.24+empty
 torch==2.10.0
 
