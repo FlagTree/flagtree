@@ -49,6 +49,7 @@ from urllib.request import Request
 
 from triton.flagtune.contract.archive import parse_model_version, validate_model_version
 from triton.flagtune.contract.identity import validate_platform_key
+from triton.flagtune.runtime.errors import ModelSourceError
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class RemotePackage:
     sha256: str
 
 
-class ManifestContractError(RuntimeError):
+class ManifestContractError(ModelSourceError):
     """Reject a Manifest that violates schema 1."""
 
 
