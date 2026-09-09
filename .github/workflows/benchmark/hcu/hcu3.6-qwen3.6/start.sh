@@ -41,7 +41,6 @@ if [[ -f "$PID_FILE" ]]; then
         fi
     fi
 fi
-
 bash "${SCRIPT_DIR}/clear_vllm_process.sh"
 
 start=$(date +%s)

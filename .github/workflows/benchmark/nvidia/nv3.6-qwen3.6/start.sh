@@ -88,8 +88,8 @@ for ((i=1; i<=max_retry; i++)); do
     minutes=$((duration / 60))
     seconds=$((duration % 60))
     echo "[INFO] Service startup elapsed time: ${minutes}m${seconds}s"
-    if (( i > max_retry )); then
-        echo "[FATAL] Detection failed! maximum retry count reached: ${max_retry}"
-        exit 1
-    fi
 done
+if (( i > max_retry )); then
+    echo "[FATAL] Detection failed! maximum retry count reached: ${max_retry}"
+    exit 1
+fi
