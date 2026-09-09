@@ -1,5 +1,7 @@
-vllm==0.24+empty
-torch==2.10.0
+bw1000 * 2
+harbor.baai.ac.cn/flagtree/flagtree-hcu-py310-torch2.10.0-ubuntu22.04:202608-3.6-vllm0.24.0
+vllm==0.24.0+empty
+torch==2.10.0+das.opt1.dtk2604.20260325.g6b060a
 
 [2026/09/07] vllm-plugin-fl==0.3.0rc1.post1 (2026/09/04), flag_gems==5.3.2 (2026/07/29), flagtree===0.6.2a1+hcu3.6 (2026/09/01)
 # 服务冷启动时间: 8分31秒, 服务热启动时间: 4分11秒
