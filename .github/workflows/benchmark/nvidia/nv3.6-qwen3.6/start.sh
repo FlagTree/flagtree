@@ -51,7 +51,7 @@ export USE_FLAGGEMS=1
 numactl --cpunodebind=1 --membind=1 \
 nohup vllm serve ./Qwen3.6-27B/  \
     --tensor-parallel-size 2 \
-    --port 8000  \
+    --port "${VLLM_QWEN3_PORT}" \
     --served-model-name qwen36 \
     --max-model-len 65536 \
     --trust-remote-code \

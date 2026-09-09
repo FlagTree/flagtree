@@ -50,7 +50,7 @@ export VLLM_CONFIGURE_LOGGING=1
 
 nohup vllm serve ./Qwen3.6-27B/  \
     --tensor-parallel-size 2 \
-    --port 8000  \
+    --port "${VLLM_QWEN3_PORT}" \
     --served-model-name qwen36 \
     --gpu-memory-utilization 0.8 \
     --trust-remote-code \

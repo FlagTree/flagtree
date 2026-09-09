@@ -49,7 +49,7 @@ export VLLM_PLUGINS=fl
 
 nohup vllm serve ./Qwen3.6-27B/  \
     --tensor-parallel-size 2 \
-    --port 8000  \
+    --port "${VLLM_QWEN3_PORT}" \
     --served-model-name qwen36 \
     --max-model-len 32768 \
     --trust-remote-code \
