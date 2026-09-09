@@ -1,5 +1,3 @@
-#!/bin/bash
-
 # Copyright 2025-     FlagOS Contributors
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -20,9 +18,4 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-
-source ~/env.sh
-source "${SCRIPT_DIR}/disable_local_proxy.sh"
-
-curl "http://127.0.0.1:${VLLM_QWEN3_PORT}/v1/models"
+export no_proxy="127.0.0.1,localhost,::1"
