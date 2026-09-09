@@ -318,3 +318,31 @@ class gather_mask:
             out[1].shape) == 1 and out[1].numel.value == 8, ("gather_mask count output must be int32[8]")
         self.symbol = "custom_gather_mask_float"
         self.bitcode = CUSTOM_OPS_BITCODE
+
+
+@al.register_custom_op
+class cast_int4_to_fp16:
+    """Unpack signed INT4 values from a 1D uint8 UB tensor into FP16.
+
+    src: uint8[N] in UB, N a power of two from 32 through 8192 bytes.
+    Required out: float16[2*N] in UB. Each source byte encodes two signed
+    two's-complement values in [-8, 7]; the low nibble is emitted first.
+    All output elements are defined. No zero-point, scale or layout
+    conversion is applied. Inputs and outputs must be contiguous,
+    32-byte aligned and disjoint. GM accesses stay in the caller.
+    """
+
+    core = al.CORE.VECTOR
+    pipe = al.PIPE.PIPE_V
+    mode = al.MODE.SIMD
+
+    def __init__(self, src, out=None):
+        assert out is not None, "cast_int4_to_fp16 requires an output buffer"
+        assert src.dtype == tl.uint8 and len(src.shape) == 1, ("cast_int4_to_fp16 requires a 1D uint8 UB source")
+        size = src.numel.value
+        assert size in (32, 64, 128, 256, 512, 1024, 2048, 4096,
+                        8192), ("cast_int4_to_fp16 requires a power-of-two byte count in [32, 8192]")
+        assert out.dtype == tl.float16 and len(out.shape) == 1 and out.numel.value == 2 * size, (
+            "cast_int4_to_fp16 requires a 1D float16 output with twice the source element count")
+        self.symbol = "custom_cast_int4_to_fp16"
+        self.bitcode = CUSTOM_OPS_BITCODE

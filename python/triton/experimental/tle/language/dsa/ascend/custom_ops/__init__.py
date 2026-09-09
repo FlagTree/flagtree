@@ -15,6 +15,7 @@ from .registry import (
     unpack_sort,
     compare_scalar,
     gather_mask,
+    cast_int4_to_fp16,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "unpack_sort",
     "compare_scalar",
     "gather_mask",
+    "cast_int4_to_fp16",
 ]

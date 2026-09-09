@@ -37,9 +37,10 @@ set(ASCEND_CUSTOM_OPS
   "sort_ops/unpack_sort.cpp::dav-c220-vec"
   "mask_ops/compare_scalar.cpp::dav-c220-vec"
   "mask_ops/gather_mask.cpp::dav-c220-vec"
+  "cast_ops/cast_int4_to_fp16.cpp::dav-c220-vec"
 )
 
-# The mask primitives wrap the AscendC APIs. This cache variable can also
+# The mask and cast primitives wrap the AscendC APIs. This cache variable can also
 # be supplied explicitly for non-standard CANN installations.
 find_path(ASCENDC_INCLUDE_DIR kernel_operator.h
   HINTS "$ENV{ASCEND_HOME_PATH}" "${CCEC_BIN_DIR}/.."
@@ -61,6 +62,8 @@ foreach(entry IN LISTS ASCEND_CUSTOM_OPS)
   set(op_include_flags -I "${TEMPLATE_INCLUDE}")
   if(src MATCHES "^mask_ops/")
     list(APPEND op_deps "${ASCEND_CUSTOM_OPS_DIR}/mask_ops/mask_common.h")
+  endif()
+  if(src MATCHES "^(mask_ops|cast_ops)/")
     list(APPEND op_include_flags
       -I "${ASCENDC_INCLUDE_DIR}"
       -I "${ASCENDC_INCLUDE_DIR}/interface"

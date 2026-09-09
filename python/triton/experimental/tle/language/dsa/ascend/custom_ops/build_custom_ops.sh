@@ -40,6 +40,7 @@ CUSTOM_OPS=(
   "sort_ops/unpack_sort.cpp:dav-c220-vec"
   "mask_ops/compare_scalar.cpp:dav-c220-vec"
   "mask_ops/gather_mask.cpp:dav-c220-vec"
+  "cast_ops/cast_int4_to_fp16.cpp:dav-c220-vec"
 )
 
 if [[ ! -d "${TEMPLATE_INCLUDE}" ]]; then
@@ -47,7 +48,7 @@ if [[ ! -d "${TEMPLATE_INCLUDE}" ]]; then
   exit 1
 fi
 
-# AscendC headers used by the two mask primitives. Allow an explicit path
+# AscendC headers used by the mask and cast primitives. Allow an explicit path
 # for CANN layouts that differ from the standard toolkit installation.
 CANN_ROOT="${ASCEND_HOME_PATH:-${CCEC_BIN_DIR}/..}"
 ASCENDC_INCLUDE_DIR="${ASCENDC_INCLUDE_DIR:-${CANN_ROOT}/$(uname -m)-linux/tikcpp/tikcfw}"
@@ -70,7 +71,7 @@ for entry in "${CUSTOM_OPS[@]}"; do
     --cce-aicore-arch="${arch}" --cce-enable-print
     --cce-enable-sanitizer -std=c++17 -I "${TEMPLATE_INCLUDE}" )
 
-  if [[ "${src}" == mask_ops/* ]]; then
+  if [[ "${src}" == mask_ops/* || "${src}" == cast_ops/* ]]; then
     CCEC_COMMON_ARGS+=( -I "${ASCENDC_INCLUDE_DIR}"
       -I "${ASCENDC_INCLUDE_DIR}/interface" -I "${ASCENDC_INCLUDE_DIR}/impl" )
   fi

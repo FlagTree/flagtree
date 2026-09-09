@@ -13,6 +13,8 @@ custom_ops/
 ├── mem_ops/
 │   ├── gather_gm_to_l1.cpp         # GM → L1/CBUF 按索引行 gather
 │   └── gather_gm_to_ub.cpp         # GM → UB 按索引行 gather
+├── cast_ops/
+│   └── cast_int4_to_fp16.cpp       # packed signed INT4 → FP16
 ├── mask_ops/
 │   ├── compare_scalar.cpp         # FP32 标量相等比较 → uint16 位掩码
 │   ├── gather_mask.cpp            # 按位掩码稳定压紧，并返回数量
@@ -264,3 +266,26 @@ tl.store(Out + tl.arange(0, N), selected, tl.arange(0, N) < found)
 构建时使用 CANN 的 AscendC 头文件，非标准安装可通过 CMake
 `-DASCENDC_INCLUDE_DIR=...` 或手动脚本的同名环境变量指定 `tikcfw` 目录。
 正确性测试：`python3 python/tutorials/tle/custom/test_mask_ops.py`。
+
+
+## cast_int4_to_fp16
+
+将 UB 中的 packed signed INT4 解包为 FP16，只封装 AscendC `Cast`。
+输入 `src` 是一维 `uint8[N]`，N 为 32 至 8192 的 2 的幂；输出 `out`
+必须是一维 `float16[2*N]`。输入、输出连续、32 字节对齐且互不重叠。
+每个字节先输出低 4 位，再输出高 4 位，均按二进制补码解释为 [-8, 7]。
+例如 `0x78` 输出 `[-8, 7]`，`0xF0` 输出 `[0, -1]`。
+
+```python
+packed = tl.load(X + tl.arange(0, N))  # uint8[N]
+values = tl.full((2 * N,), 0, tl.float16)
+values = tle.dsa.ascend.raw("cast_int4_to_fp16", packed, out=values)
+```
+
+该接口不处理 uint4b8 的零点、不乘 scale、不进行 GM 访问或 MoE 调度。
+若源格式是 uint4b8，需要调用方先转换成这里约定的 signed INT4 编码。
+普通类型转换、广播与乘法可以继续由 Triton 表达。
+
+普通及 mix 两套入口均构建到现有 `custom_ops.bc`。测试入口为
+`python python/tutorials/tle/custom/test_cast_ops.py`，也已接入
+`test_custom_ops.py`。测试包含全部字节编码、不同块大小、图重放以及参数校验。
