@@ -69,10 +69,13 @@ class FlagtreeConfigs:
         backends = list(self.default_backends)
         _backends = [backend for backend in backends if os.environ.get(f"USE_{backend.upper()}", "ON").upper() != "OFF"]
         self.default_backends = tuple(_backends)
+        self.current_backend = self.flagtree_backend
         self.flagtree_submodule_dir = os.path.join(self.flagtree_root_dir, "third_party")
         self.activated_module = self._activate_device_module()
         if self.flagtree_backend == "tsingmicro":
             self.default_backends = self.default_backends + ("flir", )
+        if self.flagtree_backend == "amd":
+            self.flagtree_backend = None
 
     def _activate_device_module(self, suffix=".py"):
         backend = self.flagtree_backend or "default"
