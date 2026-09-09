@@ -366,6 +366,18 @@ node 路径面向跨节点点对点传输，数据面基于 FlagCX 注册内存�
 - Host 侧必须先用 `tle.create_dist_tensor(comm_buf)` 把通信 buffer 注册到 FlagCX 对称内存窗口，返回的 `DistributedRtContext` 作为 kernel 参数传入；device 间 scatter 与 node 间 P2P 可共用同一注册窗口。本地侧使用的 buffer 必须是该 context 所注册的同一个 buffer，并作为全局指针参数直接传给 kernel。
 - `dtype` 必填；**不支持 `offset` 参数**——偏移要加在返回的指针上。
 - 传输形状受限：标量拷贝一次传一个元素；tensor 拷贝两侧必须复用同一个连续区间 `tl.arange(0, N)`，mask 只支持无 mask 或复用同一个共享前缀 mask `offsets < valid_n`（`1 <= valid_n <= N`）。
+- 单次传输的数据量受编译器 tensor 大小限制：一次传输的元素个数 N 必须是 2 的幂且不超过 `1048576`（2^20），超出会在编译期直接报错。要传输更多数据，需要把数据拆成多块，用循环多次调用 load/store，每次传输一块：
+
+```python
+for start in range(0, nelems, CHUNK_N):           # 每次循环传输一块
+    chunk_n = tl.minimum(nelems - start, CHUNK_N) # 最后一块可能不满 CHUNK_N
+    offsets = tl.arange(0, CHUNK_N)               # CHUNK_N 为 2 的幂且 <= 1048576
+    mask = offsets < chunk_n                      # 必须写成 arange 结果 < 标量
+    vals = tl.load(comm_buf + src_offset + start + offsets, mask=mask)
+    tl.store(remote_dst + dst_offset + start + offsets, vals, mask=mask)
+```
+
+  循环时需要注意：mask 必须写成 `offsets < 标量` 的形式——`offsets` 就是 `tl.arange` 的结果本身，不要写成 `start + offsets < nelems` 这类表达式，否则编译失败；标量可以是运行期计算的值（如上面用 `tl.minimum` 处理最后不满的一块）。
 - load 的结果必须直接且仅供配对的 store 使用；二者必须位于同一 basic block，load 在前、store 在后，期间不能插入访存、原子操作、barrier 或其他通信操作；并且恰好一侧使用 node remote pointer。
 - 不支持稀疏访问、多维 tiled load/store、strided 访问、非零起点区间、两侧范围不一致——编译期直接拒绝，动态违规则触发 device assert。
 - `coopkind` 支持 `thread` / `warp` / `block`，默认 `block`（整个 CTA 收敛地发出一次传输）；`netidx` 为网络 context 索引，编译期整数必须在 `[0, 4)`，运行时值必须是标量 `tl.int32`。
