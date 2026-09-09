@@ -693,8 +693,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
 
+      // Triton 3.8: triton/pull/11223
       Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
-                             multicastMask, cacheMod);
+                             multicastMask, cacheMod, op.getIsVolatile());
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -1887,10 +1888,18 @@ struct AtomicRMWOpConversion
           !enableIntraWaveReduce;
       numElems = tensorTy.getNumElements();
 
+      // Ops without an axis-info visitor, such as tle.local_pointers, yield a
+      // rank-0 entry that cannot be indexed. The contiguity only refines the
+      // intra-wave reduce decision, so leave that disabled instead.
       auto threadOrder = getThreadOrder(tensorTy);
-      unsigned contigWithinLanes =
-          axisAnalysisPass.getAxisInfo(ptr)->getContiguity(threadOrder.front());
-      enableIntraWaveReduce &= contigWithinLanes == 1;
+      auto *ptrAxisInfo = axisAnalysisPass.getAxisInfo(ptr);
+      if (!ptrAxisInfo || ptrAxisInfo->getRank() == 0 || threadOrder.empty()) {
+        enableIntraWaveReduce = false;
+      } else {
+        unsigned contigWithinLanes =
+            ptrAxisInfo->getContiguity(threadOrder.front());
+        enableIntraWaveReduce &= contigWithinLanes == 1;
+      }
     }
 
     auto vecTy = vec_ty(valueElemTy, vec);

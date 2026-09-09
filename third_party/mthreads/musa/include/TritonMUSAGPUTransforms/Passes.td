@@ -10,8 +10,8 @@ def TritonMUSAGPUPipeline
     Run the MUSA backend-local software pipeliner:
     lower and expand scheduled loops, classify SQMMA accumulator pipelines
     under MUSA-specific async/wait semantics, schedule generic async waits,
-    and pipeline TMA stores without routing through the public NVIDIA-only
-    post-expand hooks.
+    and pipeline TME stores without routing through the public NVIDIA-only
+    descriptor post-expand hooks.
   }];
   let dependentDialects = [
     "mlir::arith::ArithDialect",
@@ -102,21 +102,6 @@ def TritonMUSAGPUFinalizeBarriers
   ];
 }
 
-def TritonMUSAGPUOptimizeSqmmaAccumulatorLayout
-    : Pass<"tritonmusa-optimize-sqmma-accumulator-layout", "mlir::ModuleOp"> {
-  let summary = "Sink post-TME SQMMA accumulator layout conversions";
-  let description = [{
-    Canonicalize loop-carried SQMMA accumulator convert_layout chains that are
-    introduced by descriptor/TME lowering so accumulators stay in MMA layout
-    through the loop when legal.
-  }];
-  let dependentDialects = [
-    "mlir::triton::TritonDialect",
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::musa::MUSADialect"
-  ];
-}
-
 def TritonMUSAGPUCanonicalizeSqmmaResultConversions
     : Pass<"tritonmusa-canonicalize-sqmma-result-conversions", "mlir::ModuleOp"> {
   let summary = "Canonicalize SQMMA result convert/trunc chains";
@@ -187,6 +172,10 @@ def TritonMUSAGPUMarkInplaceLoads
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::TritonGPUDialect"
+  ];
+  let options = [
+    Option<"inplaceAliasPairs", "inplace-alias-pairs", "std::string",
+           "\"\"", "runtime pointer alias pairs">
   ];
 }
 

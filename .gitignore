@@ -12,6 +12,7 @@ python/dist/
 python/_deps/
 python/triton*.egg-info/
 python/triton_kernels/triton*.egg-info/
+python/flagtree*.egg-info/
 
 python/triton/_C/*.pyd
 python/triton/_C/*.so
@@ -20,7 +21,6 @@ python/triton/_C/*.pdb
 python/triton/_C/*.exe
 python/triton/_C/*.ilk
 python/triton/FileCheck
-python/triton/FLAGTREE_BACKEND
 
 third_party/mthreads/python/triton/_C/*.so
 third_party/mthreads/python/triton/FileCheck
@@ -134,3 +134,11 @@ third_party/mthreads/backend/bin/
 third_party/xpu.bak/
 third_party/xpu/backend/xpu3/
 .comate/
+
+# tsingmicro backend build artifacts and runtime logs
+python/lib/
+third_party/tsingmicro/backend/bin/
+third_party/tsingmicro/backend/lib/
+third_party/flir
+tsingmicro_launch.log
+python/tsingmicro_launch.log

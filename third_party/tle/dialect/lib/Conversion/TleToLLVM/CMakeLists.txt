@@ -4,17 +4,20 @@ set(TLE_TO_LLVM_SRC
     ExclusiveCumsumOpToLLVM.cpp
     ExtractOpToLLVM.cpp
     LocalPointersOpToLLVM.cpp
+    NodeTransferOpToLLVM.cpp
     PackOpToLLVM.cpp
     RemotePointerUtils.cpp
+    SignalOpToLLVM.cpp
     TMAStoreCommitGroupOpToLLVM.cpp
     ViewOpToLLVM.cpp
     WGMMAFenceOpToLLVM.cpp
 )
 
+
 if(FLAGCX_ENABLED)
- list(APPEND TLE_TO_LLVM_SRC
+add_subdirectory(FlagCxOpToLLVM)
+list(APPEND TLE_TO_LLVM_SRC
   GetDeviceIdToFlagCX.cpp
-  GetLocalRankOpToLLVM.cpp
 )
 endif()
 
@@ -23,7 +26,11 @@ add_triton_library(TleToLLVM
 
     DEPENDS
     TleTableGen
+    TritonGPUTableGen
+    TritonGPUAttrDefsIncGen
+    ${TLE_TRITON_GPU_ATTR_DEPENDS}
     TritonGPUTypeInterfacesIncGen
+    TritonGPUOpInterfacesIncGen
     TleTools
 
     LINK_LIBS PUBLIC

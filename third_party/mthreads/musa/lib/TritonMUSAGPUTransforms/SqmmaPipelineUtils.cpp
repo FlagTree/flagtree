@@ -265,17 +265,6 @@ std::optional<int> dotCanBeProperlyAsync(triton::musa::SquadDotOp sqmma,
     return std::nullopt;
   }
 
-  if (auto cArg = dyn_cast<BlockArgument>(sqmma.getC())) {
-    if (cArg.getOwner() == loop.getBody() && cArg.getArgNumber() > 0) {
-      if (OpOperand *yielded = loop.getTiedLoopYieldedValue(cArg)) {
-        if (yielded->get() == sqmma.getResult() &&
-            llvm::all_of(cArg.getUses(), isTransitivelySqmmaCUse)) {
-          return static_cast<int>(cArg.getArgNumber() - 1);
-        }
-      }
-    }
-  }
-
   SmallVector<std::pair<int, Value>> yieldedIterArgs;
   auto recordYieldedIterArg = [&](int operandIdx) -> bool {
     if (operandIdx >= loop.getNumRegionIterArgs())
@@ -323,40 +312,18 @@ std::optional<int> dotCanBeProperlyAsync(triton::musa::SquadDotOp sqmma,
 
   if (yieldedIterArgs.empty())
     return std::nullopt;
+  if (yieldedIterArgs.size() != 1)
+    return std::nullopt;
 
-  auto selectIterArg =
-      [&](auto &&predicate) -> std::optional<std::pair<int, Value>> {
-    std::optional<std::pair<int, Value>> selected;
-    for (const auto &entry : yieldedIterArgs) {
-      if (!predicate(entry.second))
-        continue;
-      if (selected)
-        return std::nullopt;
-      selected = entry;
-    }
-    return selected;
-  };
+  auto selected = yieldedIterArgs.front();
 
-  auto otherYieldedIterArgsAreLoopDead = [&](int selectedIdx) {
-    return llvm::all_of(yieldedIterArgs, [&](const auto &entry) {
-      return entry.first == selectedIdx || entry.second.use_empty();
-    });
-  };
-
-  if (auto selected = selectIterArg([&](Value candidate) {
-        return candidate == sqmma.getC() &&
-               llvm::all_of(candidate.getUses(), isTransitivelySqmmaCUse);
-      });
-      selected && otherYieldedIterArgsAreLoopDead(selected->first)) {
-    return selected->first;
+  if (selected.second == sqmma.getC() &&
+      llvm::all_of(selected.second.getUses(), isTransitivelySqmmaCUse)) {
+    return selected.first;
   }
 
-  if (auto selected = selectIterArg([&](Value candidate) {
-        return llvm::all_of(candidate.getUses(), isTransitivelySqmmaCUse);
-      });
-      selected && otherYieldedIterArgsAreLoopDead(selected->first)) {
-    return selected->first;
-  }
+  if (llvm::all_of(selected.second.getUses(), isTransitivelySqmmaCUse))
+    return selected.first;
 
   auto waitOps = loop.getBody()->getOps<triton::musa::SquadDotWaitOp>();
   auto firstWait =
@@ -370,10 +337,9 @@ std::optional<int> dotCanBeProperlyAsync(triton::musa::SquadDotOp sqmma,
     });
   };
   if (firstWait != waitOps.end()) {
-    auto selected = selectIterArg(iterArgUsersAreAfterFirstWait);
-    if (selected && otherYieldedIterArgsAreLoopDead(selected->first)) {
-      threadValuesThroughWait(*firstWait, {selected->second}, loop);
-      return selected->first;
+    if (iterArgUsersAreAfterFirstWait(selected.second)) {
+      threadValuesThroughWait(*firstWait, {selected.second}, loop);
+      return selected.first;
     }
   }
 
@@ -476,6 +442,38 @@ collectPipelineSqmmaDots(scf::ForOp loop) {
 } // namespace
 
 void pipelineSqmma(ModuleOp moduleOp, unsigned numStages) {
+#ifdef __TLE__
+  SmallVector<scf::ForOp> loops;
+  moduleOp.walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+
+  for (scf::ForOp loop : loops) {
+    if (tt::getNumStagesOrDefault(loop, numStages) < 1)
+      continue;
+
+    SmallVector<triton::musa::SquadDotOp> sqmmaDots =
+        collectPipelineSqmmaDots(loop);
+    llvm::erase_if(sqmmaDots, [](triton::musa::SquadDotOp dot) {
+      return dot->hasAttr("musa_tle.explicit_sqmma");
+    });
+    if (sqmmaDots.empty())
+      continue;
+
+    ProperlyAsyncDots properlyAsyncDots;
+    for (triton::musa::SquadDotOp sqmma : sqmmaDots) {
+      sqmma->setAttr("isAsync", BoolAttr::get(moduleOp.getContext(), true));
+      if (auto iterArgIdx = dotCanBeProperlyAsync(sqmma, loop)) {
+        properlyAsyncDots[sqmma] = *iterArgIdx;
+        continue;
+      }
+
+      auto wait = getOrCreateWaitAfter(sqmma);
+      (void)threadValuesThroughWait(wait, {sqmma.getResult()}, loop);
+    }
+
+    insertAsyncSqmmaWaitsInLoop(loop, properlyAsyncDots);
+    insertFinalWaitAfterLoop(loop, properlyAsyncDots);
+  }
+#else
   SmallVector<scf::ForOp> loops;
   moduleOp.walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
@@ -503,6 +501,7 @@ void pipelineSqmma(ModuleOp moduleOp, unsigned numStages) {
     insertAsyncSqmmaWaitsInLoop(loop, properlyAsyncDots);
     insertFinalWaitAfterLoop(loop, properlyAsyncDots);
   }
+#endif // __TLE__
 }
 
 } // namespace mlir::triton::musa::pipeline

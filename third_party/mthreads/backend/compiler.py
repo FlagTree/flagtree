@@ -5,6 +5,7 @@ from triton.runtime.errors import OutOfResources
 
 from dataclasses import dataclass
 from pathlib import Path
+import ast
 import functools
 from typing import Any, Dict, Tuple, Optional
 import hashlib
@@ -14,6 +15,8 @@ import shutil
 import shlex
 import subprocess
 import tempfile
+
+_DEFAULT_MUSA_PREFIX = "/usr/local/musa"
 
 
 def min_dot_size(target: GPUTarget):
@@ -34,9 +37,96 @@ def _module_text(mod) -> str:
         return ""
 
 
+_SQMMA_OP_NAMES = frozenset({
+    "ttmg.squad_dot",
+    "ttmg.squad_dot_wait",
+    "mtgpu.sqmma",
+    "mtgpu.sqmma_wait",
+})
+
+_DESCRIPTOR_REDUCE_OP_NAME = "tt.descriptor_reduce"
+_DESCRIPTOR_GATHER_OP_NAME = "tt.descriptor_gather"
+_DESCRIPTOR_SCATTER_OP_NAME = "tt.descriptor_scatter"
+
+_DESCRIPTOR_POINTER_FALLBACK_OP_NAMES = {
+    31: frozenset({
+        _DESCRIPTOR_REDUCE_OP_NAME,
+        _DESCRIPTOR_GATHER_OP_NAME,
+        _DESCRIPTOR_SCATTER_OP_NAME,
+    }),
+}
+
+
 def _module_uses_sqmma(mod) -> bool:
+    walk = getattr(mod, "walk", None)
+    if callable(walk):
+        found = False
+
+        def walk_fn(op):
+            nonlocal found
+            if found:
+                return
+            try:
+                found = op.get_name() in _SQMMA_OP_NAMES
+            except (AttributeError, TypeError):
+                return
+
+        try:
+            walk(walk_fn)
+            if found:
+                return True
+        except (AttributeError, TypeError, RuntimeError):
+            pass
+
     text = _module_text(mod)
-    return "mtgpu.sqmma" in text
+    return any(name in text for name in _SQMMA_OP_NAMES)
+
+
+def _module_has_any_operation(mod, op_names) -> bool:
+    """Return whether ``mod`` contains any operation named in ``op_names``."""
+    walk = getattr(mod, "walk", None)
+    if callable(walk):
+        found = False
+
+        def walk_fn(op):
+            nonlocal found
+            if found:
+                return
+            try:
+                found = op.get_name() in op_names
+            except (AttributeError, TypeError):
+                return
+
+        try:
+            walk(walk_fn)
+            if found:
+                return True
+        except (AttributeError, TypeError, RuntimeError):
+            pass
+
+    text = _module_text(mod)
+    return any(name in text for name in op_names)
+
+
+def _module_has_descriptor_reduce(mod) -> bool:
+    """Return whether ``mod`` contains a Triton descriptor-reduce op."""
+    return _module_has_any_operation(mod, {_DESCRIPTOR_REDUCE_OP_NAME})
+
+
+def _module_requires_descriptor_pointer_fallback(mod, capability: int) -> bool:
+    """Return whether this target must lower all descriptors to pointers."""
+    if capability < 31:
+        return True
+    unsupported_ops = _DESCRIPTOR_POINTER_FALLBACK_OP_NAMES.get(capability)
+    return unsupported_ops is not None and _module_has_any_operation(mod, unsupported_ops)
+
+
+def _llvm_slp_enabled() -> bool:
+    """Return the default-on MUSA LLVM-SLP gate."""
+    value = os.environ.get("TRITON_MUSA_ENABLE_LLVM_SLP")
+    if value is None or not value.strip():
+        return True
+    return value.strip().lower() not in {"0", "false", "off"}
 
 
 @functools.lru_cache()
@@ -78,20 +168,26 @@ def _tool_version_signature(path: str) -> str:
 
 
 def _normalize_arch(arch: object) -> str:
-    if isinstance(arch, int):
-        return str(arch)
-    return str(arch).lower()
+    arch_str = str(arch).lower()
+    if "." not in arch_str:
+        return arch_str
+    arch_major, arch_minor = arch_str.split(".", 1)
+    if arch_major.isdecimal() and arch_minor.isdecimal():
+        return f"{arch_major}{arch_minor}"
+    return arch_str
 
 
 def _capability_from_arch(arch: object) -> int:
-    if isinstance(arch, int):
-        return arch
     arch_str = _normalize_arch(arch)
-    if arch_str.isdigit():
-        return int(arch_str)
     if arch_str.startswith("ph1"):
         return 31
+    if arch_str.isdecimal():
+        return int(arch_str)
     raise ValueError(f"Unsupported MUSA arch: {arch}")
+
+
+def _warp_size_from_capability(capability: int) -> int:
+    return 128 if capability < 30 else 32
 
 
 def _max_static_shared_memory_from_arch(arch: object) -> Optional[int]:
@@ -125,6 +221,14 @@ def _maybe_tool_path(tool) -> Optional[str]:
         return None
 
 
+def _validated_tool_path(path: Optional[str]) -> Optional[str]:
+    path = _normalize_path(path)
+    if not path:
+        return None
+    tool = knobs.MUSATool.from_path(path)
+    return _normalize_path(tool.path) if tool else None
+
+
 def _local_backend_bin_dir() -> Optional[Path]:
     bin_dir = Path(__file__).resolve().parent / "bin"
     return bin_dir if bin_dir.is_dir() else None
@@ -142,31 +246,21 @@ def _select_tool_path(binary: str, explicit_path: Optional[str], tool_getter) ->
     local_path = _local_backend_tool_path(binary)
     if local_path:
         return local_path
-    path = _normalize_path(explicit_path)
+    path = _validated_tool_path(explicit_path)
     if path:
         return path
     return _maybe_tool_path(tool_getter())
 
 
 def _resolve_toolchain_paths(options: "MUSAOptions") -> Tuple[str, str, Optional[str]]:
-    toolchain_path = _normalize_path(options.toolchain_path)
     llc_path = _normalize_path(options.llc_path)
     lld_path = _normalize_path(options.lld_path)
     llc_asm_path = _normalize_path(options.llc_asm_path)
 
-    if not toolchain_path:
-        mtcc_bin_path = os.getenv("MTCC_BIN_PATH")
-        if mtcc_bin_path:
-            toolchain_path = str(Path(mtcc_bin_path).expanduser())
-    if not toolchain_path:
-        musa_home = os.getenv("MUSA_HOME")
-        if musa_home:
-            toolchain_path = str(Path(musa_home).expanduser() / "bin")
-
-    if not llc_path and toolchain_path:
-        llc_path = str(Path(toolchain_path) / "llc")
-    if not lld_path and toolchain_path:
-        lld_path = str(Path(toolchain_path) / "ld.lld")
+    if not llc_path:
+        llc_path = _local_backend_tool_path("llc") or str(Path(_DEFAULT_MUSA_PREFIX) / "bin" / "llc")
+    if not lld_path:
+        lld_path = _local_backend_tool_path("ld.lld") or str(Path(_DEFAULT_MUSA_PREFIX) / "bin" / "ld.lld")
 
     return llc_path or "", lld_path or "", llc_asm_path
 
@@ -215,6 +309,12 @@ def _run_tool_command(tool_name: str, cmd: list[str], *, repro_dir: Path, dump_l
 
 def _should_apply_llvm_compat(llc_major: Optional[int]) -> bool:
     return llc_major is None or llc_major < 19
+
+
+def _strip_target_memory_kinds(ir_text: str) -> str:
+    out = re.sub(r",\s*target_mem\d\s*:\s*[a-z]+(?=\s*[,)])", "", ir_text)
+    out = re.sub(r"\btarget_mem\d\s*:\s*[a-z]+,\s*", "", out)
+    return out
 
 
 def _llc_opaque_pointer_options(llc_major: Optional[int]) -> list[str]:
@@ -330,49 +430,6 @@ def _rewrite_musa_isspacep_shared(ir_text: str) -> str:
     return out
 
 
-def _rewrite_musa_ptr_gen_to_addrspace(ir_text: str) -> str:
-    specs = [("global", 1), ("shared", 3)]
-    ptr_as_map: Dict[str, int] = {}
-    out_lines = []
-
-    for line in ir_text.splitlines():
-        rewritten = False
-        for space_name, as_id in specs:
-            call_re = re.compile(
-                rf"^([ \t]*)(%[A-Za-z0-9_.]+|%\d+)\s*=\s*(?:tail\s+)?call\s+ptr\s+"
-                rf"@llvm\.musa\.ptr\.gen\.to\.{space_name}\s*\(\s*ptr(?:\s+[^()%]+)*\s+(%[A-Za-z0-9_.]+|%\d+)\s*\)\s*(,.*)?$"
-            )
-            m = call_re.match(line)
-            if m is None:
-                continue
-            indent, out_ptr, in_ptr, dbg_suffix = m.groups()
-            dbg_suffix = dbg_suffix or ""
-            out_lines.append(f"{indent}{out_ptr} = addrspacecast ptr {in_ptr} to ptr addrspace({as_id}){dbg_suffix}")
-            ptr_as_map[out_ptr] = as_id
-            rewritten = True
-            break
-        if not rewritten:
-            out_lines.append(line)
-
-    out = "\n".join(out_lines)
-    if ir_text.endswith("\n"):
-        out += "\n"
-    for space_name, _ in specs:
-        out = re.sub(
-            rf"(?m)^[ \t]*declare\s+ptr\s+@llvm\.musa\.ptr\.gen\.to\.{space_name}\s*\(\s*ptr\s*\)\s*(?:#\d+)?\s*\n?",
-            "",
-            out,
-        )
-
-    for ptr_name, as_id in ptr_as_map.items():
-        out = re.sub(
-            rf"\bcmpxchg\s+ptr\s+{re.escape(ptr_name)}\b",
-            f"cmpxchg ptr addrspace({as_id}) {ptr_name}",
-            out,
-        )
-    return out
-
-
 def _rewrite_llvm_is_fpclass_f32(ir_text: str) -> str:
     call_re = re.compile(r"^([ \t]*)(%[A-Za-z0-9_.]+|%\d+)\s*=\s*(?:tail\s+)?call\s+i1\s+"
                          r"@llvm\.is\.fpclass\.f32\s*\(\s*float\s+([^,]+)\s*,\s*i32\s+64\s*\)\s*(,.*)?$")
@@ -403,7 +460,7 @@ def _rewrite_llvm_is_fpclass_f32(ir_text: str) -> str:
     return out
 
 
-def _rewrite_lifetime_intrinsics_for_llvm14(ir_text: str) -> str:
+def _rewrite_lifetime_intrinsics_to_two_arg_form(ir_text: str) -> str:
     out = ir_text
 
     out = re.sub(
@@ -470,6 +527,21 @@ def _rewrite_llvm_scmp_ucmp_to_icmp(ir_text: str) -> str:
     return out
 
 
+def _get_unsupported_attrs(llc_major: Optional[int]) -> tuple[str, ...]:
+    if llc_major is not None and llc_major >= 20:
+        return ("nocreateundeforpoison", )
+    else:
+        return ("nocallback", "nocreateundeforpoison", "mustprogress", "speculatable", "willreturn")
+
+
+def _drop_unsupported_attrs(ir_text: str, llc_major: Optional[int]) -> str:
+    out = ir_text
+    for attr in _get_unsupported_attrs(llc_major):
+        out = re.sub(rf"(?<![A-Za-z0-9_.]){attr}(?![A-Za-z0-9_.])", "", out)
+    out = re.sub(r"\s+initializes\(\([^)]*\)\)", "", out)
+    return out
+
+
 def _llvm_compat(ir_text: str) -> str:
     replacements = [
         ("memory\\(none\\)", "readnone"),
@@ -521,11 +593,8 @@ def _llvm_compat(ir_text: str) -> str:
     out = re.sub(r"\bgetelementptr\s+nuw\s+", "getelementptr ", out)
     out = re.sub(r"\bgetelementptr\s+nsw\s+", "getelementptr ", out)
     out = _rewrite_musa_isspacep_shared(out)
-    out = _rewrite_musa_ptr_gen_to_addrspace(out)
     out = _rewrite_llvm_is_fpclass_f32(out)
-    out = _rewrite_lifetime_intrinsics_for_llvm14(out)
-    for attr in ("nocallback", "nocreateundeforpoison", "mustprogress", "speculatable", "willreturn"):
-        out = re.sub(rf"(?<![A-Za-z0-9_.]){attr}(?![A-Za-z0-9_.])", "", out)
+    out = _rewrite_lifetime_intrinsics_to_two_arg_form(out)
     out = re.sub(r"\bmemory\([^)]*\)", "", out)
     out = re.sub(r"[ \t]{2,}", " ", out)
     return out
@@ -544,7 +613,7 @@ def _extract_kernel_name(ir_text: str) -> str:
     raise RuntimeError("Unable to determine kernel name from LLVM IR")
 
 
-def _llc_extra_options(metadata: Dict[str, object], options: "MUSAOptions") -> list[str]:
+def _llc_extra_options(metadata: Dict[str, object], options: "MUSAOptions", capability: int) -> list[str]:
     uses_mulhi = bool(metadata.get("uses_mulhi_helper"))
     const_calc_opt = [] if uses_mulhi else ["-mtgpu-enable-const-calc=1"]
 
@@ -552,10 +621,10 @@ def _llc_extra_options(metadata: Dict[str, object], options: "MUSAOptions") -> l
     enable_backend_opt = bool(options.enable_llc_opt or options.enable_backend_opt)
     llc_options_map = {
         (False, False): [*const_calc_opt],
-        (True, False): {
+        (True, False): [
             *const_calc_opt,
             "-mtgpu-alloc-shared-memory-from-zero=1",
-        },
+        ],
         (False, True): [
             "-mtgpu-enable-const-calc=1",
             "-mtgpu-tiny-offset-hint=1",
@@ -569,7 +638,9 @@ def _llc_extra_options(metadata: Dict[str, object], options: "MUSAOptions") -> l
             "-misched=mtgpu-max-ilp",
         ],
     }
-    opts = llc_options_map[(uses_sqmma, enable_backend_opt)]
+    opts = list(llc_options_map[(uses_sqmma, enable_backend_opt)])
+    if capability == 22:
+        opts.append("-mtgpu-alloc-shared-memory-from-zero=1")
     if options.llc_options:
         opts.extend(shlex.split(options.llc_options))
     return opts
@@ -582,6 +653,7 @@ class MUSAOptions:
     num_stages: int = 3
     warp_size: int = 32
     maxnreg: Optional[int] = None
+    cluster_dims: tuple = (1, 1, 1)  # flagtree mthreads3.2
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     supported_fp8_dtypes: Tuple[str, ...] = ("fp8e5", )
@@ -592,7 +664,6 @@ class MUSAOptions:
     allowed_dot_input_precisions: Tuple[str, ...] = ("ieee", "tf32", "tf32x3", "bf16x3", "bf16x6")
     max_num_imprecise_acc_default: int = 0
     sanitize_overflow: bool = True
-    toolchain_path: Optional[str] = None
     llc_path: Optional[str] = None
     lld_path: Optional[str] = None
     llc_asm_path: Optional[str] = None
@@ -607,6 +678,7 @@ class MUSAOptions:
     supports_noinline: bool = True
     arch: Optional[str] = None
     instrumentation_mode: str = ""
+    inplace_alias_pairs: str = ""
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / "lib"
@@ -619,6 +691,8 @@ class MUSAOptions:
 
     def hash(self):
         hash_dict = dict(self.__dict__)
+        if not hash_dict.get("inplace_alias_pairs"):
+            hash_dict.pop("inplace_alias_pairs", None)
         llc_path, lld_path, llc_asm_path = _resolve_toolchain_paths(self)
         hash_dict["effective_llc_path"] = llc_path
         hash_dict["effective_lld_path"] = lld_path
@@ -635,6 +709,116 @@ class MUSAOptions:
 
 class MUSABackend(BaseBackend):
 
+    _TME_TAIL_DIVISIBILITY_ATTR = "musa.tme_tail_divisibility"
+
+    @staticmethod
+    def parse_attr(desc):
+        assert isinstance(desc, str)
+        if desc == "D":
+            return [["tt.divisibility", 16]]
+        if desc in {"D8", "D4", "D2"}:
+            return [["tt.divisibility", int(desc[1:])]]
+        if desc in {"T4", "T2", "T1"}:
+            return [[MUSABackend._TME_TAIL_DIVISIBILITY_ATTR, int(desc[1:])]]
+        return []
+
+    @staticmethod
+    def get_int_specialization(arg, **kwargs):
+        if not kwargs.get("align", False):
+            return ""
+        for divisor in (16, 8, 4, 2):
+            if arg % divisor == 0:
+                return "D" if divisor == 16 else f"D{divisor}"
+        return ""
+
+    @staticmethod
+    def _resolve_jit_ast_value(node, scope):
+        if isinstance(node, ast.Name):
+            return scope.get(node.id)
+        if isinstance(node, ast.Attribute):
+            base = MUSABackend._resolve_jit_ast_value(node.value, scope)
+            if base is None:
+                return None
+            return getattr(base, node.attr, None)
+        return None
+
+    @classmethod
+    def _jit_function_uses_device_descriptor(cls, jit_function, seen=None):
+        if jit_function is None:
+            return False
+        if seen is None:
+            seen = set()
+        identity = id(jit_function)
+        if identity in seen:
+            return False
+        seen.add(identity)
+
+        scope = jit_function.get_capture_scope()
+        for node in ast.walk(jit_function.parse()):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = cls._resolve_jit_ast_value(node.func, scope)
+            if (getattr(callee, "__triton_builtin__", False)
+                    and getattr(callee, "__name__", "") == "make_tensor_descriptor"):
+                return True
+            if (callee is not None and callee.__class__.__name__ == "JITFunction"
+                    and cls._jit_function_uses_device_descriptor(callee, seen)):
+                return True
+        return False
+
+    def _uses_device_descriptor(self, jit_function):
+        if jit_function is None:
+            return True
+        cache_key = jit_function.cache_key
+        cached = self._device_descriptor_use_cache.get(cache_key)
+        if cached is None:
+            cached = self._jit_function_uses_device_descriptor(jit_function)
+            self._device_descriptor_use_cache[cache_key] = cached
+        return cached
+
+    @staticmethod
+    def _refine_specialization_key(arg, ty, key, align, refine_ints):
+        if isinstance(arg, tuple) and isinstance(ty, tuple):
+            old_keys = key if isinstance(key, tuple) else (None, ) * len(arg)
+            new_keys = [
+                MUSABackend._refine_specialization_key(value, child_ty, child_key, align, refine_ints)
+                for value, child_ty, child_key in zip(arg, ty, old_keys)
+            ]
+            return type(arg)(*new_keys) if hasattr(arg, "_fields") else tuple(new_keys)
+
+        if isinstance(arg, int) and not isinstance(arg, bool) and ty != "constexpr":
+            return MUSABackend.get_int_specialization(arg, align=align) if refine_ints else key
+
+        if (isinstance(ty, str) and ty.startswith("tensordesc<") and hasattr(arg, "shape") and hasattr(arg, "base")
+                and hasattr(arg.base, "element_size")):
+            tail_bytes = int(arg.shape[-1]) * int(arg.base.element_size())
+            if tail_bytes % 4 == 0:
+                return "T4"
+            if tail_bytes % 2 == 0:
+                return "T2"
+            return "T1"
+
+        return key
+
+    def refine_specialization(self, bound_args, params, specialization, *, jit_function=None):
+        refine_ints = self._uses_device_descriptor(jit_function)
+        refined = list(specialization)
+        for idx, (param, arg) in enumerate(zip(params, bound_args.values())):
+            if param.do_not_specialize:
+                continue
+            ty, key = refined[idx]
+            refined[idx] = (
+                ty,
+                self._refine_specialization_key(
+                    arg,
+                    ty,
+                    key,
+                    align=not param.do_not_specialize_on_alignment,
+                    refine_ints=refine_ints,
+                ),
+            )
+        return refined
+
     @staticmethod
     def supports_target(target: GPUTarget):
         return target.backend == "musa"
@@ -642,6 +826,7 @@ class MUSABackend(BaseBackend):
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
         self.binary_ext = "mubin"
+        self._device_descriptor_use_cache = {}
 
     def parse_options(self, opts) -> Any:
         opts = dict(opts)
@@ -670,16 +855,6 @@ class MUSABackend(BaseBackend):
             args["custom_fp8_dtypes"] = tuple(sorted(custom_fp8_dtypes))
         if "deprecated_fp8_dot_operand_dtypes" not in opts:
             args["deprecated_fp8_dot_operand_dtypes"] = ()
-        if "toolchain_path" not in opts:
-            toolchain_path = knobs.musa.toolchain_path
-            if not toolchain_path:
-                mtcc_bin_path = os.getenv("MTCC_BIN_PATH")
-                if mtcc_bin_path:
-                    toolchain_path = mtcc_bin_path
-                else:
-                    musa_home = os.getenv("MUSA_HOME")
-                    toolchain_path = str(Path(musa_home) / "bin") if musa_home else None
-            args["toolchain_path"] = _normalize_path(toolchain_path)
         if "llc_path" not in opts:
             args["llc_path"] = _select_tool_path("llc", knobs.musa.llc_path, lambda: knobs.musa.llc)
         if "lld_path" not in opts:
@@ -694,10 +869,12 @@ class MUSABackend(BaseBackend):
             args["enable_fp8_burst2"] = knobs.musa.enable_fp8_burst2
         if "enable_llvm_compat" not in opts:
             args["enable_llvm_compat"] = knobs.musa.enable_llvm_compat
+        maxnreg = opts.get("maxnreg", None)
+        if maxnreg is not None and (not isinstance(maxnreg, int) or maxnreg <= 0):
+            raise ValueError(f"maxnreg must be a positive integer, got {maxnreg!r}")
         args.update({k: opts[k] for k in MUSAOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
         if "warp_size" not in args:
-            target_warp_size = getattr(self.target, "warp_size", None)
-            args["warp_size"] = int(target_warp_size) if target_warp_size else 32
+            args["warp_size"] = _warp_size_from_capability(capability)
         return MUSAOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -727,11 +904,18 @@ class MUSABackend(BaseBackend):
         mthreads.load_dialects(ctx)
 
     @staticmethod
-    def make_ttir(mod, metadata, opt):
+    def make_ttir(mod, metadata, opt, capability):
+        pre_pm = ir.pass_manager(mod.context)
+        pre_pm.enable_debug()
+        passes.common.add_inliner(pre_pm)
+        passes.ttir.add_rewrite_tensor_pointer(pre_pm)
+        pre_pm.run(mod, "make_ttir_pre")
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
+        requires_tail_fallback = capability >= 31 and mthreads.requires_tme_tail_pointer_fallback(mod)
+        if _module_requires_descriptor_pointer_fallback(mod, capability) or requires_tail_fallback:
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -770,6 +954,10 @@ class MUSABackend(BaseBackend):
             mthreads.passes.ttgpuir.add_tle_optimize_local_pointer_loads(pm)
         if hasattr(mthreads.passes.ttgpuir, "add_tle_optimize_local_pointer_stores"):
             mthreads.passes.ttgpuir.add_tle_optimize_local_pointer_stores(pm)
+        if hasattr(mthreads.passes.ttgpuir, "add_tle_lower_sqmma"):
+            mthreads.passes.ttgpuir.add_tle_lower_sqmma(pm)
+        if hasattr(mthreads.passes.ttgpuir, "add_tle_lower_pipe"):
+            mthreads.passes.ttgpuir.add_tle_lower_pipe(pm)
         mthreads.passes.ttgpuir.add_accelerate_matmul(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         mthreads.passes.ttgpuir.add_optimize_dot_operands(pm)
@@ -783,7 +971,6 @@ class MUSABackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
             mthreads.passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-            mthreads.passes.ttgpuir.add_optimize_sqmma_accumulator_layout(pm)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
             mthreads.passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
@@ -798,7 +985,6 @@ class MUSABackend(BaseBackend):
             mthreads.passes.ttgpuir.add_tle_lower_async_load(pm)
         passes.ttgpuir.add_coalesce_async_copy(pm)
         mthreads.passes.ttgpuir.add_tme_lowering(pm)
-        mthreads.passes.ttgpuir.add_optimize_sqmma_accumulator_layout(pm)
         mthreads.passes.ttgpuir.add_canonicalize_sqmma_result_conversions(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         mthreads.passes.ttgpuir.add_issue_barrier_insertion(pm)
@@ -811,8 +997,18 @@ class MUSABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
         if capability == 31:
-            mthreads.passes.ttgpuir.add_mark_inplace_loads(pm)
+            mthreads.passes.ttgpuir.add_mark_inplace_loads(pm, opt.inplace_alias_pairs)
+        if hasattr(mthreads.passes.ttgpuir, "add_tle_lower_barrier_allocations"):
+            mthreads.passes.ttgpuir.add_tle_lower_barrier_allocations(pm)
+        if hasattr(mthreads.passes.ttgpuir, "add_tle_lower_tme_transactions"):
+            mthreads.passes.ttgpuir.add_tle_lower_tme_transactions(pm)
+        if hasattr(mthreads.passes.ttgpuir, "add_tle_lower_barrier_operations"):
+            mthreads.passes.ttgpuir.add_tle_lower_barrier_operations(pm)
         mthreads.passes.ttgpuir.add_finalize_barriers(pm)
+        if hasattr(mthreads.passes.ttgpuir, "add_tle_prepare_warp_specialize"):
+            mthreads.passes.ttgpuir.add_tle_prepare_warp_specialize(pm)
+        if hasattr(mthreads.passes.ttgpuir, "add_tle_finalize_explicit_layouts"):
+            mthreads.passes.ttgpuir.add_tle_finalize_explicit_layouts(pm)
         pm.run(mod, "make_ttgir")
         metadata["uses_sqmma"] = _module_uses_sqmma(mod)
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -823,14 +1019,29 @@ class MUSABackend(BaseBackend):
         from triton._C.libtriton import llvm
 
         mod = src
+        total_num_warps = src.get_int_attr("ttg.total-num-warps")
+        launch_num_warps = total_num_warps if total_num_warps is not None else options.num_warps
+        metadata["num_warps"] = launch_num_warps
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        capability = _capability_from_arch(arch)
 
+        metadata["uses_sqmma"] = bool(metadata.get("uses_sqmma")) or _module_uses_sqmma(mod)
+
+        has_static_ws = total_num_warps is not None and hasattr(mthreads.passes.ttgpuir,
+                                                                "add_tle_lower_warp_specialize")
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
-        mthreads.passes.ttgpuir.add_allocate_shared_memory(pm, _capability_from_arch(arch))
-        mthreads.passes.ttgpuir.add_mtgpu_to_llvm(pm, _capability_from_arch(arch))
-        mthreads.passes.ttgpuir.add_to_llvmir(pm, _capability_from_arch(arch))
+        mthreads.passes.ttgpuir.add_allocate_shared_memory(pm, capability)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        mthreads.passes.ttgpuir.add_mtgpu_to_llvm(pm, capability)
+        mthreads.passes.ttgpuir.add_to_llvmir(pm, capability)
+        if has_static_ws:
+            # The retained operation still owns the default and static worker
+            # regions here. Lower their hardware barriers once, then emit
+            # direct static CFG dispatch without control shared memory.
+            mthreads.passes.ttgpuir.add_tle_lower_warp_specialize(pm)
+            passes.convert.add_scf_to_cf(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.convert.add_cf_to_llvmir(pm)
@@ -853,8 +1064,8 @@ class MUSABackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
-        maxntidx = max(1, int(options.num_warps) * int(options.warp_size))
+        MUSABackend._optimize_llir_module(llvm_mod, metadata, capability)
+        maxntidx = max(1, int(launch_num_warps) * int(options.warp_size))
         kernel_name_hint = src.get_entry_func_name() if hasattr(src, "get_entry_func_name") else ""
         mthreads.decorate_kernel_abi(llvm_mod, kernel_name_hint, maxntidx)
         metadata["uses_mulhi_helper"] = mthreads.module_uses_mulhi_helper(llvm_mod)
@@ -862,9 +1073,38 @@ class MUSABackend(BaseBackend):
         metadata["shared"] = src.get_int_attr("ttg.shared")
 
         ret = str(llvm_mod)
+        metadata["uses_sqmma"] = bool(metadata.get("uses_sqmma")) or "llvm.musa.sqmma." in ret
         del llvm_mod
         del context
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         return ret
+
+    @staticmethod
+    def _build_llvm_opt_flags(metadata: Dict[str, Any], capability: int) -> list:
+        """Build the target-aware SLP contract for LLVM middle-end tuning.
+
+        Triton 3.6's common optimizer enables SLP by default for all callers.
+        MUSA must opt into the PH1 TTI path, or explicitly turn targetless SLP
+        off for unsupported architectures and SQMMA kernels.  Returning the
+        disable flag here is intentional: an empty flag list would preserve
+        the common targetless SLP default and silently reintroduce the old
+        unsafe behavior.
+        """
+        if (capability == 31 and not bool(metadata.get("uses_sqmma")) and _llvm_slp_enabled()):
+            return [
+                "enable-mtgpu-slp-vectorization",
+                "mtgpu-slp-triple=mtgpu-mt-musa",
+                "mtgpu-slp-cpu=mp_31",
+            ]
+        return ["disable-slp-vectorization"]
+
+    @staticmethod
+    def _optimize_llir_module(llvm_mod, metadata: Dict[str, Any], capability: int) -> None:
+        llvm_flags = MUSABackend._build_llvm_opt_flags(metadata, capability)
+        from triton._C.libtriton import llvm
+
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, "", "", llvm_flags)
 
     @staticmethod
     def make_mubin(src, metadata, opt, arch):
@@ -874,14 +1114,18 @@ class MUSABackend(BaseBackend):
 
         llc_path, lld_path, llc_asm_path = _resolve_toolchain_paths(opt)
         if not llc_path or not lld_path:
-            raise RuntimeError("MUSA toolchain not configured. Set TRITON_MUSA_TOOLCHAIN_PATH "
-                               "or TRITON_MUSA_LLC_PATH/TRITON_MUSA_LLD_PATH (or MUSA_HOME).")
+            raise RuntimeError("MUSA toolchain not configured. Set TRITON_MUSA_LLC_PATH/TRITON_MUSA_LLD_PATH "
+                               f"(default {_DEFAULT_MUSA_PREFIX}).")
 
         ir_text = src
         llc_major = _detect_llvm_major_version(llc_path)
         if opt.enable_llvm_compat:
+            ir_text = _drop_unsupported_attrs(ir_text, llc_major)
             if _should_apply_llvm_compat(llc_major):
                 ir_text = _llvm_compat(ir_text)
+            elif llc_major == 20:
+                ir_text = _strip_target_memory_kinds(ir_text)
+                ir_text = _rewrite_lifetime_intrinsics_to_two_arg_form(ir_text)
         ir_text = _rewrite_llvm_scmp_ucmp_to_icmp(ir_text)
 
         if knobs.musa.dump_llir:
@@ -897,7 +1141,7 @@ class MUSABackend(BaseBackend):
             llc_opt_level,
             "-filetype=obj",
         ]
-        llc_opts.extend(_llc_extra_options(metadata, opt))
+        llc_opts.extend(_llc_extra_options(metadata, opt, capability))
 
         tmp_dir = tempfile.mkdtemp(prefix="triton-musa-")
         tmp_path = Path(tmp_dir)
@@ -929,7 +1173,7 @@ class MUSABackend(BaseBackend):
                     "-o",
                     str(asm_file),
                 ]
-                asm_cmd.extend(_llc_extra_options(metadata, opt))
+                asm_cmd.extend(_llc_extra_options(metadata, opt, capability))
                 _run_tool_command(
                     "llc-asm",
                     asm_cmd,
@@ -972,7 +1216,7 @@ class MUSABackend(BaseBackend):
         arch = options.arch
         capability = _capability_from_arch(arch)
         if language == Language.TRITON:
-            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
+            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, arch, capability)
         elif language == Language.GLUON:
             raise RuntimeError("MUSA backend does not support GLUON yet")

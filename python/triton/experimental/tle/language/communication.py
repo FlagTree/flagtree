@@ -1,3 +1,23 @@
+# Copyright 2025-     FlagOS Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 try:
     from triton.backends.nvidia.distributed import flagcx_rt_conf
     enabled = flagcx_rt_conf.is_available
@@ -69,34 +89,61 @@ if enabled:
 
 
 def compile_flagcx_allocator():
-    """Compile the FlagCX allocator extension. Called once, result cached."""
     global _allocator, _allocator_wrapper, _flagcx_allocator_failed_to_compile
+
     try:
         out_dir = tempfile.gettempdir()
         lib_name = "flagcx_allocator"
+        lib_path = os.path.join(out_dir, f"{lib_name}.so")
 
-        load_inline(
-            name=lib_name,
-            cpp_sources=flagcx_allocator_source,
-            with_cuda=True,
-            extra_ldflags=[f"-L{FLAGCX_LIB_PATH}", "-lflagcx", f"-Wl,-rpath,{FLAGCX_LIB_PATH}"],
-            verbose=False,
-            is_python_module=False,
-            build_directory=out_dir,
-            extra_include_paths=[FLAGCX_INCLUDE_PATH],
-        )
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+
+        if local_rank == 0 and not os.path.isfile(lib_path):
+            print(
+                f"[INFO] FlagCX allocator not found, compiling: {lib_path}",
+                flush=True,
+            )
+
+            load_inline(
+                name=lib_name,
+                cpp_sources=flagcx_allocator_source,
+                with_cuda=True,
+                extra_ldflags=[
+                    f"-L{FLAGCX_LIB_PATH}",
+                    "-lflagcx",
+                    f"-Wl,-rpath,{FLAGCX_LIB_PATH}",
+                ],
+                verbose=True,
+                is_python_module=False,
+                build_directory=out_dir,
+                extra_include_paths=[FLAGCX_INCLUDE_PATH],
+            )
+        else:
+            print(
+                f"[INFO] Using cached FlagCX allocator: {lib_path}",
+                flush=True,
+            )
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.barrier()
+
+        if not os.path.isfile(lib_path):
+            raise FileNotFoundError(f"FlagCX allocator library not found after compilation: {lib_path}")
 
         _allocator_wrapper = CUDAPluggableAllocator(
-            f"{out_dir}/{lib_name}.so",
+            lib_path,
             "flagcx_alloc_plug",
             "flagcx_free_plug",
         )
+
         _allocator = _allocator_wrapper.allocator()
+
     except Exception as e:
         _flagcx_allocator_failed_to_compile = True
-        print(f"[WARNING] Failed to compile FlagCX memory allocator: {e}\n"
-              f"  Ensure FLAGCX_LIB_PATH ({FLAGCX_LIB_PATH}) contains libflagcx.so\n"
-              f"  and FLAGCX_INCLUDE_PATH ({FLAGCX_INCLUDE_PATH}) contains flagcx.h")
+        print(
+            f"[WARNING] Failed to load FlagCX memory allocator: {e}",
+            flush=True,
+        )
 
 
 def get_mem_pool():
@@ -137,7 +184,7 @@ def cleanup_communicator():
 
 def init_communicator():
     global comm, rank, _init_communicator_
-    if _init_communicator_:
+    if enabled and _init_communicator_:
         return
     dist.init_process_group(backend="nccl")
     rank = dist.get_rank()
@@ -168,7 +215,7 @@ def init_communicator():
     _init_communicator_ = True
 
 
-def create_comm_tensor(buf_tensor):
+def create_dist_tensor(buf_tensor):
     global comm, rank, dev_mem, dev_comm, win
     buf_ptr = buf_tensor.data_ptr()
     buf_size = buf_tensor.numel() * buf_tensor.element_size()
@@ -180,15 +227,15 @@ def create_comm_tensor(buf_tensor):
     # Create DevComm with 1 intra barrier
     reqs = flagcxDevCommRequirements()
     reqs.intraMulticast = False
-    reqs.barrierCount = 0
-    reqs.intraBarrierCount = 1
-    reqs.interBarrierCount = 0
+    reqs.barrierCount = 8
+    reqs.intraBarrierCount = 8
+    reqs.interBarrierCount = 8
     reqs.intraLLA2ABlockCount = 0
     reqs.intraLLA2ASlotCount = 0
     reqs.interForceEnable = False
     reqs.interContextCount = 4
-    reqs.interSignalCount = 0
-    reqs.interCounterCount = 0
+    reqs.interSignalCount = 8
+    reqs.interCounterCount = 8
 
     dev_comm = flagcx.flagcxDevCommCreate(comm, reqs)
     print(f"[Rank {rank}] DevComm created")
@@ -205,4 +252,7 @@ def create_comm_tensor(buf_tensor):
 
     # Synchronize all ranks before kernel launch
     dist.barrier()
-    return dev_comm_dptr.value, dev_mem_dptr.value
+
+    from triton.runtime import DistributedRtContext
+    ctx = DistributedRtContext(dev_mem_dptr.value, dev_comm_dptr.value)
+    return ctx

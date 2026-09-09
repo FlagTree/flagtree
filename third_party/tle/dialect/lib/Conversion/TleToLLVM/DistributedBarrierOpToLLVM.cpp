@@ -1,4 +1,28 @@
+/*
+ * Copyright 2025-     FlagOS Contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 #include "tle/dialect/include/Conversion/TleToLLVM/DistributedBarrierOpToLLVM.h"
+#include "tle/dialect/include/Tools/FlagcxUtils.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -12,12 +36,18 @@
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
 #include <limits>
+#include <optional>
 
 namespace {
 
 using namespace mlir;
-namespace tle = mlir::triton::tle;
+using namespace mlir::triton;
 
+constexpr llvm::StringLiteral kSpaceAttr = "space";
+constexpr llvm::StringLiteral kOrderAttr = "order";
+constexpr llvm::StringLiteral kIndexAttr = "barrier_index";
+constexpr llvm::StringLiteral kContextIdAttr = "context_id";
+constexpr llvm::StringLiteral kMemoryScopeAttr = "memory_scope";
 constexpr llvm::StringLiteral kGroupKindAttr = "group_kind";
 constexpr llvm::StringLiteral kGroupShapeAttr = "group_shape";
 constexpr llvm::StringLiteral kGroupMaskAttr = "group_mask";
@@ -37,6 +67,16 @@ constexpr int32_t kSubmeshPhaseOffsetBytes = 4;
 constexpr int32_t kGridScratchAlignment = 4;
 constexpr int32_t kGridScratchBytes = 4;
 constexpr int32_t kGridArrivedOffsetBytes = 0;
+
+Value getDistDevicePtr(tle::DistributedBarrierOp op,
+                       SmallVector<Value> &srcElems) {
+  if (!srcElems.empty())
+    return srcElems[0];
+  else {
+    auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
+    return func.getArgument(1);
+  }
+}
 
 FailureOr<int32_t> getOrCreateSubmeshScratchOffset(ModuleOp mod) {
   if (auto existing =
@@ -423,8 +463,89 @@ struct DistributedBarrierOpConversion
   }
 
   LogicalResult
+  lowerFlagCxSpaceBarrier(tle::DistributedBarrierOp op, OpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const {
+    auto spaceAttr = op->getAttrOfType<StringAttr>(kSpaceAttr);
+    auto kindAttr = op->getAttrOfType<StringAttr>(kGroupKindAttr);
+    auto orderAttr = op->getAttrOfType<StringAttr>(kOrderAttr);
+    auto indexAttr = op->getAttrOfType<IntegerAttr>(kIndexAttr);
+    auto contextIdAttr = op->getAttrOfType<IntegerAttr>(kContextIdAttr);
+    auto memoryScopeAttr = op->getAttrOfType<StringAttr>(kMemoryScopeAttr);
+    auto loc = op.getLoc();
+    SmallVector<Value> srcElems;
+    auto getTeamKind =
+        [](StringRef space) -> std::optional<tle::FlagCXTeamKind> {
+      return llvm::StringSwitch<std::optional<tle::FlagCXTeamKind>>(space)
+          .Case("device", tle::FlagCXTeamKind::INTRA)
+          .Case("inter", tle::FlagCXTeamKind::INTER)
+          .Case("world", tle::FlagCXTeamKind::WORLD)
+          .Default(std::nullopt);
+    };
+    auto getCoopKind =
+        [](StringRef kind) -> std::optional<tle::FlagCXCoopKind> {
+      return llvm::StringSwitch<std::optional<tle::FlagCXCoopKind>>(kind)
+          .Case("thread", tle::FlagCXCoopKind::THREAD)
+          .Case("warp", tle::FlagCXCoopKind::WARP)
+          .Case("block", tle::FlagCXCoopKind::BLOCK)
+          .Default(std::nullopt);
+    };
+    auto getOrderValue = [](StringRef order) -> int32_t {
+      return llvm::StringSwitch<int32_t>(order)
+          .Case("relaxed", 0)
+          .Case("acquire", 1)
+          .Case("release", 2)
+          .Case("acqrel", 3)
+          .Default(-1);
+    };
+    auto getMemoryScopeValue = [](StringRef scope) -> int32_t {
+      return llvm::StringSwitch<int32_t>(scope)
+          .Case("system", 0)
+          .Case("device", 1)
+          .Case("block", 2)
+          .Case("thread", 3)
+          .Default(-1);
+    };
+
+    auto teamKind = getTeamKind(spaceAttr.getValue());
+    auto coopKind = getCoopKind(kindAttr.getValue());
+    int32_t order = getOrderValue(orderAttr.getValue());
+    int32_t memoryScope = getMemoryScopeValue(memoryScopeAttr.getValue());
+    if (!teamKind)
+      return rewriter.notifyMatchFailure(op, "invalid FlagCX team space");
+    if (!coopKind)
+      return rewriter.notifyMatchFailure(op, "invalid coop_kind");
+    if (order < 0)
+      return rewriter.notifyMatchFailure(op, "invalid order");
+    if (memoryScope < 0)
+      return rewriter.notifyMatchFailure(op, "invalid memory scope");
+
+    if (auto src = adaptor.getSrc())
+      srcElems = unpackLLElements(loc, src, rewriter);
+
+    auto comm = getDistDevicePtr(op, srcElems);
+    auto teamKindAttr =
+        tle::FlagCXTeamKindAttr::get(rewriter.getContext(), *teamKind);
+    auto coopKindAttr =
+        tle::FlagCXCoopKindAttr::get(rewriter.getContext(), *coopKind);
+    auto newOrderAttr = rewriter.getI32IntegerAttr(order);
+    auto scopeAttr = rewriter.getI32IntegerAttr(memoryScope);
+    auto barrierTypeAttr = op.getBarrierTypeAttr();
+#ifdef FLAGCX_ENABLED
+    rewriter.replaceOpWithNewOp<tle::FlagCxBarrierOp>(
+        op, comm, barrierTypeAttr, teamKindAttr, coopKindAttr, indexAttr,
+        contextIdAttr, newOrderAttr, scopeAttr);
+    return success();
+#else
+    return rewriter.notifyMatchFailure(
+        op, "FlagCX support is required for communicator barriers");
+#endif
+  }
+  LogicalResult
   matchAndRewrite(tle::DistributedBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op->getAttrOfType<StringAttr>(kSpaceAttr))
+      return lowerFlagCxSpaceBarrier(op, adaptor, rewriter);
+
     if (auto kindAttr = op->getAttrOfType<StringAttr>(kGroupKindAttr)) {
       if (kindAttr.getValue() == "grid")
         return lowerGridBarrier(op, rewriter);

@@ -4,10 +4,13 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallSet.h"
+#include <cctype>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -93,7 +96,155 @@ static LogicalResult verifyStaticTileIndex(Operation *op, Value index,
            << *staticIndex << ", total_tiles=" << totalTiles;
   return success();
 }
+
+static bool isAsciiIdentStart(char c) {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+static bool isAsciiIdentChar(char c) {
+  return isAsciiIdentStart(c) || (c >= '0' && c <= '9') || c == '_';
+}
+
+static bool isValidPublicPipeName(StringRef name) {
+  if (name.empty() || name == "fields" || name == "readers" ||
+      name.starts_with("_") || !isAsciiIdentStart(name.front()))
+    return false;
+  return llvm::all_of(name.drop_front(), isAsciiIdentChar);
+}
+
+static LogicalResult verifyPipeNameArray(Operation *op, ArrayAttr names,
+                                         StringRef description,
+                                         bool allowEmpty) {
+  if (!allowEmpty && names.empty())
+    return op->emitOpError("expects ")
+           << description << " to contain at least one name";
+  llvm::SmallSet<StringRef, 8> seen;
+  for (Attribute attr : names) {
+    auto name = dyn_cast<StringAttr>(attr);
+    if (!name)
+      return op->emitOpError("expects ")
+             << description << " to contain only strings";
+    if (!isValidPublicPipeName(name.getValue()))
+      return op->emitOpError("expects valid public MUSA TLE pipe ")
+             << description << " names";
+    if (!seen.insert(name.getValue()).second)
+      return op->emitOpError("expects unique MUSA TLE pipe ")
+             << description << " names";
+  }
+  return success();
+}
+
+static LogicalResult verifyPipeAttrs(Operation *op, OperandRange fields) {
+  auto capacity = op->getAttrOfType<IntegerAttr>("capacity");
+  if (!capacity || capacity.getInt() <= 0)
+    return op->emitOpError("requires positive capacity");
+  auto scope = op->getAttrOfType<StringAttr>("scope");
+  if (!scope || scope.getValue() != "cta")
+    return op->emitOpError("supports only scope = \"cta\"");
+
+  auto fieldNames = op->getAttrOfType<ArrayAttr>("field_names");
+  if (!fieldNames || fieldNames.size() != fields.size())
+    return op->emitOpError("expects field_names size to match field operands");
+  if (failed(verifyPipeNameArray(op, fieldNames, "field", false)))
+    return failure();
+  if (fields.empty())
+    return op->emitOpError("expects at least one pipe field");
+  for (Value field : fields) {
+    auto type = cast<ttg::MemDescType>(field.getType());
+    if (!isa<ttg::SharedMemorySpaceAttr>(type.getMemorySpace()))
+      return op->emitOpError("expects only shared-memory pipe fields");
+    if (type.getRank() < 2 || type.getShape().front() != capacity.getInt())
+      return op->emitOpError(
+          "expects field leading dimension to equal pipe capacity");
+  }
+
+  if (auto readers = op->getAttrOfType<ArrayAttr>("readers")) {
+    if (!isa<PipeCreateOp>(op))
+      return op->emitOpError("readers is only valid on musa_tle.pipe.create");
+    if (failed(verifyPipeNameArray(op, readers, "reader", false)))
+      return failure();
+  }
+  if (auto readerName = op->getAttrOfType<StringAttr>("reader_name")) {
+    if (!isa<PipeReaderWaitOp, PipeReaderReleaseOp>(op))
+      return op->emitOpError(
+          "reader_name is only valid on MUSA TLE pipe reader operations");
+    if (!isValidPublicPipeName(readerName.getValue()))
+      return op->emitOpError("expects valid public MUSA TLE pipe reader_name");
+  }
+  if (auto readerFields = op->getAttrOfType<ArrayAttr>("reader_fields")) {
+    if (!isa<PipeReaderWaitOp, PipeReaderReleaseOp>(op))
+      return op->emitOpError(
+          "reader_fields is only valid on MUSA TLE pipe reader operations");
+    if (failed(verifyPipeNameArray(op, readerFields, "reader field", false)))
+      return failure();
+    for (Attribute readerField : readerFields) {
+      if (!llvm::is_contained(fieldNames, readerField))
+        return op->emitOpError(
+            "expects reader_fields to reference payload field_names");
+    }
+  }
+  return success();
+}
+
+static LogicalResult verifyPipeStage(Operation *op, Value stage) {
+  if (!stage.getType().isInteger(32))
+    return op->emitOpError("expects stage to be i32");
+  return success();
+}
+
+static LogicalResult verifyPipeStagePhase(Operation *op, Value stage,
+                                          Value phase) {
+  if (failed(verifyPipeStage(op, stage)))
+    return failure();
+  if (!phase.getType().isInteger(1))
+    return op->emitOpError("expects phase to be i1");
+  return success();
+}
 } // namespace
+
+LogicalResult PipeCreateOp::verify() {
+  return verifyPipeAttrs(getOperation(), getFields());
+}
+
+LogicalResult PipeWriterAcquireOp::verify() {
+  if (failed(verifyPipeAttrs(getOperation(), getFields())))
+    return failure();
+  return verifyPipeStagePhase(getOperation(), getStage(), getPhase());
+}
+
+LogicalResult PipeWriterCommitOp::verify() {
+  if (failed(verifyPipeAttrs(getOperation(), getFields())))
+    return failure();
+  return verifyPipeStage(getOperation(), getStage());
+}
+
+LogicalResult PipeWriterCloseOp::verify() {
+  if (failed(verifyPipeAttrs(getOperation(), getFields())))
+    return failure();
+  return verifyPipeStagePhase(getOperation(), getStage(), getPhase());
+}
+
+LogicalResult PipeReaderWaitOp::verify() {
+  if (failed(verifyPipeAttrs(getOperation(), getFields())))
+    return failure();
+  return verifyPipeStagePhase(getOperation(), getStage(), getPhase());
+}
+
+LogicalResult PipeReaderReleaseOp::verify() {
+  if (failed(verifyPipeAttrs(getOperation(), getFields())))
+    return failure();
+  return verifyPipeStage(getOperation(), getStage());
+}
+
+void PipeReaderReleaseOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get());
+  MutableOperandRange fields = getFieldsMutable();
+  for (unsigned index = 0; index < fields.size(); ++index)
+    effects.emplace_back(MemoryEffects::Free::get(), &fields[index],
+                         ttg::SharedMemory::get());
+}
 
 void ExtractTileOp::build(OpBuilder &builder, OperationState &state, Value src,
                           Value index, ArrayRef<int64_t> tileShape) {
@@ -281,6 +432,73 @@ LogicalResult LocalPointersOp::verify() {
   return success();
 }
 
+LogicalResult BarrierAllocOp::verify() {
+  if (getNumBarriers() <= 0)
+    return emitOpError("num_barriers must be positive");
+  if (getNumBarriers() > 63)
+    return emitOpError("num_barriers exceeds the 63 mthreads hardware "
+                       "barrier id limit");
+  if (getArriveCount() <= 0)
+    return emitOpError("arrive_count must be positive");
+  if (getInitPolarity() != 0 && getInitPolarity() != 1)
+    return emitOpError("init_polarity must be 0 or 1");
+  if (auto expectBytes =
+          getOperation()->getAttrOfType<IntegerAttr>("expect_bytes")) {
+    if (expectBytes.getInt() <= 0)
+      return emitOpError("expect_bytes must be positive when present");
+  }
+  return success();
+}
+
+LogicalResult BarrierIndexOp::verify() {
+  APInt constantIndex;
+  if (!matchPattern(getIndex(), m_ConstantInt(&constantIndex)))
+    return success();
+
+  int64_t index = constantIndex.getSExtValue();
+  if (index < 0)
+    return emitOpError("barrier index must be non-negative when constant");
+
+  if (auto alloc = getBaseId().getDefiningOp<BarrierAllocOp>()) {
+    if (index >= alloc.getNumBarriers())
+      return emitOpError("barrier index ")
+             << index << " out of bounds for " << alloc.getNumBarriers()
+             << " barriers";
+  }
+  return success();
+}
+
+LogicalResult BarrierWaitOp::verify() { return success(); }
+
+LogicalResult BarrierArriveOp::verify() {
+  if (getArriveCount() != 1)
+    return emitOpError(
+        "mthreads hardware barrier arrive requires arrive_count = 1");
+  return success();
+}
+
+LogicalResult SetLayoutOp::verify() {
+  auto srcTy = dyn_cast<RankedTensorType>(getSrc().getType());
+  auto resultTy = dyn_cast<RankedTensorType>(getResult().getType());
+  if (!srcTy || !resultTy)
+    return emitOpError("expects source and result to be ranked tensors");
+
+  Attribute targetEncoding = getTargetEncoding();
+  if (!dyn_cast<ttg::DistributedEncodingTrait>(targetEncoding))
+    return emitOpError("target_encoding must be a distributed encoding");
+
+  auto layoutEncoding = dyn_cast<ttg::LayoutEncodingTrait>(targetEncoding);
+  if (!layoutEncoding)
+    return emitOpError("distributed target_encoding must expose a layout rank");
+
+  unsigned targetRank = layoutEncoding.getRank();
+  if (targetRank != static_cast<unsigned>(srcTy.getRank()))
+    return emitOpError("target encoding rank ")
+           << targetRank << " must match source tensor rank "
+           << srcTy.getRank();
+  return success();
+}
+
 LogicalResult ExclusiveCumsumOp::verify() {
   auto srcTy = dyn_cast<RankedTensorType>(getSrc().getType());
   if (!srcTy)
@@ -312,6 +530,52 @@ LogicalResult ExclusiveCumsumOp::verify() {
     return emitOpError() << "expects total result type to match src element "
                             "type";
 
+  return success();
+}
+
+LogicalResult SqmmaOp::verify() {
+  auto aTy = dyn_cast<ttg::MemDescType>(getA().getType());
+  auto bTy = dyn_cast<ttg::MemDescType>(getB().getType());
+  auto cTy = dyn_cast<RankedTensorType>(getC().getType());
+  auto dTy = dyn_cast<RankedTensorType>(getD().getType());
+  if (!aTy || !bTy || !cTy || !dTy)
+    return emitOpError("expects memdesc A/B and ranked tensor accumulator");
+  if (aTy.getRank() != 2 || bTy.getRank() != 2 || cTy.getRank() != 2)
+    return emitOpError("expects rank-2 A, B, and accumulator operands");
+  if (!isa<ttg::SharedMemorySpaceAttr>(aTy.getMemorySpace()) ||
+      !isa<ttg::SharedMemorySpaceAttr>(bTy.getMemorySpace()))
+    return emitOpError("expects A and B in shared memory");
+  Type aElemTy = aTy.getElementType();
+  Type bElemTy = bTy.getElementType();
+  bool supportedInput =
+      aElemTy.isF16() || aElemTy.isBF16() || isa<Float8E4M3FNType>(aElemTy);
+  if (!supportedInput || aElemTy != bElemTy)
+    return emitOpError(
+        "mthreads TLE SQMMA requires matching f16, bf16, or fp8e4nv A/B");
+  if (!cTy.getElementType().isF32() || !dTy.getElementType().isF32())
+    return emitOpError(
+        "initial mthreads TLE SQMMA requires an f32 accumulator/result");
+
+  ArrayRef<int64_t> aShape = aTy.getShape();
+  ArrayRef<int64_t> bShape = bTy.getShape();
+  ArrayRef<int64_t> cShape = cTy.getShape();
+  if (aShape[1] != bShape[0] || cShape[0] != aShape[0] ||
+      cShape[1] != bShape[1])
+    return emitOpError("expects A[M,K] * B[K,N] and accumulator[M,N]");
+  if (!getIsAsync())
+    return emitOpError("requires isAsync=true");
+  if (getMaxNumImpreciseAcc() != 0)
+    return emitOpError(
+        "initial mthreads TLE SQMMA requires maxNumImpreciseAcc=0");
+  return success();
+}
+
+LogicalResult SqmmaWaitOp::verify() {
+  auto pendings = getOperation()->getAttrOfType<IntegerAttr>("pendings");
+  if (!pendings || pendings.getInt() != 0)
+    return emitOpError(
+        "mthreads TLE wgmma_wait currently requires pendings=0; non-zero "
+        "pending groups are not supported");
   return success();
 }
 

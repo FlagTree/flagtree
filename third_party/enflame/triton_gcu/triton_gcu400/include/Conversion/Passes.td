@@ -73,6 +73,18 @@ def ConvertTritonLoadStoreToGCUDmaPass: Pass<"convert-triton-load-store-to-gcu-d
 
 
 //===----------------------------------------------------------------------===//
+// TritonGCURemoveLayoutConversions
+//===----------------------------------------------------------------------===//
+def TritonGCURemoveLayoutConversionsPass : Pass<"triton-gcu-remove-layout-conversions", "mlir::ModuleOp"> {
+  let summary = "remove superfluous layout conversions (GCU)";
+  let description = [{
+    This pass removes superfluous layout conversions by delegating to
+    the upstream TritonGPU RemoveLayoutConversions pass. Placing this
+    here puts it at the same level as other GCU layout optimization passes.
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // TritonGCULayoutOptimize
 //===----------------------------------------------------------------------===//
  def TritonGCULayoutOptimizePass: Pass<"triton-gcu-data-layout-optimize", "gpu::GPUModuleOp"> {
@@ -85,21 +97,6 @@ def ConvertTritonLoadStoreToGCUDmaPass: Pass<"convert-triton-load-store-to-gcu-d
            /*default=*/"\"gcu400\"",
            "Architecture that these operations will run on">
    ];
-}
-
-//===----------------------------------------------------------------------===//
-// TritonDotLayoutOptimize
-//===----------------------------------------------------------------------===//
-def TritonGCUDotLayoutOptimizePass: Pass<"triton-gcu-dot-layout-optimize", "gpu::GPUModuleOp"> {
-  let summary = "optimize dot layout for gcu target";
-  let description = [{
-    This pass specified optimize triton layout for dot.
-  }];
-  let options = [
-    Option<"arch", "arch", "std::string",
-           /*default=*/"\"gcu400\"",
-           "Architecture that these operations will run on">
-  ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -135,6 +132,24 @@ def TritonGPUToTritonGCUPass: Pass<"triton-gpu-to-triton-gcu", "gpu::GPUModuleOp
     This pass change some special triton GPU op to gcu .
   }];
   let options = [
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// TritonGCUOptimizeDotOperands
+//===----------------------------------------------------------------------===//
+def TritonGCUOptimizeDotOperands : Pass<"triton-gcu-optimize-dot-operands", "gpu::GPUModuleOp"> {
+  let summary = "Fuse transpose into dot operands";
+  let description = [{
+    This pass fuses a trans op on the right-hand operand into the dot
+    operation by adjusting the dot operand encoding and eliminating the
+    explicit transpose, so the hardware can handle the transposition
+    natively without an explicit data-movement operation.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::TritonDialect"
   ];
 }
 
@@ -211,6 +226,48 @@ def TleToTritonGCUPass
 }
 
 //===----------------------------------------------------------------------===//
+// TlePipeToGCUWS
+//===----------------------------------------------------------------------===//
+def TleLowerPipeToGcuws
+    : Pass<"tle-lower-pipe-to-gcuws", "mlir::ModuleOp"> {
+  let summary = "Lower TLE pipe operations to GCUWS ops";
+
+  let description = [{
+    This pass lowers tle.pipe.* operations to gcuws.* operations for the GCU
+    backend.  It implements SPSC (single-producer, single-consumer) pipe
+    semantics by mapping TLE pipe create/acquire/commit/wait/release to
+    GCUWS init_pipeline/producer_acquire/producer_commit/consumer_wait/
+    consumer_release.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::gcuws::GCUWSDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// TritonGCUInsertProducerFences
+//===----------------------------------------------------------------------===//
+def TritonGCUInsertProducerFencesPass
+    : Pass<"triton-gcu-insert-producer-fences", "gpu::GPUModuleOp"> {
+  let summary = "Insert memory fences before producer commits for non-DTE transport.";
+  let description = [{
+    For TLE warp-specialized kernels using local store (non-DTE) transport,
+    an explicit local memory fence is needed before producer_commit to ensure
+    store visibility to the consumer. This is analogous to NVIDIA Hopper's
+    releaseFence for LocalStoreOp transport.
+
+    Currently this pass inserts fences unconditionally for TLE WS producers.
+    A more principled approach would inspect the actual transport type
+    (DTE vs local store) determined by LocalMemOptimize.
+  }];
+  let options = [];
+  let dependentDialects = ["mlir::triton::gcuws::GCUWSDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "gcu::GCUDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // TritonGCULocalMemOptimize
 //===----------------------------------------------------------------------===//
 def TritonGCULocalMemOptimizePass
@@ -243,6 +300,40 @@ def AnnotateDotAccReusePass
     Qualifying ops are annotated with the "acc_reuse_candidate" attribute.
     The downstream convert-triton-to-gcu pass checks this attribute and
     performs the remaining type-compatibility verification at conversion time.
+  }];
+  let options = [];
+  let dependentDialects = [];
+}
+
+//===----------------------------------------------------------------------===//
+// AnnotateDotFusion
+//===----------------------------------------------------------------------===//
+def AnnotateDotFusionPass
+    : Pass<"annotate-dot-fusion", "gpu::GPUModuleOp"> {
+  let summary = "Annotate tt.dot ops followed by fusion regions to use OACC directly.";
+  let description = [{
+    Post-fusion pass that detects tt.dot ops whose result is consumed by a
+    triton_gcu.elementwise_fusion_region. For qualifying dots that are
+    eligible for OACC caching, acc_store is set to "elementwise" so the
+    conversion skips the OACC-to-local matrix_store and passes the OACC
+    buffer directly to the fusion region lowering.
+  }];
+  let options = [];
+  let dependentDialects = [];
+}
+
+//===----------------------------------------------------------------------===//
+// AnnotateDotAllocaReuse
+//===----------------------------------------------------------------------===//
+def AnnotateDotAllocaReusePass
+    : Pass<"annotate-dot-alloca-reuse", "gpu::GPUModuleOp"> {
+  let summary = "Annotate tt.dot ops to reuse alloca buffers from prior dots.";
+  let description = [{
+    Analyses tt.dot ops in program order. For each dot, searches backwards
+    through preceding dots. If a previous dot's accumulator (C operand) is
+    not reachable via use-def chains from the current dot's C operand, the
+    current dot is annotated with the same alloca group ID so the downstream
+    ConvertTritonToGCU pass can reuse the same stack-allocated OACC buffer.
   }];
   let options = [];
   let dependentDialects = [];

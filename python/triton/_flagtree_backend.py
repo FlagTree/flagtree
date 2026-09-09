@@ -1,3 +1,23 @@
+# Copyright 2025-     FlagOS Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 from pathlib import Path
 
 
@@ -10,3 +30,20 @@ def _read_flagtree_backend() -> str:
 
 
 FLAGTREE_BACKEND: str = _read_flagtree_backend()
+
+
+def get_active_backend_name() -> str:
+    """Return the configured FlagTree backend, or detect the default GPU backend."""
+    if FLAGTREE_BACKEND:
+        return FLAGTREE_BACKEND
+
+    from triton.backends import backends
+
+    active = [
+        backend_name for backend_name in ("nvidia", "amd")
+        if backend_name in backends and backends[backend_name].driver.is_active()
+    ]
+    if len(active) != 1 or not active[0]:
+        raise RuntimeError(f"FLAGTREE_BACKEND is empty, but expected exactly one active default backend; "
+                           f"found {active or 'none'}")
+    return active[0]

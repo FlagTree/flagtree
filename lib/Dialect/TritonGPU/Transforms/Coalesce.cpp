@@ -1,3 +1,28 @@
+/*
+ * Copyright 2018-2020 Philippe Tillet
+ * Copyright 2020-2022 OpenAI
+ * Copyright 2025-     FlagOS Contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 #include <iterator>
 #include <numeric>
 
@@ -83,7 +108,14 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     // the pointers should have for best memory coalescing
     llvm::MapVector<Operation *, Attribute> layoutMap;
     int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
+#ifdef __TLE__
+    bool failedExplicitEncoding = false;
+#endif
     moduleOp.walk([&](Operation *curr) {
+#ifdef __TLE__
+      if (failedExplicitEncoding)
+        return;
+#endif
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
         return;
@@ -93,6 +125,17 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         isPtrTensor = isa<PointerType>(tensorType.getElementType());
       if (!isPtrTensor)
         return;
+#ifdef __TLE__
+      Attribute explicitEncoding;
+      if (failed(inferTleExplicitMemoryEncoding(curr, explicitEncoding))) {
+        failedExplicitEncoding = true;
+        return;
+      }
+      if (explicitEncoding) {
+        LDBG("skip coalescing memory op with hard TLE encoding: " << *curr);
+        return;
+      }
+#endif
       int numWarps = lookupNumWarps(curr);
 
       auto tensorType = cast<RankedTensorType>(ptr.getType());
@@ -103,6 +146,12 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
                                            ctaLayout, shapePerCTA);
       layoutMap[curr] = layout;
     });
+#ifdef __TLE__
+    if (failedExplicitEncoding) {
+      signalPassFailure();
+      return;
+    }
+#endif
 
     // Also pick a layout for descriptor load/store ops.
     pickDescriptorLoadStoreLayout(moduleOp, layoutMap);

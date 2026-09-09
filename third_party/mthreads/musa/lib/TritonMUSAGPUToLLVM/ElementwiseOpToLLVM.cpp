@@ -69,24 +69,18 @@ struct DivSIOpConversion
     Value rhs = maybeBitcastSameWidth(b, operands[0][1], logicalElemTy);
 
     auto intTy = dyn_cast<IntegerType>(logicalElemTy);
-    auto elemWidth = intTy.getWidth();
-    Value out;
-    if (!intTy || (elemWidth != 16 && elemWidth != 32)) {
-      out = LLVM::SDivOp::create(rewriter, loc, logicalElemTy, lhs, rhs);
+    if (!intTy || intTy.getWidth() != 16) {
+      SmallVector<Value> divOperands{lhs, rhs};
+      Value out = LLVM::SDivOp::create(rewriter, loc, logicalElemTy,
+                                       divOperands, op->getAttrs());
       return {maybeBitcastSameWidth(b, out, packedElemTy)};
     }
 
-    Type widenedTy;
-    if (elemWidth == 16) {
-      widenedTy = rewriter.getI32Type();
-      Value lhsWide = LLVM::SExtOp::create(rewriter, loc, widenedTy, lhs);
-      Value rhsWide = LLVM::SExtOp::create(rewriter, loc, widenedTy, rhs);
-      Value outWide =
-          createI32SignedDivCall(op, loc, rewriter, lhsWide, rhsWide);
-      out = LLVM::TruncOp::create(rewriter, loc, logicalElemTy, outWide);
-    } else {
-      out = createI32SignedDivCall(op, loc, rewriter, lhs, rhs);
-    }
+    Type widenedTy = rewriter.getI32Type();
+    Value lhsWide = LLVM::SExtOp::create(rewriter, loc, widenedTy, lhs);
+    Value rhsWide = LLVM::SExtOp::create(rewriter, loc, widenedTy, rhs);
+    Value outWide = createI32SignedDivCall(op, loc, rewriter, lhsWide, rhsWide);
+    Value out = LLVM::TruncOp::create(rewriter, loc, logicalElemTy, outWide);
     return {maybeBitcastSameWidth(b, out, packedElemTy)};
   }
 };
@@ -110,26 +104,17 @@ struct RemSIOpConversion
     Value rhs = maybeBitcastSameWidth(b, operands[0][1], logicalElemTy);
 
     auto intTy = dyn_cast<IntegerType>(logicalElemTy);
-    auto elemWidth = intTy.getWidth();
-    Value out;
-    if (!intTy || (elemWidth != 16 && elemWidth != 32)) {
-      out = LLVM::SRemOp::create(rewriter, loc, logicalElemTy, lhs, rhs);
+    if (!intTy || intTy.getWidth() != 16) {
+      Value out = LLVM::SRemOp::create(rewriter, loc, logicalElemTy, lhs, rhs);
       return {maybeBitcastSameWidth(b, out, packedElemTy)};
     }
 
-    if (elemWidth == 16) {
-      Type widenedTy = rewriter.getI32Type();
-      Value lhsWide = LLVM::SExtOp::create(rewriter, loc, widenedTy, lhs);
-      Value rhsWide = LLVM::SExtOp::create(rewriter, loc, widenedTy, rhs);
-      Value remWide =
-          LLVM::SRemOp::create(rewriter, loc, widenedTy, lhsWide, rhsWide);
-      out = LLVM::TruncOp::create(rewriter, loc, logicalElemTy, remWide);
-    } else {
-      Value quot = createI32SignedDivCall(op, loc, rewriter, lhs, rhs);
-      Value prod = LLVM::MulOp::create(rewriter, loc, logicalElemTy, quot, rhs);
-      out = LLVM::SubOp::create(rewriter, loc, logicalElemTy, lhs, prod);
-    }
-
+    Type widenedTy = rewriter.getI32Type();
+    Value lhsWide = LLVM::SExtOp::create(rewriter, loc, widenedTy, lhs);
+    Value rhsWide = LLVM::SExtOp::create(rewriter, loc, widenedTy, rhs);
+    Value remWide =
+        LLVM::SRemOp::create(rewriter, loc, widenedTy, lhsWide, rhsWide);
+    Value out = LLVM::TruncOp::create(rewriter, loc, logicalElemTy, remWide);
     return {maybeBitcastSameWidth(b, out, packedElemTy)};
   }
 };
@@ -313,7 +298,9 @@ struct FpToFpOpConversion
                                  const Value &v, RoundingMode rounding) {
     switch (rounding) {
     case RoundingMode::RTNE:
-      return LLVM::FPTruncOp::create(rewriter, loc, f16_ty, v);
+      return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.musa.f2h.rn",
+                                             f16_ty, {v})
+          .getResult(0);
     case RoundingMode::RTZ:
       return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.musa.f2h.rz",
                                              f16_ty, {v})
@@ -469,7 +456,7 @@ struct FpToFpOpConversion
     }
     if (srcElemTy.isBF16() && dstElemTy.isF16()) {
       Value tmp = convertBf16ToFp32(loc, rewriter, src);
-      Value out = LLVM::FPTruncOp::create(rewriter, loc, f16_ty, tmp);
+      Value out = convertFp32ToFp16(loc, rewriter, tmp, RoundingMode::RTNE);
       return {maybeBitcastSameWidth(b, out, packedDstTy)};
     }
     if (srcElemTy == dstElemTy) {
@@ -848,6 +835,27 @@ struct TruncFOpConversion
   }
 };
 
+struct ExpOpConversionApprox
+    : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
+  using Base = ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::ExpOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    if (getIntOrFloatOrPtrBitWidth(elemTy) != 32)
+      return {};
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    constexpr double log2e = 1.4426950408889634;
+    Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
+    return {math::Exp2Op::create(rewriter, loc, f32_ty, prod,
+                                 adaptor.getAttributes().getValue())};
+  }
+};
+
 } // namespace
 
 void mlir::triton::MUSA::populateElementwiseOpToLLVMPatterns(
@@ -880,6 +888,8 @@ void mlir::triton::MUSA::populateElementwiseOpToLLVMPatterns(
                                         priorityBenefit);
   patterns.add<PreciseDivOpConversion>(typeConverter, axisInfoAnalysis,
                                        priorityBenefit);
+  patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis,
+                                      priorityBenefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   bool hwNanPropagationSupported = targetInfo.supportMaximumMinimum();

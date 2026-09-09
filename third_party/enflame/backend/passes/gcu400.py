@@ -16,13 +16,15 @@ __all__ = [
     'add_gcu_warp_specialization',
     'add_triton_gcu_allocate_warp_groups',
     'add_triton_wgdot_to_gcu',
-    'add_tritongpu_remove_layout_conversions',
+    'add_triton_gcu_remove_layout_conversions',
     'add_triton_gcu_data_layout_optimize',
     'add_gcu_combine_ops',
+    'add_triton_gcu_optimize_dot_operands',
     'add_gcu_triton_fusion',
     'add_flatten_triton_func',
     'add_annotate_dot_acc_reuse',
     'add_triton_gcu_local_mem_optimize',
+    'add_triton_gcu_insert_producer_fences',
     'add_convert_triton_to_gcu',
 ]
 
@@ -86,6 +88,11 @@ def add_gcu_tle_lower_async_load(pipeline):
     pipeline.add_pass('gcu-tle-lower-async-load')
 
 
+def add_tle_lower_pipe_to_gcuws(pipeline):
+    """Lower TLE pipe ops to GCUWS ops."""
+    pipeline.add_pass('tle-lower-pipe-to-gcuws')
+
+
 def add_tle_convert_arg_to_memdesc(pipeline):
     """Convert TLE arguments to memory descriptors."""
     pipeline.add_pass('tle-convert-arg-to-memdesc')
@@ -129,9 +136,9 @@ def add_triton_wgdot_to_gcu(pipeline):
     pipeline.add_pass('triton-wgdot-to-gcu')
 
 
-def add_tritongpu_remove_layout_conversions(pipeline):
-    """Remove unnecessary layout conversions in TritonGPU."""
-    pipeline.add_pass('tritongpu-remove-layout-conversions')
+def add_triton_gcu_remove_layout_conversions(pipeline):
+    """Remove unnecessary layout conversions in TritonGPU (GCU)."""
+    pipeline.add_pass('triton-gcu-remove-layout-conversions')
 
 
 def add_triton_gcu_data_layout_optimize(pipeline):
@@ -142,6 +149,11 @@ def add_triton_gcu_data_layout_optimize(pipeline):
 def add_gcu_combine_ops(pipeline):
     """Combine adjacent GCU operations."""
     pipeline.add_pass('gcu-combine-ops')
+
+
+def add_triton_gcu_optimize_dot_operands(pipeline):
+    """Fuse transpose on dot's right-hand operand into dot encoding."""
+    pipeline.add_pass('triton-gcu-optimize-dot-operands')
 
 
 def add_gcu_triton_fusion(pipeline, arch: str):
@@ -165,9 +177,24 @@ def add_annotate_dot_acc_reuse(pipeline):
     pipeline.add_pass('annotate-dot-acc-reuse')
 
 
+def add_annotate_dot_fusion(pipeline):
+    """Annotate dot+fusion to pass OACC directly."""
+    pipeline.add_pass('annotate-dot-fusion')
+
+
+def add_annotate_dot_alloca_reuse(pipeline):
+    """Analyse dot dependencies and annotate dot ops to reuse alloca buffers."""
+    pipeline.add_pass('annotate-dot-alloca-reuse')
+
+
 def add_triton_gcu_local_mem_optimize(pipeline):
     """Optimize local memory usage for GCU."""
     pipeline.add_pass('triton-gcu-local-mem-optimize')
+
+
+def add_triton_gcu_insert_producer_fences(pipeline):
+    """Insert memory fences before producer commits for non-DTE transport."""
+    pipeline.add_pass('triton-gcu-insert-producer-fences')
 
 
 def add_convert_triton_to_gcu(pipeline):

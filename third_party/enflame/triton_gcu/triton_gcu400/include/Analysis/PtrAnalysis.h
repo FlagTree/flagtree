@@ -48,6 +48,10 @@ struct PtrInfo {
   Value base;
   llvm::SmallVector<Value, 4> shape;
   llvm::SmallVector<Value, 4> strides;
+  // For loads: per-dim memory offsets (kept at zero; the mask start is folded
+  // into the base). For stores: per-dim within-tile mask start (e.g. half for
+  // a `>=`-style mask); ConfigGcuStore combines it with each warp's partition
+  // to compute the per-warp source slice offset and destination offset.
   llvm::SmallVector<Value, 4> offsets;
   llvm::DenseSet<int32_t> broadcastDims;
 };
@@ -87,7 +91,8 @@ struct PtrState {
   // set state for srcState
   void setState(OpBuilder &builder, Location loc, const PtrState &srcState);
 
-  PtrInfo getPtrInfo(OpBuilder &builder, Location loc, const MaskState &mstate);
+  PtrInfo getPtrInfo(OpBuilder &builder, Location loc, const MaskState &mstate,
+                     bool exposeMaskStartOffset);
 };
 
 class PtrAnalysis {
@@ -344,6 +349,24 @@ public:
   // Parse the iter arg of ForOp, fold away unused ones.
   static void foldAwayForOp(PatternRewriter &rewriter, scf::ForOp op,
                             llvm::SmallDenseMap<Value, PtrState> &knownPtrs);
+
+  // bypass WhileOp not include ld/st.
+  static bool byPassWhileOp(PatternRewriter &rewriter, scf::WhileOp op,
+                            const SmallVector<Operation *, 8> &candidateOps);
+
+  // Rewrite WhileOp to propagate PtrState through both before/after regions.
+  static LogicalResult rewriteWhileOp(
+      PatternRewriter &rewriter, scf::WhileOp op,
+      SmallDenseMap<Value, PtrState> &knownPtrs,
+      SmallDenseMap<Value, MaskState> &knownMasks,
+      SmallVector<Operation *, 8> &candidateOps,
+      SmallDenseMap<Operation *, SmallVector<int32_t>> &candidateHints);
+
+  // Rewrite the scf.condition terminator in WhileOp's before region.
+  static void
+  rewriteConditionOp(PatternRewriter &rewriter, scf::ConditionOp op,
+                     llvm::SmallDenseMap<Value, PtrState> &knownPtrs,
+                     llvm::SmallDenseMap<Value, MaskState> &knownMasks);
 
   // Collect candidate load/store op which could be converted to dma.
   static void collectCandidateLoadStoreOps(

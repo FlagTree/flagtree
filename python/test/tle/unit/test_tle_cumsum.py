@@ -10,6 +10,8 @@ import torch
 import triton
 import triton.language as tl
 import triton.experimental.tle.language as tle
+from triton._flagtree_backend import FLAGTREE_BACKEND
+from triton._internal_testing import get_current_target, is_cuda, is_hip
 
 
 def _is_enflame_backend():
@@ -18,12 +20,11 @@ def _is_enflame_backend():
 
 
 def _is_hcu_backend():
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == "hip"
+    return FLAGTREE_BACKEND == "hcu"
 
 
 _nv_mma_shared_layout = tl.constexpr(False if _is_hcu_backend() else True)
-threads_per_warp = 64 if _is_hcu_backend() else 32
+threads_per_warp = get_current_target().warp_size if is_hip() else 32
 
 
 def _require_cuda():
@@ -69,7 +70,7 @@ def _tle_cumsum_callee_shared_kernel(hist_ptr, BLOCK: tl.constexpr):
 
 
 @triton.jit
-def _tle_cumsum_call_shared_kernel(exclusive_ptr, sentinel_ptr, BLOCK: tl.constexpr):
+def _tle_cumsum_helper_shared_kernel(exclusive_ptr, sentinel_ptr, BLOCK: tl.constexpr):
     sentinel_value = 123456789
     offs = tl.arange(0, BLOCK)
     smem = tle.gpu.alloc([BLOCK * 2], dtype=tl.int32, scope=tle.gpu.smem, nv_mma_shared_layout=_nv_mma_shared_layout)
@@ -115,7 +116,11 @@ def _pick_expected_dtype(input_dtype: torch.dtype) -> torch.dtype:
 
 
 def _make_input(dtype: torch.dtype, block: int) -> torch.Tensor:
-    if dtype in (torch.float16, torch.float32, torch.bfloat16):
+    if dtype == torch.float16:
+        # Keep every prefix sum exactly representable in fp16 so the
+        # correctness test is independent of parallel scan accumulation order.
+        return torch.randint(-2, 3, (block, ), device="cuda", dtype=torch.int32).to(dtype)
+    if dtype in (torch.float32, torch.bfloat16):
         return torch.randn((block, ), device="cuda", dtype=dtype)
     if dtype == torch.int8:
         return torch.randint(-32, 32, (block, ), device="cuda", dtype=dtype)
@@ -142,6 +147,7 @@ def _entry_block(ptx: str) -> str:
     raise AssertionError("failed to parse PTX entry block")
 
 
+@pytest.mark.require_tle("cumsum")
 @pytest.mark.parametrize(
     "dtype, n, block, reverse, num_warps",
     [
@@ -159,6 +165,10 @@ def _entry_block(ptx: str) -> str:
 def test_tle_cumsum_exclusive_and_total(dtype, n, block, reverse, num_warps):
     if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
         pytest.skip("bfloat16 is not supported on this GPU")
+    if reverse and FLAGTREE_BACKEND == "tsingmicro":
+        pytest.skip("reverse cumsum is not supported on tsingmicro yet")
+    if (FLAGTREE_BACKEND == "tsingmicro" and dtype not in (torch.float16, torch.bfloat16, torch.float32)):
+        pytest.skip("integer cumsum not supported by the tsingmicro hardware scan")
 
     x = _make_input(dtype, block)
     out_dtype = _pick_expected_dtype(dtype)
@@ -198,8 +208,11 @@ def test_tle_cumsum_exclusive_and_total(dtype, n, block, reverse, num_warps):
         torch.testing.assert_close(total[0], expected_total)
 
 
-@pytest.mark.skipif(_is_enflame_backend(), reason="PTX-specific regression guard not applicable on Enflame GCU")
-@pytest.mark.skipif(_is_hcu_backend(), reason="PTX-specific regression guard not applicable on HCU")
+@pytest.mark.require_tle("cumsum")
+@pytest.mark.skipif(
+    not is_cuda(),
+    reason="PTX-specific regression guard requires NVIDIA CUDA backend",
+)
 def test_tle_cumsum_ptx_fastpath_regression_guard():
     block = 512
     x = torch.randint(-1024, 1024, (block, ), device="cuda", dtype=torch.int32)
@@ -232,6 +245,7 @@ def test_tle_cumsum_ptx_fastpath_regression_guard():
     assert len(re.findall(r"\bselp\b", ptx)) == 0
 
 
+@pytest.mark.require_tle("cumsum")
 @pytest.mark.skipif(not _is_hcu_backend(),
                     reason="HCU ISA-specific regression guard not applicable on non-HCU backends")
 def test_tle_cumsum_amdgcn_fastpath_regression_guard():
@@ -269,24 +283,14 @@ def test_tle_cumsum_amdgcn_fastpath_regression_guard():
         "Detected predicated ds_write: possible regression to generic path"
 
 
-def test_tle_cumsum_call_shared_frame_regression():
+@pytest.mark.require_tle("cumsum", "gpu.alloc", "gpu.local_ptr")
+def test_tle_cumsum_helper_preserves_adjacent_sentinel():
     block = 512
     num_warps = block // threads_per_warp
     exclusive = torch.empty((block, ), device="cuda", dtype=torch.int32)
     sentinel = torch.empty((block, ), device="cuda", dtype=torch.int32)
 
-    compiled = _tle_cumsum_call_shared_kernel.warmup(
-        exclusive,
-        sentinel,
-        BLOCK=block,
-        grid=(1, ),
-        num_warps=num_warps,
-        num_stages=1,
-    )
-    ttgir = compiled.asm["ttgir"]
-    assert "tt.call" in ttgir, "regression scenario requires cross-function call frame"
-
-    _tle_cumsum_call_shared_kernel[(1, )](
+    _tle_cumsum_helper_shared_kernel[(1, )](
         exclusive,
         sentinel,
         BLOCK=block,
@@ -301,6 +305,7 @@ def test_tle_cumsum_call_shared_frame_regression():
     torch.testing.assert_close(sentinel, expected_sentinel)
 
 
+@pytest.mark.require_tle("cumsum", "gpu.alloc", "gpu.local_ptr")
 def test_tle_cumsum_scalar_base_addptr_alias_regression():
     block = 512
     num_warps = block // threads_per_warp

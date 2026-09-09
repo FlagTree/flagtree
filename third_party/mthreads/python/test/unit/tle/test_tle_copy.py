@@ -1,13 +1,35 @@
+import re
+
 import pytest
 import torch
 import triton
 import triton.language as tl
 import triton.experimental.tle.language as tle
+from triton._C import libtriton
+from triton._C.libtriton import ir
+from triton.backends.compiler import Language
+from triton.compiler import ASTSource
+from triton.compiler.errors import CompilationError
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-from test_tle_utils import compile_musa, require_mthreads_libtriton
+from test_tle_utils import (
+    compile_musa,
+    mthreads_backend,
+    require_mthreads_libtriton,
+    tme_descriptor_attrs,
+)
 
 require_mthreads_libtriton()
+
+
+def _i32_constants(ir_text):
+    return {
+        name: int(value)
+        for name, value in re.findall(
+            r"(%[-\w.]+)\s*=\s*(?:arith\.)?constant\s+(-?\d+)\s*:\s*i32",
+            ir_text,
+        )
+    }
 
 
 @triton.jit
@@ -55,6 +77,253 @@ def _tma_copy_missing_offsets_kernel(desc, BLOCK: tl.constexpr):
 def _tma_copy_wrong_offset_rank_kernel(desc, BLOCK: tl.constexpr):
     smem = tle.gpu.alloc((BLOCK, ), dtype=tl.float16, nv_mma_shared_layout=False)
     tle.gpu.copy(desc, smem, (BLOCK, ), (0, 0))
+
+
+@triton.jit
+def _tma_completion_copy_kernel(
+    desc,
+    dynamic_k,
+    STAGES: tl.constexpr,
+    SLOT: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    TRANSPOSE_OFFSETS: tl.constexpr,
+):
+    smem = tle.gpu.alloc(
+        (STAGES, BLOCK_M, BLOCK_N),
+        dtype=tl.float16,
+        nv_mma_shared_layout=False,
+    )
+    full = tle.gpu.alloc_barriers(
+        STAGES,
+        arrive_count=1,
+        init=tle.gpu.PENDING,
+        expect_bytes=32768,
+    )
+    offsets = (dynamic_k, 0) if TRANSPOSE_OFFSETS else (0, dynamic_k)
+    tle.gpu.copy(
+        desc,
+        smem.slot(SLOT),
+        (BLOCK_M, BLOCK_N),
+        offsets,
+        barrier=full[SLOT],
+    )
+
+
+@triton.jit
+def _tma_implicit_completion_copy_kernel(desc):
+    smem = tle.gpu.alloc((256, 64), dtype=tl.float16, nv_mma_shared_layout=False)
+    tle.gpu.copy(desc, smem, (256, 64), (0, 0))
+
+
+@triton.jit
+def _tma_completion_unindexed_barrier_kernel(desc):
+    smem = tle.gpu.alloc((256, 64), dtype=tl.float16, nv_mma_shared_layout=False)
+    full = tle.gpu.alloc_barriers(2, expect_bytes=32768)
+    tle.gpu.copy(desc, smem, (256, 64), (0, 0), barrier=full)
+
+
+@triton.jit
+def _tma_completion_missing_bytes_kernel(desc):
+    smem = tle.gpu.alloc((256, 64), dtype=tl.float16, nv_mma_shared_layout=False)
+    full = tle.gpu.alloc_barrier()
+    tle.gpu.copy(desc, smem, (256, 64), (0, 0), barrier=full)
+
+
+@triton.jit
+def _tma_completion_wrong_direction_kernel(desc):
+    smem = tle.gpu.alloc((256, 64), dtype=tl.float16, nv_mma_shared_layout=False)
+    full = tle.gpu.alloc_barrier(expect_bytes=32768)
+    tle.gpu.copy(smem, desc, (256, 64), (0, 0), barrier=full)
+
+
+@triton.jit
+def _tma_completion_dynamic_bytes_kernel(desc, expect_bytes):
+    smem = tle.gpu.alloc((256, 64), dtype=tl.float16, nv_mma_shared_layout=False)
+    full = tle.gpu.alloc_barrier(expect_bytes=expect_bytes)
+    tle.gpu.copy(desc, smem, (256, 64), (0, 0), barrier=full)
+
+
+@triton.jit
+def _tma_completion_wrong_barrier_type_kernel(desc):
+    smem = tle.gpu.alloc((256, 64), dtype=tl.float16, nv_mma_shared_layout=False)
+    tle.gpu.copy(desc, smem, (256, 64), (0, 0), barrier=0)
+
+
+def _compile_tma_completion_ir(fn, signature, constexprs=None):
+    target, backend = mthreads_backend()
+    options = backend.parse_options({"num_stages": 1})
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+
+    src = ASTSource(
+        fn=fn,
+        signature=signature,
+        constexprs=constexprs or {},
+        attrs=tme_descriptor_attrs(signature),
+    )
+    module = src.make_ir(
+        target,
+        options,
+        backend.get_codegen_implementation(options),
+        backend.get_module_map(),
+        context,
+    )
+    stages = {}
+    backend.add_stages(stages, options, Language.TRITON)
+    metadata = {}
+    module = stages["ttir"](module, metadata)
+    ttir = module.str_nodebug()
+    module = stages["ttgir"](module, metadata)
+    ttgir = module.str_nodebug()
+
+    pm = ir.pass_manager(context)
+    libtriton.mthreads.passes.ttgpuir.add_allocate_shared_memory(pm, 31)
+    pm.run(module, "allocate_tma_completion_shared_memory")
+    return ttir, ttgir, module.str_nodebug()
+
+
+@pytest.mark.parametrize(
+    "stages,slot,block_m,block_n,transpose_offsets",
+    [
+        (1, 0, 256, 64, False),
+        (1, 0, 64, 256, True),
+        (2, 0, 256, 64, False),
+        (2, 1, 256, 64, False),
+        (2, 0, 64, 256, True),
+        (2, 1, 64, 256, True),
+    ],
+)
+def test_tle_tma_completion_barrier_preserves_mthreads_contract(
+    stages,
+    slot,
+    block_m,
+    block_n,
+    transpose_offsets,
+):
+    ttir, ttgir, allocated = _compile_tma_completion_ir(
+        _tma_completion_copy_kernel,
+        signature={
+            "desc": f"tensordesc<fp16[{block_m}, {block_n}]>",
+            "dynamic_k": "i32",
+            "STAGES": "constexpr",
+            "SLOT": "constexpr",
+            "BLOCK_M": "constexpr",
+            "BLOCK_N": "constexpr",
+            "TRANSPOSE_OFFSETS": "constexpr",
+        },
+        constexprs={
+            "STAGES": stages,
+            "SLOT": slot,
+            "BLOCK_M": block_m,
+            "BLOCK_N": block_n,
+            "TRANSPOSE_OFFSETS": transpose_offsets,
+        },
+    )
+
+    assert ttir.count("ttg.tma_copy") == 1, ttir
+    assert ttir.count("musa_tle.barrier.alloc") == 1, ttir
+    assert ttir.count("musa_tle.barrier.index") == 1, ttir
+    assert ttir.count("ttg.memdesc_index") == 1, ttir
+    assert "barrier %" in ttir, ttir
+    assert "expect_bytes = 32768 : i32" in ttir, ttir
+    assert f"tensor<{block_m}x{block_n}xf16>" in ttir, ttir
+    assert re.search(
+        rf"!tt\.tensordesc<tensor<{block_m}x{block_n}xf16",
+        ttir,
+    ), ttir
+    assert "tt.make_tensor_descriptor" not in ttir, ttir
+    if transpose_offsets:
+        assert re.search(r"\[%arg\d+, %c0_i32\] barrier", ttir), ttir
+    else:
+        assert re.search(r"\[%c0_i32, %arg\d+\] barrier", ttir), ttir
+
+    assert "musa_tle.barrier.alloc" not in ttgir, ttgir
+    assert "musa_tle.barrier.index" not in ttgir, ttgir
+    async_line = next(line for line in ttgir.splitlines() if "ttmg.async_tme_copy_global_to_local" in line)
+    barrier_name = re.search(r"\],\s*(%[-\w.]+),\s*%", async_line).group(1)
+    assert _i32_constants(ttgir)[barrier_name] == slot + 1, ttgir
+    assert f"blockShape = array<i32: {block_m}, {block_n}>" in async_line, ttgir
+    assert "musa.tme.explicit_completion" in async_line, ttgir
+    assert "musa.tme.issue_thread = 0 : i32" in async_line, ttgir
+    init_lines = [line for line in ttgir.splitlines() if "ttmg.init_arrival" in line]
+    assert len(init_lines) == stages, ttgir
+    constants = _i32_constants(ttgir)
+    init_ids = [constants[re.search(r"ttmg\.init_arrival\s+(%[-\w.]+)", line).group(1)] for line in init_lines]
+    assert init_ids == list(range(1, stages + 1)), ttgir
+    assert "ttmg.barrier_add_trans" in ttgir, ttgir
+    assert "ttmg.arrive_barrier_noret" in ttgir, ttgir
+    assert "ttmg.wait_barrier" not in ttgir, ttgir
+    assert f"musa.max_bar_id = {stages}" in ttgir, ttgir
+
+    assert f"ttg.shared = {stages * 32768} : i32" in allocated, allocated
+
+
+def test_tle_tma_copy_without_completion_barrier_keeps_implicit_sync():
+    ttir, ttgir, allocated = _compile_tma_completion_ir(
+        _tma_implicit_completion_copy_kernel,
+        signature={"desc": "tensordesc<fp16[256, 64]>"},
+    )
+
+    assert "ttg.tma_copy" in ttir, ttir
+    assert "!tt.tensordesc<tensor<256x64xf16" in ttir, ttir
+    assert "tt.make_tensor_descriptor" not in ttir, ttir
+    assert " barrier " not in next(line for line in ttir.splitlines() if "ttg.tma_copy" in line), ttir
+    assert "expect_bytes" not in next(line for line in ttir.splitlines() if "ttg.tma_copy" in line), ttir
+    assert "ttmg.init_arrival" in ttgir, ttgir
+    assert "ttmg.barrier_add_trans" in ttgir, ttgir
+    assert "ttmg.async_tme_copy_global_to_local" in ttgir, ttgir
+    assert "ttmg.arrive_barrier_noret" in ttgir, ttgir
+    assert "ttmg.wait_barrier" in ttgir, ttgir
+    assert "musa.max_bar_id = 1" in ttgir, ttgir
+    assert "ttg.shared = 32768 : i32" in allocated, allocated
+
+
+def test_tle_tma_copy_without_completion_barrier_keeps_legacy_barrier0():
+    compiled = compile_musa(
+        _tma_implicit_completion_copy_kernel,
+        signature={"desc": "tensordesc<fp16[256, 64]>"},
+    )
+    llir = compiled.asm["llir"]
+
+    assert "call void @llvm.musa.barrier0()" in llir, llir
+    assert "call void @llvm.musa.tme.ld.tile.2d" in llir, llir
+
+
+@pytest.mark.parametrize(
+    "fn,signature,message",
+    [
+        (
+            _tma_completion_unindexed_barrier_kernel,
+            {"desc": "tensordesc<fp16[256, 64]>"},
+            "TMA copy barrier arrays must be indexed",
+        ),
+        (
+            _tma_completion_missing_bytes_kernel,
+            {"desc": "tensordesc<fp16[256, 64]>"},
+            "TMA copy barrier must be allocated with expect_bytes",
+        ),
+        (
+            _tma_completion_wrong_direction_kernel,
+            {"desc": "tensordesc<fp16[256, 64]>"},
+            "TMA copy barrier is only supported for global-to-shared TMA copy",
+        ),
+        (
+            _tma_completion_dynamic_bytes_kernel,
+            {"desc": "tensordesc<fp16[256, 64]>", "expect_bytes": "i32"},
+            "expect_bytes must be a compile-time integer or None",
+        ),
+        (
+            _tma_completion_wrong_barrier_type_kernel,
+            {"desc": "tensordesc<fp16[256, 64]>"},
+            "TMA copy barrier expects tle.gpu barrier",
+        ),
+    ],
+)
+def test_tle_tma_completion_barrier_rejects_invalid_inputs(fn, signature, message):
+    with pytest.raises(CompilationError, match=message):
+        _compile_tma_completion_ir(fn, signature)
 
 
 def test_tle_copy_normal_gmem_to_smem_lowers_to_async_copy():
@@ -182,3 +451,57 @@ def test_tle_copy_tma_smem_to_desc_runtime():
     cols = torch.arange(0, block_n, dtype=torch.float16)[None, :]
     ref = rows * 10 + cols
     torch.testing.assert_close(dst.cpu(), ref, rtol=0, atol=0)
+
+
+@triton.jit
+def _tme_grouped_reuse_kernel(source_desc, destination_desc, seen, ROWS: tl.constexpr, COLS: tl.constexpr,
+                              SWIZZLE: tl.constexpr):
+    layout: tl.constexpr = tle.gpu.swizzled_shared_layout(16 if SWIZZLE else 1, 1, 8 if SWIZZLE else 1, [2, 1, 0],
+                                                          [1, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0])
+    storage = tle.gpu.alloc((2, ROWS, COLS), dtype=source_desc.dtype, layout=layout)
+    offset: tl.constexpr = 128 if SWIZZLE else 16
+    rows = tl.arange(0, ROWS)[:, None]
+    cols = tl.arange(0, COLS)[None, :]
+    for iteration in tl.range(4, num_stages=1):
+        slot = storage.slot(iteration % 2)
+        tle.gpu.copy(source_desc, slot, (ROWS, COLS), ((iteration + 1) * ROWS, offset))
+        if not SWIZZLE:
+            ptr = tle.gpu.local_ptr(slot)
+            values = tl.load(ptr)
+            tl.store(seen + iteration * ROWS * COLS + rows * COLS + cols, values)
+            # Preserve some old elements while reusing the same allocation as output.
+            tl.store(ptr, values + 3.0, tl.broadcast_to(cols % 3 != 0, (ROWS, COLS)))
+        tle.gpu.copy(slot, destination_desc, (ROWS, COLS), ((iteration + 1) * ROWS, offset))
+
+
+@pytest.mark.skipif(not torch.musa.is_available(), reason="MUSA device is not available")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("cols,swizzle", [(64, False), (128, False), (256, False), (256, True)])
+def test_tle_tme_grouped_reuse_runtime(dtype, cols, swizzle):
+    rows = 32
+    offset = 128 if swizzle else 16
+    width = cols + 2 * offset
+    source = ((torch.arange(6 * rows * width, dtype=torch.float32) % 29 - 14) / 4).reshape(6 * rows, width)
+    source = source.to(dtype)
+    src = source.to("musa")
+    dst = torch.full_like(src, -23)
+    seen = torch.empty((4, rows, cols), dtype=dtype, device="musa")
+    source_desc = TensorDescriptor.from_tensor(src, [rows, cols])
+    destination_desc = TensorDescriptor.from_tensor(dst, [rows, cols])
+    compiled = _tme_grouped_reuse_kernel[(1, )](source_desc, destination_desc, seen, ROWS=rows, COLS=cols,
+                                                SWIZZLE=swizzle, num_warps=4, num_stages=1)
+    expected = source[rows:5 * rows, offset:offset + cols].reshape(4, rows, cols)
+    if not swizzle:
+        torch.testing.assert_close(seen.cpu(), expected, rtol=0, atol=0)
+    output = torch.full_like(source, -23)
+    updated = expected if swizzle else torch.where(torch.arange(cols) % 3 != 0, expected + 3, expected)
+    output[rows:5 * rows, offset:offset + cols] = updated.reshape(4 * rows, cols)
+    torch.testing.assert_close(dst.cpu(), output, rtol=0, atol=0)
+    # Inspect only the actual transfer shape, not the surrounding lowering.
+    segment_rows = 1 if cols > 128 and not swizzle else rows
+    shape = f"<2 x i32> <i32 {min(cols, 128)}, i32 {segment_rows}>"
+    for intrinsic in ("llvm.musa.tme.ld.tile.2d", "llvm.musa.tme.st.2d"):
+        calls = [line for line in compiled.asm["llir"].splitlines() if f"call void @{intrinsic}(" in line]
+        assert calls and all(shape in line for line in calls)
+    if swizzle:
+        assert "maxPhase = 8" in compiled.asm["ttgir"]

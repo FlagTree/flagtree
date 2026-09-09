@@ -1,3 +1,25 @@
+# Copyright 2018-2020 Philippe Tillet
+# Copyright 2020-2022 OpenAI
+# Copyright 2025-     FlagOS Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 import functools
 import math
 import os
@@ -8,6 +30,8 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 from . import runtime
+from .backends import backends as _available_backends
+from ._flagtree_spec import spec_func
 
 
 def nvsmi(attrs):
@@ -57,7 +81,8 @@ def _summarize_statistics(times, quantiles, return_mode):
         return statistics.median(times)
 
 
-def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
+# flagtree flagtune: Make Triton's fixed replay count configurable while preserving its default of 10.
+def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean", n_retries=10):
     """
     Benchmark the runtime of the provided function.
 
@@ -69,11 +94,21 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :param n_retries: Number of independently timed graph replays used to summarize latency.
+    :type n_retries: int
     """
     import torch
     assert return_mode in ["min", "max", "mean", "median", "all"]
+    # flagtree flagtune: Validate the configurable graph replay count.
+    if not isinstance(n_retries, int) or isinstance(n_retries, bool) or n_retries <= 0:
+        raise ValueError("n_retries must be a positive integer")
 
-    with torch.cuda.stream(torch.cuda.Stream()):
+    # flagtree flagtune: Preserve work queued by the caller before switching streams for warmup.
+    # with torch.cuda.stream(torch.cuda.Stream()):
+    caller_stream = torch.cuda.current_stream()
+    benchmark_stream = torch.cuda.Stream()
+    benchmark_stream.wait_stream(caller_stream)
+    with torch.cuda.stream(benchmark_stream):
         # warmup
         fn()
         if grad_to_none is not None:
@@ -112,7 +147,6 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         torch.cuda.synchronize()
         # measure time and return
         ret = []
-        n_retries = 10
         for _ in range(n_retries):
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)
@@ -124,7 +158,31 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(ret, quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+# flagtree: supports specifying device_type to select runtime_driver
+@functools.lru_cache(maxsize=None)
+def _get_backend_driver(backend_name: str):
+    if backend_name not in _available_backends:
+        available = ", ".join(sorted(_available_backends.keys()))
+        raise RuntimeError(f"Unsupported device_type/backend '{backend_name}'. "
+                           f"Available Triton backends: [{available}]")
+    driver_cls = _available_backends[backend_name].driver
+    if not driver_cls.is_active():
+        raise RuntimeError(f"Backend '{backend_name}' is not active.")
+    return driver_cls()
+
+
+# flagtree: supports specifying device_type to select runtime_driver
+def _get_runtime_driver_active(device_type: str | None):
+    _DEVICE_TYPE_TO_BACKEND = {
+        "cuda": "nvidia", "nvidia": "nvidia", "hip": "amd", "amd": "amd", "musa": "mthreads", "mthreads": "mthreads"
+    }
+    if device_type is None:
+        return runtime.driver.active
+    backend_name = _DEVICE_TYPE_TO_BACKEND.get(device_type.lower(), device_type.lower())
+    return _get_backend_driver(backend_name)
+
+
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", device_type=None):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -141,22 +199,28 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     :type quantiles: list[float], optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    # flagtree: add param device_type
+    :param device_type: Optional device/backend selector for benchmarking (e.g. "cuda", "hip", "musa").
+                        When omitted, use the current active Triton driver.
+    :type device_type: str, optional
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
-    di = runtime.driver.active.get_device_interface()
+    # flagtree: supports specifying device_type to select runtime_driver
+    runtime_driver_active = _get_runtime_driver_active(device_type)
+    di = runtime_driver_active.get_device_interface()
 
     fn()
     di.synchronize()
 
-    cache = runtime.driver.active.get_empty_cache_for_benchmark()
+    cache = runtime_driver_active.get_empty_cache_for_benchmark()  # flagtree
 
     # Estimate the runtime of the function
     start_event = di.Event(enable_timing=True)
     end_event = di.Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
-        runtime.driver.active.clear_cache(cache)
+        runtime_driver_active.clear_cache(cache)  # flagtree
         fn()
     end_event.record()
     di.synchronize()
@@ -179,7 +243,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
             for x in grad_to_none:
                 x.grad = None
         # we clear the L2 cache before each run
-        runtime.driver.active.clear_cache(cache)
+        runtime_driver_active.clear_cache(cache)  # flagtree
         # record time of `fn`
         start_event[i].record()
         fn()
@@ -235,7 +299,8 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     # we handle size==1 case separately as we can
     # provide better error message there
     if x.size > 1 or y.size > 1:
-        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
+        # flagtree: add err_msg param to np.testing.assert_allclose
+        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True, err_msg=err_msg)
         return
     if not np.allclose(x, y, atol=atol, rtol=rtol):
         raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
@@ -540,3 +605,8 @@ def get_max_simd_tflops(dtype, clock_rate, device=None):
             raise RuntimeError("dtype not supported")
     tflops = num_subcores * clock_rate * ops_per_sub_core * 1e-9
     return tflops
+
+
+# flagtree backend function specialization
+nvsmi = spec_func("nvsmi") or nvsmi
+get_max_tensorcore_tflops = spec_func("get_max_tensorcore_tflops") or get_max_tensorcore_tflops

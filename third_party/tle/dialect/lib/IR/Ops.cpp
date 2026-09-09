@@ -1,3 +1,27 @@
+/*
+ * Copyright 2025-     FlagOS Contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -9,8 +33,9 @@
 #include "llvm/ADT/SmallSet.h"
 #include <cctype>
 #include <limits>
+#include <optional>
 
-#include "tle/dialect/include/IR/VerfiyUtils.h"
+#include "tle/dialect/include/IR/VerifyUtils.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
@@ -183,6 +208,61 @@ LogicalResult MemDescWGMMAViewOp::verify() {
            triton::gpu::SharedLinearEncodingAttr>(resultType.getEncoding()))
     return emitOpError("expects result to use a WGMMA-compatible shared "
                        "encoding");
+  return success();
+}
+
+static std::optional<int64_t>
+getStaticMemDescByteSize(triton::gpu::MemDescType type) {
+  int64_t numElements = 1;
+  for (int64_t dim : type.getShape()) {
+    if (ShapedType::isDynamic(dim) || dim < 0)
+      return std::nullopt;
+    if (dim != 0 && numElements > std::numeric_limits<int64_t>::max() / dim)
+      return std::nullopt;
+    numElements *= dim;
+  }
+
+  int64_t elementBits = type.getElementTypeBitWidth();
+  int64_t elementBytes = (elementBits + 7) / 8;
+  if (elementBytes <= 0)
+    return std::nullopt;
+  if (numElements > std::numeric_limits<int64_t>::max() / elementBytes)
+    return std::nullopt;
+  return numElements * elementBytes;
+}
+
+LogicalResult MemDescAliasOp::verify() {
+  auto srcType = getSrc().getType();
+  auto resultType = getType();
+  int64_t offsetBytes = getOffsetBytesAttr().getInt();
+
+  if (srcType.getMemorySpace() != resultType.getMemorySpace())
+    return emitOpError("expects source and result memory spaces to match");
+  if (!isa<triton::gpu::SharedMemorySpaceAttr>(srcType.getMemorySpace()))
+    return emitOpError("expects shared memory descriptors");
+  if (resultType.getMutableMemory() && !srcType.getMutableMemory())
+    return emitOpError(
+        "cannot create a mutable alias from an immutable source");
+  if (offsetBytes < 0)
+    return emitOpError("expects non-negative offset_bytes");
+  if (offsetBytes > std::numeric_limits<int32_t>::max())
+    return emitOpError("expects offset_bytes to fit in i32 for shared memory "
+                       "lowering");
+
+  int64_t resultElementBytes = (resultType.getElementTypeBitWidth() + 7) / 8;
+  if (resultElementBytes <= 0)
+    return emitOpError("expects byte-addressable result element type");
+  if (offsetBytes % resultElementBytes != 0)
+    return emitOpError("expects offset_bytes to be aligned to the result "
+                       "element byte width");
+
+  std::optional<int64_t> srcBytes = getStaticMemDescByteSize(srcType);
+  std::optional<int64_t> resultBytes = getStaticMemDescByteSize(resultType);
+  if (!srcBytes || !resultBytes)
+    return emitOpError("expects static source and result memdesc byte sizes");
+  if (*resultBytes > *srcBytes || offsetBytes > *srcBytes - *resultBytes)
+    return emitOpError("result byte range must fit within the source view");
+
   return success();
 }
 
@@ -676,6 +756,15 @@ LogicalResult GetDeviceIdOp::verify() {
   return success();
 }
 
+LogicalResult GetWorldRankOp::verify() {
+  auto resultTy = getResult().getType();
+
+  if (!resultTy.isInteger(32))
+    return emitOpError("result type must be i32");
+
+  return success();
+}
+
 LogicalResult GetNumPesOp::verify() {
   auto resultTy = getResult().getType();
 
@@ -752,7 +841,9 @@ LogicalResult LocalPointersOp::verify() {
       if (resultEncoding && indexTy.getEncoding() &&
           resultEncoding != indexTy.getEncoding())
         return emitOpError()
-               << "expects indices return tensors to match result encoding";
+               << "expects indices return tensors to match result encoding; "
+               << "result encoding is " << resultEncoding
+               << ", index encoding is " << indexTy.getEncoding();
     }
 
     if (indexShape != resultShape)
@@ -812,6 +903,17 @@ LogicalResult ExclusiveCumsumOp::verify() {
 
 LogicalResult DistributedBarrierOp::verify() {
   auto *op = getOperation();
+  auto spaceAttr = op->getAttrOfType<StringAttr>("space");
+
+  if (spaceAttr) {
+    StringRef space = spaceAttr.getValue();
+    if (space != "device" && space != "inter" && space != "world")
+      return emitOpError()
+             << "FlagCX space must be 'device', 'inter', or 'world', got '"
+             << space << "'";
+    return DistributedBarrier::verifyFlagCxSpace(op, getSrc());
+  }
+
   auto kindAttr = op->getAttrOfType<StringAttr>("group_kind");
   auto rankAttr = op->getAttrOfType<IntegerAttr>("group_rank");
   auto shapeAttr = op->getAttrOfType<DenseI32ArrayAttr>("group_shape");
@@ -891,14 +993,50 @@ LogicalResult DistributedBarrierOp::verify() {
   return success();
 }
 
+LogicalResult NodePutOp::verify() {
+  return verifyNodeTransfer(getOperation(), getSrc(), getDstMem(), getComm(),
+                            getPeer(), getSrcOffset(), getDstOffset(),
+                            getNelems(), getNetIdx(), getElemBytesAttr(),
+                            getCoopKind());
+}
+
+LogicalResult NodeGetOp::verify() {
+  return verifyNodeTransfer(getOperation(), getSrc(), getDstMem(), getComm(),
+                            getPeer(), getSrcOffset(), getDstOffset(),
+                            getNelems(), getNetIdx(), getElemBytesAttr(),
+                            getCoopKind());
+}
+
 LogicalResult RemotePointersOp::verify() {
-  Type srcTy = getSrc().getType();
-  Type resultTy = getResult().getType();
-  auto spaceAttr = getSpace();
+  StringRef spaceAttr = getSpace();
+  if (spaceAttr != "cluster" && spaceAttr != "device" && spaceAttr != "node")
+    return emitOpError()
+           << "expects space to be 'cluster', 'device', or 'node'";
+
+  if (!getShardId().getType().isInteger(32))
+    return emitOpError() << "expects shard_id to be i32";
+
+  if (spaceAttr == "node")
+    return RemotePointers::verifyNodeSpace(*this);
+
+  auto coopKindAttr = getCoopKindAttr();
+  if (getComm() || getNetIdx() || coopKindAttr)
+    return emitOpError()
+           << "cluster/device space does not accept node-only operands or "
+              "attributes";
+  if (!getResult())
+    return emitOpError()
+           << "cluster/device space must produce a remote pointer result";
+
   if (spaceAttr == "device") {
     if (failed(RemotePointers::verifyDeviceSpace(getSrc(), getResult())))
       return failure();
   } else {
+    if (!getSrc())
+      return emitOpError() << "cluster space requires a source pointer";
+
+    Type srcTy = getSrc().getType();
+    Type resultTy = getResult().getType();
     auto getPtrInfo = [&](Type ty, triton::PointerType &ptr, bool &isTensor,
                           ArrayRef<int64_t> &shape,
                           Attribute &encoding) -> LogicalResult {
@@ -947,8 +1085,7 @@ LogicalResult RemotePointersOp::verify() {
                                 "match";
       if (srcEncoding && resultEncoding && srcEncoding != resultEncoding)
         return emitOpError()
-               << "expects src/result pointer tensor encodings to "
-                  "match";
+               << "expects src/result pointer tensor encodings to match";
     }
     if (srcPtrTy.getPointeeType() != resultPtrTy.getPointeeType())
       return emitOpError() << "expects src/result pointer pointee types to "
@@ -964,9 +1101,6 @@ LogicalResult RemotePointersOp::verify() {
              << "expects result pointers to live in cluster shared memory "
                 "(addrspace=7)";
   }
-
-  if (!getShardId().getType().isInteger(32))
-    return emitOpError() << "expects shard_id to be i32";
 
   bool hasOffset = getOffset() != nullptr;
   if (spaceAttr == "device") {
@@ -989,6 +1123,18 @@ LogicalResult RemotePointersOp::verify() {
       return emitOpError() << "expects offset to be i64";
   }
 
+  return success();
+}
+
+LogicalResult SignalOp::verify() {
+  if (auto err = Signal::verifySignalOp(getSignalOp(), getValue()))
+    return emitOpError() << *err;
+  return success();
+}
+
+LogicalResult SignalWaitOp::verify() {
+  if (auto err = Signal::verifySignalWaitOp(getWaitKind(), getTarget()))
+    return emitOpError() << *err;
   return success();
 }
 

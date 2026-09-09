@@ -1,5 +1,6 @@
 # flagtree tle
 add_triton_library(TritonTLETransforms
+  TleFuseNodeRemoteTransfers.cpp
   TleEarlyAssignMemorySpace.cpp
   TleSelectEncodings.cpp
   TleInsertLocalPointerBarriers.cpp
@@ -28,9 +29,15 @@ add_triton_library(TritonTLETransforms
   RemoveRedundantCopy.cpp
   DSLRegionInline.cpp
   TleUtility.cpp
+  TleAddDistributedParams.cpp
 
   DEPENDS
   TritonTLETransformsIncGen
+  TritonGPUTableGen
+  TritonGPUAttrDefsIncGen
+  ${TLE_TRITON_GPU_ATTR_DEPENDS}
+  TritonGPUTypeInterfacesIncGen
+  TritonGPUOpInterfacesIncGen
 
   LINK_LIBS PUBLIC
   TritonTLEAnalysis

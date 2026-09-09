@@ -1,3 +1,28 @@
+/*
+ * Copyright 2018-2020 Philippe Tillet
+ * Copyright 2020-2022 OpenAI
+ * Copyright 2025-     FlagOS Contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 #ifndef TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
 #define TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
 
@@ -8,6 +33,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
 #include <numeric>
+#ifdef __TLE__
+#include <string>
+#endif
 
 namespace mlir {
 class DominanceInfo;
@@ -58,6 +86,21 @@ bool isView(Operation *op);
 // Returns whether the op is a "noop op", i.e. has one input and one output
 // and lowers to llvm as the identity function (returns the input)
 bool isNoop(Operation *op);
+
+#ifdef __TLE__
+std::string getTleExplicitEncodingAttrName(unsigned resultNumber);
+const char *getTleExplicitMemoryEncodingAttrName();
+Attribute getTleExplicitResultEncoding(Operation *op, unsigned resultNumber);
+void setTleExplicitResultEncoding(Operation *op, unsigned resultNumber,
+                                  Attribute encoding);
+void setTleExplicitResultEncoding(OpResult result, Attribute encoding);
+Attribute getTleExplicitMemoryEncoding(Operation *op);
+void setTleExplicitMemoryEncoding(Operation *op, Attribute encoding);
+Attribute getTleExplicitValueEncoding(Value value);
+LogicalResult inferTleExplicitMemoryEncoding(Operation *op,
+                                             Attribute &encoding);
+bool isTleExplicitConvertLayoutOp(Operation *op);
+#endif
 
 /* Dump Triton IR in graphviz dot format.
  *
@@ -283,6 +326,63 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 // Verifies the provided memory descriptor type used for barrier allocation
 LogicalResult verifyBarrierType(Operation *op,
                                 mlir::triton::gpu::MemDescType barrierType);
+
+#ifdef __FLAGTREE_CONCAT_DOT_OPERAND__
+// Why the register-relabel proof rejected a concat. Each is a property of the
+// encoding layout propagation assigned rather than of the op itself, so none
+// can be checked by the verifier. `tritongpu-expand-concat-dot-operand`
+// rebuilds the join tree for most of them and reports the one it cannot serve.
+// `getDotOperandRelabelFailureMessage` spells each one out.
+enum class DotOperandRelabelFailure {
+  // The verifier rejects this first, so a real op never carries it; running the
+  // proof on bare types before building one can.
+  MalformedConcat,
+  NotDotOperandEncoding,
+  NotContractionAxis,
+  FragmentNarrowerThanKWidth,
+  ShapeNotPowerOfTwo,
+  LaneWarpBlockMismatch,
+  // Always the outcome for the interleaved form, whose elements alternate
+  // between fragments every K step.
+  NoCoLocatedRegister,
+};
+
+StringRef getDotOperandRelabelFailureMessage(DotOperandRelabelFailure reason);
+
+// Map each register of a `ttg.concat_dot_operand` result to the (fragment,
+// fragment register) holding it, or fail when the layouts do not let the
+// concatenation be a per-thread relabel. Shared by the lowering and by
+// `tritongpu-expand-concat-dot-operand`, which rebuilds the join tree when this
+// fails. Pass `reason` to learn which condition broke.
+LogicalResult getConcatDotOperandRegisterMap(
+    triton::gpu::ConcatDotOperandOp op,
+    SmallVectorImpl<std::pair<unsigned, unsigned>> &resultRegToFragmentReg,
+    DotOperandRelabelFailure *reason = nullptr);
+
+// Map each register of a wide dot operand to the (slice, slice register)
+// holding it. This is the shared proof used by concat and extract lowering and
+// by segmented-dot rewrites before materializing either operation.
+LogicalResult getDotOperandSliceRegisterMap(
+    RankedTensorType wideTy, RankedTensorType sliceTy, int64_t dim,
+    int64_t numSlices,
+    SmallVectorImpl<std::pair<unsigned, unsigned>> &wideRegToSliceReg);
+
+// Map each register of a wide dot operand to the (fragment, fragment register)
+// holding it. `interleaved` selects which reassembly the wide operand states:
+// with it, result element `k * numFragments + i` is element `k` of fragment
+// `i`; without it, result element `i * fragExtent + k` is. Interleaving is
+// defined only for equally sized fragments. Pass `reason` to learn which
+// condition broke.
+LogicalResult getDotOperandConcatRegisterMap(
+    RankedTensorType wideTy, ArrayRef<RankedTensorType> fragmentTypes,
+    int64_t dim,
+    SmallVectorImpl<std::pair<unsigned, unsigned>> &wideRegToFragmentReg,
+    bool interleaved = false, DotOperandRelabelFailure *reason = nullptr);
+
+LogicalResult
+getExtractDotOperandRegisterMap(triton::gpu::ExtractDotOperandOp op,
+                                SmallVectorImpl<unsigned> &resultRegToSrcReg);
+#endif // __FLAGTREE_CONCAT_DOT_OPERAND__
 
 } // namespace mlir::triton
 

@@ -1,26 +1,25 @@
-// MIT License
-
-// Copyright (c) 2025 The FlagOS Contributors
-
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-// flagtree tle
+/*
+ * Copyright 2025-     FlagOS Contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
 #include "tle/dialect/include/IR/Dialect.h"
 #include "tle/dialect/include/Transforms/Passes.h"
@@ -463,7 +462,9 @@ collectConsumerEncodingVotes(Value root,
         continue;
       }
       if (auto remote = dyn_cast<triton::tle::RemotePointersOp>(owner)) {
-        enqueue(remote.getResult());
+        // Node mode reuses src but has no pointer result to propagate.
+        if (remote.getSpace() != "node")
+          enqueue(remote.getResult());
         continue;
       }
     }
@@ -751,8 +752,10 @@ class SelectEncodingsPass
           for (OpOperand &use : ptrVal.getUses()) {
             Operation *owner = use.getOwner();
             if (auto load = dyn_cast<triton::LoadOp>(owner)) {
-              if (isRewritableFullViewLocalPointerLoad(load))
-                continue;
+              // Full-view loads do not participate in encoding inference
+              // because they are rewritten to local_load later.  Until that
+              // rewrite, however, their result type must still match the
+              // pointer type.
               if (Value mask = load.getMask()) {
                 Value convertedMask =
                     convertOperandEncoding(owner, mask, ptrEncoding);
@@ -769,14 +772,9 @@ class SelectEncodingsPass
                   dyn_cast<RankedTensorType>(load.getResult().getType());
               if (oldLoadTy != loadTy) {
                 load.getResult().setType(loadTy);
-                if (oldLoadTy) {
-                  OpBuilder::InsertionGuard guard(builder);
-                  builder.setInsertionPointAfter(load);
-                  auto bridge = builder.create<triton::gpu::ConvertLayoutOp>(
-                      load.getLoc(), oldLoadTy, load.getResult());
-                  load.getResult().replaceAllUsesExcept(bridge.getResult(),
-                                                        bridge.getOperation());
-                }
+                if (oldLoadTy)
+                  bridgeResultTypeToOldEncoding(load.getResult(), oldLoadTy,
+                                                builder);
               }
               continue;
             }
@@ -851,6 +849,9 @@ class SelectEncodingsPass
               continue;
             }
             if (auto remote = dyn_cast<triton::tle::RemotePointersOp>(owner)) {
+              // Node mode reuses src but has no result encoding to update.
+              if (remote.getSpace() == "node")
+                continue;
               auto remoteResultTy =
                   dyn_cast<RankedTensorType>(remote.getResult().getType());
               if (!remoteResultTy)
@@ -907,6 +908,10 @@ class SelectEncodingsPass
     // passes can reason about remote operands without dialect-specific
     // visitors.
     module.walk([&](triton::tle::RemotePointersOp op) {
+      // Node mode also has src now, but it has no pointer result whose axis
+      // properties could be propagated.
+      if (op.getSpace() == "node")
+        return;
       module->setAttr(kTleEnableEncodingRematerializationAttr,
                       UnitAttr::get(module.getContext()));
 

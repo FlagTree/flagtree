@@ -25,10 +25,12 @@
 #include "tle/dialect/include/Conversion/TleToLLVM/DistributedBarrierOpToLLVM.h"
 #include "tle/dialect/include/Conversion/TleToLLVM/ExclusiveCumsumOpToLLVM.h"
 #include "tle/dialect/include/Conversion/TleToLLVM/ExtractOpToLLVM.h"
+#include "tle/dialect/include/Conversion/TleToLLVM/FlagCxOpToLLVM/FlagCxOpToLLVM.h"
 #include "tle/dialect/include/Conversion/TleToLLVM/GetDeviceIdToFlagCX.h"
-#include "tle/dialect/include/Conversion/TleToLLVM/GetLocalRankOpToLLVM.h"
 #include "tle/dialect/include/Conversion/TleToLLVM/LocalPointersOpToLLVM.h"
+#include "tle/dialect/include/Conversion/TleToLLVM/NodeTransferOpToLLVM.h"
 #include "tle/dialect/include/Conversion/TleToLLVM/PackOpToLLVM.h"
+#include "tle/dialect/include/Conversion/TleToLLVM/SignalOpToLLVM.h"
 #include "tle/dialect/include/IR/Dialect.h"
 #endif
 #include "triton/Analysis/Allocation.h"
@@ -111,11 +113,7 @@ public:
           }
           return hasLegalRegions && typeConverter.isLegal(op);
         });
-    addLegalOp<tle::RemotePointersOp>();
-    addLegalOp<tle::GetDeviceIdOp>();
-    // addIllegalOp<tle::GetLocalRankOp>();
-    // // addLegalOp<tle::GetDeviceIdOp>();
-    // addLegalOp<tle::GetNumPesOp>();
+    addLegalOp<tle::RemotePointersOp, tle::NodePutOp, tle::NodeGetOp>();
     // Allow non-TLE ops to remain during this partial conversion.
     markUnknownOpDynamicallyLegal([](Operation *) -> bool { return true; });
   }
@@ -180,8 +178,6 @@ struct ConvertTritonGPUToLLVM
                                                       benefit);
       mlir::triton::tle::populateDistributedBarrierOpToLLVMPatterns(
           typeConverter, patterns, benefit);
-      // mlir::triton::tle::populateGetNumPesOpToLLVMPatterns(
-      //     typeConverter, patterns, benefit + 1);
       mlir::triton::tle::populateLocalPointersOpToLLVMPatterns(
           typeConverter, targetInfo, patterns, benefit);
       mlir::triton::tle::populateExtractTileOpToLLVMPatterns(
@@ -190,27 +186,25 @@ struct ConvertTritonGPUToLLVM
           typeConverter, patterns, targetInfo, benefit);
       mlir::triton::tle::populateMemDescWGMMAViewOpToLLVMPatterns(
           typeConverter, patterns, benefit);
+      mlir::triton::tle::populateMemDescAliasOpToLLVMPatterns(
+          typeConverter, patterns, benefit);
       mlir::triton::tle::populateExclusiveCumsumOpToLLVMPatterns(
           typeConverter, targetInfo, patterns, benefit);
       mlir::triton::tle::populateWGMMASharedOperandFenceOpToLLVMPatterns(
           typeConverter, patterns, benefit);
       mlir::triton::tle::populateTMAStoreCommitGroupOpToLLVMPatterns(
           typeConverter, patterns, benefit);
+      mlir::triton::tle::populateSignalOpToLLVMPatterns(typeConverter, patterns,
+                                                        benefit);
+      // FlagCX ops are lowered to LLVM.
+#ifdef FLAGCX_ENABLED
+      mlir::triton::tle::populateFlagCxOpToLLVMPatterns(typeConverter, patterns,
+                                                        benefit);
+#endif
       if (failed(applyPartialConversion(mod, target, std::move(patterns)))) {
         return signalPassFailure();
       }
     }
-#ifdef FLAGCX_ENABLED
-    {
-      mlir::triton::tle::populateGetDeviceIdOpToFlagCxPatterns(
-          typeConverter, patterns, benefit);
-      mlir::triton::tle::populateGetLocalRankOpToLLVMPatterns(
-          typeConverter, patterns, benefit);
-      mlir::triton::tle::populateGetNumPesOpToLLVMPatterns(typeConverter,
-                                                           patterns, benefit);
-    }
-#endif
-
 #endif
 
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
@@ -233,6 +227,8 @@ struct ConvertTritonGPUToLLVM
 #ifdef __TLE__
     mlir::triton::tle::populateRemotePointersOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit + 1);
+    mlir::triton::tle::populateNodeTransferOpToLLVMPatterns(typeConverter,
+                                                            patterns, benefit);
 #endif
     mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
                                                  targetInfo, benefit);

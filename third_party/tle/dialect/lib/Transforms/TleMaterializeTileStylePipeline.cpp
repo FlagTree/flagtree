@@ -1,24 +1,25 @@
-// MIT License
-//
-// Copyright (c) 2025 The FlagOS Contributors
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+/*
+ * Copyright 2025-     FlagOS Contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
 #include "tle/dialect/include/IR/Dialect.h"
 #include "tle/dialect/include/Transforms/Passes.h"
@@ -166,6 +167,10 @@ static Value stripProducerMemDescViews(Value value) {
       current = subslice.getSrc();
       continue;
     }
+    if (auto alias = current.getDefiningOp<MemDescAliasOp>()) {
+      current = alias.getSrc();
+      continue;
+    }
     if (auto index = current.getDefiningOp<ttg::MemDescIndexOp>()) {
       current = index.getSrc();
       continue;
@@ -176,7 +181,7 @@ static Value stripProducerMemDescViews(Value value) {
 }
 
 static bool isTileProducerViewLikeOp(Operation *op) {
-  return isa<ttg::MemDescIndexOp, ttg::MemDescSubsliceOp>(op) ||
+  return isa<ttg::MemDescIndexOp, ttg::MemDescSubsliceOp, MemDescAliasOp>(op) ||
          op->getName().getStringRef() == "tle.memdesc_wgmma_view";
 }
 
@@ -211,6 +216,18 @@ static Operation *cloneWithUpdatedMemDescViewType(OpBuilder &builder,
         oldTy.getMemorySpace(), isMutable, oldTy.getAllocShape());
     auto newOp = ttg::MemDescSubsliceOp::create(
         builder, subslice.getLoc(), newTy, src, subslice.getOffsets());
+    newOp->setAttrs(op->getAttrs());
+    return mapResults(newOp);
+  }
+  if (auto alias = dyn_cast<MemDescAliasOp>(op)) {
+    Value src = mapping.lookupOrDefault(alias.getSrc());
+    auto oldTy = alias.getType();
+    bool isMutable = cast<ttg::MemDescType>(src.getType()).getMutableMemory();
+    auto newTy = ttg::MemDescType::get(
+        oldTy.getShape(), oldTy.getElementType(), oldTy.getEncoding(),
+        oldTy.getMemorySpace(), isMutable, oldTy.getAllocShape());
+    auto newOp = MemDescAliasOp::create(builder, alias.getLoc(), newTy, src,
+                                        alias.getOffsetBytesAttr());
     newOp->setAttrs(op->getAttrs());
     return mapResults(newOp);
   }
@@ -413,9 +430,11 @@ static TileStyleLoopAnalysis analyzeTileStyleLoop(scf::ForOp forOp) {
       llvm::SmallDenseSet<Operation *, 8> visited;
       if (!hasDotLikeConsumer(allocOp.getResult(), body, visited))
         continue;
-      analysis.asyncTileProducers.push_back({.baseMemDesc = allocOp.getResult(),
-                                             .loadOp = loadOp,
-                                             .allocOp = allocOp});
+      AsyncTileProducerGroup group;
+      group.baseMemDesc = allocOp.getResult();
+      group.loadOp = loadOp;
+      group.allocOp = allocOp;
+      analysis.asyncTileProducers.push_back(std::move(group));
       continue;
     }
 
@@ -436,8 +455,10 @@ static TileStyleLoopAnalysis analyzeTileStyleLoop(scf::ForOp forOp) {
   }
 
   for (auto &it : directAsyncFamilies) {
-    analysis.asyncTileProducers.push_back(
-        {.baseMemDesc = it.first, .asyncCopyOps = it.second});
+    AsyncTileProducerGroup group;
+    group.baseMemDesc = it.first;
+    group.asyncCopyOps = it.second;
+    analysis.asyncTileProducers.push_back(group);
   }
   return analysis;
 }

@@ -19,10 +19,12 @@
 
 #include "GCUTritonGPUConversion.h"
 
+#include "Utils/TritonVersionCompat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -33,6 +35,11 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
+
+#ifdef ENABLE_TRITON_DISTRIBUTED
+#include "TritonDistributed/Dialect/Distributed/IR/Dialect.h"
+#include "TritonDistributed/Dialect/SIMT/IR/Dialect.h"
+#endif
 
 #ifdef ENABLE_TLE
 #include "tle/dialect/include/IR/Dialect.h"
@@ -67,8 +74,13 @@ template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
   matchAndRewrite(Op op, typename Op::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     SmallVector<Type> retTypes;
+#ifdef ENABLE_TLE
+    if (failed(
+            this->getTypeConverter()->convertTypes(op->getResults(), retTypes)))
+#else
     if (failed(this->getTypeConverter()->convertTypes(op->getResultTypes(),
                                                       retTypes)))
+#endif
       return failure();
     rewriter.replaceOpWithNewOp<Op>(op, retTypes, adaptor.getOperands(),
                                     op->getAttrs());
@@ -87,7 +99,12 @@ public:
   LogicalResult
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type retType = getTypeConverter()->convertType(op.getType());
+    Type retType =
+#ifdef ENABLE_TLE
+        getTypeConverter()->convertType(op.getResult());
+#else
+        getTypeConverter()->convertType(op.getType());
+#endif
     auto retShapedType = cast<ShapedType>(retType);
     auto value = dyn_cast<DenseElementsAttr>(adaptor.getValue());
     if (isa<RankedTensorType>(retShapedType)) {
@@ -194,7 +211,17 @@ struct TritonExpandDimsPattern
     } else {
       std::iota(retOrder.begin(), retOrder.end(), 0);
     }
-    auto ctaLl = argEncoding.getCTALayout().getLinearLayout();
+#if TRITON_VERSION == 35
+    auto argCTALayout = argEncoding.getCTALayout();
+    auto retCTAsPerCGA = insertOne(argCTALayout.getCTAsPerCGA(), op.getAxis());
+    auto retCTASplitNum =
+        insertOne(argCTALayout.getCTASplitNum(), op.getAxis());
+    auto retCTAOrder = insertOrder(argCTALayout.getCTAOrder(), op.getAxis());
+    auto retCTALayout = triton::gpu::CTALayoutAttr::get(
+        getContext(), retCTAsPerCGA, retCTASplitNum, retCTAOrder);
+#else
+    auto ctaLl =
+        triton_gcu::compat::getCGALayout(argEncoding).getLinearLayout();
     auto kBlock = *ctaLl.getInDimNames().begin();
     auto *ctx = kBlock.getContext();
     auto newDim = standardOutDimNames(ctx, newRank)[newRank - 1];
@@ -204,7 +231,9 @@ struct TritonExpandDimsPattern
       std::swap(newOrder[i], newOrder[i - 1]);
     }
     ctaLl = transposeLinearLayout(ctaLl, newOrder);
-    auto retCTALayout = CTAEncodingAttr::get(ctx, std::move(ctaLl));
+    auto retCTALayout =
+        triton_gcu::compat::getCGALayoutFromLL(ctx, std::move(ctaLl));
+#endif
 
     triton::gpu::BlockedEncodingAttr retEncoding =
         triton::gpu::BlockedEncodingAttr::get(getContext(), retSizePerThread,
@@ -220,6 +249,26 @@ struct TritonExpandDimsPattern
                   adaptor.getAttributes());
     return success();
   }
+
+#if TRITON_VERSION == 35
+private:
+  template <typename T>
+  SmallVector<T> insertOne(ArrayRef<T> vec, unsigned axis) const {
+    SmallVector<T> res(vec.begin(), vec.end());
+    res.insert(res.begin() + axis, 1);
+    return res;
+  }
+
+  SmallVector<unsigned> insertOrder(ArrayRef<unsigned> order,
+                                    unsigned axis) const {
+    SmallVector<unsigned> resOrder(order.begin(), order.end());
+    for (unsigned i = 0; i < resOrder.size(); ++i)
+      if (resOrder[i] >= axis)
+        ++resOrder[i];
+    resOrder.insert(resOrder.begin(), axis);
+    return resOrder;
+  }
+#endif
 };
 
 struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
@@ -231,31 +280,31 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     RankedTensorType origType = op.getType();
     auto origShape = origType.getShape();
     auto typeConverter = getTypeConverter<GCUTritonGPUTypeConverter>();
+#ifdef ENABLE_TLE
+    int numWarps = triton::gpu::lookupNumWarps(op);
+#else
     int numWarps = typeConverter->getNumWarps();
+#endif
     int threadsPerWarp = typeConverter->getThreadsPerWarp();
     int numCTAs = typeConverter->getNumCTAs();
     auto rank = origShape.size();
     SmallVector<unsigned> retSizePerThread(rank, 1);
-    auto numElements = product<int64_t>(origShape);
-    if (numElements / (numWarps * threadsPerWarp) >= 4) {
-      retSizePerThread[rank - 1] = 2;
-      retSizePerThread[rank - 2] = 2;
-    }
-    if (numElements / (numWarps * threadsPerWarp) >= 16) {
-      retSizePerThread[rank - 1] = 4;
-      retSizePerThread[rank - 2] = 4;
-    }
-    retSizePerThread[rank - 1] = std::min(
-        retSizePerThread[rank - 1], static_cast<unsigned>(origShape[rank - 1]));
-    retSizePerThread[rank - 2] = std::min(
-        retSizePerThread[rank - 2], static_cast<unsigned>(origShape[rank - 2]));
-
     SmallVector<unsigned> retOrder(rank);
     for (unsigned i = 0; i < rank; ++i)
       retOrder[i] = rank - 1 - i;
     Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
         getContext(), origShape, retSizePerThread, retOrder, numWarps,
         threadsPerWarp, numCTAs);
+
+    // Refine warpsPerCTA
+    auto blocked = cast<BlockedEncodingAttr>(dEncoding);
+    SmallVector<unsigned> warpsPerCTA =
+        computeDotWarpsPerCTA(blocked, origShape, numWarps);
+    dEncoding = BlockedEncodingAttr::get(
+        getContext(), blocked.getSizePerThread(), blocked.getThreadsPerWarp(),
+        warpsPerCTA, blocked.getOrder(),
+        triton_gcu::compat::getCGALayout(blocked));
+
     RankedTensorType retType = origType.cloneWithEncoding(dEncoding);
     auto aType = cast<RankedTensorType>(adaptor.getA().getType());
     auto bType = cast<RankedTensorType>(adaptor.getB().getType());
@@ -299,7 +348,11 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
   matchAndRewrite(triton::CatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto retType = cast<RankedTensorType>(
+#ifdef ENABLE_TLE
+        this->getTypeConverter()->convertType(op.getResult()));
+#else
         this->getTypeConverter()->convertType(op.getType()));
+#endif
     auto retEncoding =
         cast<triton::gpu::BlockedEncodingAttr>(retType.getEncoding());
     auto lhsType = adaptor.getLhs().getType();
@@ -318,7 +371,8 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     triton::gpu::BlockedEncodingAttr newRetEncoding =
         triton::gpu::BlockedEncodingAttr::get(
             getContext(), newRetSizePerThread, retThreadsPerWarp,
-            retWarpsPerCTA, retOrder, retEncoding.getCTALayout());
+            retWarpsPerCTA, retOrder,
+            triton_gcu::compat::getCGALayout(retEncoding));
     auto newRetType = retType.cloneWithEncoding(newRetEncoding);
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::CatOp>(
                       op, newRetType, adaptor.getOperands()),
@@ -446,7 +500,11 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
       auto defaultEnc = getDefaultBlockedEncoding(
           getContext(),
           cast<RankedTensorType>(op.getResult(0).getType()).getShape(),
+#ifdef ENABLE_TLE
+          triton::gpu::lookupNumWarps(op), typeConverter->getThreadsPerWarp(),
+#else
           typeConverter->getNumWarps(), typeConverter->getThreadsPerWarp(),
+#endif
           typeConverter->getNumCTAs());
 
       auto append = [&](ArrayRef<unsigned> vals, unsigned val) {
@@ -461,7 +519,19 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
         return res;
       };
 
-      auto layout = defaultEnc.getCTALayout().getLinearLayout();
+#if TRITON_VERSION == 35
+      srcEnc = BlockedEncodingAttr::get(
+          getContext(), append(defaultEnc.getSizePerThread(), 2),
+          append(defaultEnc.getThreadsPerWarp(), 1),
+          append(defaultEnc.getWarpsPerCTA(), 1),
+          prepend(defaultEnc.getOrder(), rank - 1),
+          CTALayoutAttr::get(getContext(),
+                             append(defaultEnc.getCTAsPerCGA(), 1),
+                             append(defaultEnc.getCTASplitNum(), 1),
+                             prepend(defaultEnc.getCTAOrder(), rank - 1)));
+#else
+      auto layout =
+          triton_gcu::compat::getCGALayout(defaultEnc).getLinearLayout();
       auto kBlock = StringAttr::get(getContext(), "block");
       auto newDim = standardOutDimNames(getContext(), rank)[rank - 1];
       layout *= LinearLayout::identity1D(1, kBlock, newDim);
@@ -470,7 +540,8 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
           append(defaultEnc.getThreadsPerWarp(), 1),
           append(defaultEnc.getWarpsPerCTA(), 1),
           prepend(defaultEnc.getOrder(), rank - 1),
-          CTAEncodingAttr::get(getContext(), layout));
+          triton_gcu::compat::getCGALayoutFromLL(getContext(), layout));
+#endif
       srcTy = srcTy.cloneWithEncoding(srcEnc);
       src = ConvertLayoutOp::create(rewriter, op.getLoc(), srcTy, src);
     }
@@ -590,6 +661,58 @@ void populateTritonPatterns(GCUTritonGPUTypeConverter &typeConverter,
 }
 
 //===----------------------------------------------------------------------===//
+// Tensor dialect patterns
+//===----------------------------------------------------------------------===//
+
+void populateTensorPatterns(GCUTritonGPUTypeConverter &typeConverter,
+                            RewritePatternSet &patterns) {
+  MLIRContext *context = patterns.getContext();
+  patterns.add<GenericOpPattern<tensor::ExtractOp>,
+               GenericOpPattern<tensor::InsertOp>>(typeConverter, context);
+}
+
+//===----------------------------------------------------------------------===//
+// Distributed patterns
+//===----------------------------------------------------------------------===//
+
+#ifdef ENABLE_TRITON_DISTRIBUTED
+struct SIMTExecRegionPattern
+    : public OpConversionPattern<triton::simt::SIMTExecRegionOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::simt::SIMTExecRegionOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto newOp = cast<triton::simt::SIMTExecRegionOp>(
+        rewriter.cloneWithoutRegions(*op.getOperation()));
+    rewriter.inlineRegionBefore(op.getRegion(), newOp.getRegion(),
+                                newOp.getRegion().end());
+    if (failed(rewriter.convertRegionTypes(&newOp.getRegion(),
+                                           *getTypeConverter())))
+      return rewriter.notifyMatchFailure(op, "could not convert body types");
+    newOp->setOperands(adaptor.getOperands());
+    for (auto [result, operand] :
+         llvm::zip(newOp.getResults(), adaptor.getOperands()))
+      result.setType(operand.getType());
+    rewriter.replaceOp(op, newOp.getResults());
+    return success();
+  }
+};
+
+void populateDistributedPatterns(GCUTritonGPUTypeConverter &typeConverter,
+                                 RewritePatternSet &patterns) {
+  MLIRContext *context = patterns.getContext();
+  patterns.add<GenericOpPattern<triton::distributed::WaitOp>>(typeConverter,
+                                                              context);
+  patterns.add<GenericOpPattern<triton::distributed::ConsumeTokenOp>>(
+      typeConverter, context);
+  patterns.add<SIMTExecRegionPattern>(typeConverter, context);
+  patterns.add<GenericOpPattern<triton::simt::BlockYieldOp>>(typeConverter,
+                                                             context);
+}
+#endif
+
+//===----------------------------------------------------------------------===//
 // SCF patterns
 //===----------------------------------------------------------------------===//
 
@@ -608,8 +731,13 @@ struct SCFForPattern : public OpConversionPattern<scf::ForOp> {
       return rewriter.notifyMatchFailure(op, "could not convert body types");
     newOp->setOperands(adaptor.getOperands());
     SmallVector<Type> newResultTypes;
+#ifdef ENABLE_TLE
+    for (Value result : op.getResults()) {
+      Type newType = typeConverter->convertType(result);
+#else
     for (Type type : op.getResultTypes()) {
       Type newType = typeConverter->convertType(type);
+#endif
       if (!newType)
         return rewriter.notifyMatchFailure(op, "not a 1:1 type conversion");
       newResultTypes.push_back(newType);
@@ -629,8 +757,13 @@ public:
   matchAndRewrite(scf::IfOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     SmallVector<Type> newResultTypes;
+#ifdef ENABLE_TLE
+    for (Value result : op.getResults()) {
+      Type newType = typeConverter->convertType(result);
+#else
     for (auto type : op.getResultTypes()) {
       Type newType = typeConverter->convertType(type);
+#endif
       if (!newType)
         return rewriter.notifyMatchFailure(op, "not a 1:1 type conversion");
       newResultTypes.push_back(newType);
@@ -766,8 +899,9 @@ public:
       return rewriter.notifyMatchFailure(op, "could not convert body types");
 
     newOp->setOperands(adaptor.getOperands());
-    for (OpResult result : newOp->getResults())
-      result.setType(getTypeConverter()->convertType(result.getType()));
+    for (auto [oldResult, newResult] :
+         llvm::zip(op->getResults(), newOp->getResults()))
+      newResult.setType(getTypeConverter()->convertType(oldResult));
 
     rewriter.replaceOp(op, newOp->getResults());
     return success();
@@ -840,6 +974,7 @@ void populateTlePatterns(GCUTritonGPUTypeConverter &typeConverter,
                GenericOpPattern<triton::tle::ExtractPtrOp>,
                GenericOpPattern<triton::tle::PackOp>>(typeConverter, context);
 }
+
 #endif
 
 //===----------------------------------------------------------------------===//
@@ -927,6 +1062,15 @@ public:
     if (maxRank == 0)
       maxRank = 1;
 
+    bool hasDotOp = false;
+    mod.walk([&](Operation *op) -> WalkResult {
+      if (isa<triton::DotOp>(op)) {
+        hasDotOp = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+
     bool orderIncompatible = false;
     mod.walk([&](Operation *op) -> WalkResult {
       if (isa<triton::DotOp>(op) || isa<triton::ReshapeOp>(op) ||
@@ -948,24 +1092,9 @@ public:
     }
 
     // Step 2: Build type converter and conversion target.
-    GCUTritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp,
-                                            numCTAs, defaultOrder, axisFreq);
-    GCUTritonGPUConversionTarget target(*context, typeConverter);
-
-    // Step 3: Populate rewrite patterns.
-    RewritePatternSet patterns(context);
-    populateArithPatternsAndLegality(typeConverter, patterns, target);
-    populateMathPatternsAndLegality(typeConverter, patterns, target);
-    populateTritonPatterns(typeConverter, patterns, !axisFreq.empty());
-    populateSCFPatterns(typeConverter, patterns);
-    populateCFPatterns(typeConverter, patterns);
-    patterns.insert<GenericOpPattern<ub::PoisonOp>>(typeConverter, context);
-
-#ifdef ENABLE_TLE
-    populateTlePatterns(typeConverter, patterns);
-#endif
-
-    // Step 4: Set module attributes.
+    // Module attributes must be set BEFORE conversion so that
+    // lookupNumWarps / lookupThreadsPerWarp can resolve context from
+    // the module for values that aren't inside WS partition regions.
     Builder b(&getContext());
     mod->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));
     mod->setAttr(AttrNumThreadsPerWarp, b.getI32IntegerAttr(threadsPerWarp));
@@ -973,8 +1102,87 @@ public:
     if (!this->target.getValue().empty())
       mod->setAttr(AttrTargetName, b.getStringAttr(this->target.getValue()));
 
-    if (failed(applyPartialConversion(mod, target, std::move(patterns))))
-      return signalPassFailure();
+    // Worker functions (e.g. TLE warp-specialization workers) and
+    // warp_specialize partition regions may carry a different numWarps than
+    // the kernel-level numWarps (e.g. producer-default: kernel num_warps=1,
+    // consumer partition num_warps=4).
+    //
+    // The MLIR conversion framework's reconciliation phase uses
+    // convertType(Type) (context-unaware) which can only read the module-level
+    // ttg.num-warps attribute. If the module-level value doesn't match the
+    // region being processed, incorrect encodings are generated.
+    //
+    // To handle this generically, we run applyPartialConversion per-region,
+    // setting the module-level ttg.num-warps to match each region's numWarps
+    // before processing it. For warp_specialize partition regions whose
+    // numWarps differs from the enclosing function, we process them first
+    // (before the function) so their operations obtain correct encodings;
+    // when the function is subsequently processed, those already-legal
+    // operations are skipped by the framework.
+    {
+      // Helper: set module-level numWarps, build converter/target/patterns,
+      // and run applyPartialConversion on the given operations.
+      auto runConversion = [&](int convNumWarps,
+                               ArrayRef<Operation *> ops) -> LogicalResult {
+        mod->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(convNumWarps));
+        GCUTritonGPUTypeConverter typeConverter(
+            context, convNumWarps, threadsPerWarp, numCTAs, defaultOrder,
+            axisFreq, hasDotOp);
+        GCUTritonGPUConversionTarget target(*context, typeConverter);
+        RewritePatternSet patterns(context);
+        populateArithPatternsAndLegality(typeConverter, patterns, target);
+        populateMathPatternsAndLegality(typeConverter, patterns, target);
+        populateTritonPatterns(typeConverter, patterns, !axisFreq.empty());
+#ifdef ENABLE_TRITON_DISTRIBUTED
+        populateDistributedPatterns(typeConverter, patterns);
+#endif
+        populateTensorPatterns(typeConverter, patterns);
+        populateSCFPatterns(typeConverter, patterns);
+        populateCFPatterns(typeConverter, patterns);
+        patterns.insert<GenericOpPattern<ub::PoisonOp>>(typeConverter, context);
+#ifdef ENABLE_TLE
+        populateTlePatterns(typeConverter, patterns);
+#endif
+        return applyPartialConversion(ops, target, std::move(patterns));
+      };
+
+      // Collect all functions in the module.
+      SmallVector<triton::FuncOp, 4> funcs;
+      mod.walk([&](triton::FuncOp func) { funcs.push_back(func); });
+      for (triton::FuncOp func : funcs) {
+        int funcNumWarps = numWarps;
+        if (auto attr = func->getAttrOfType<IntegerAttr>(AttrNumWarpsName))
+          funcNumWarps = attr.getInt();
+
+        // Process warp_specialize partition regions whose numWarps differs
+        // from the enclosing function BEFORE the function itself.
+        SmallVector<triton::gpu::WarpSpecializeOp, 4> wsOps;
+        func.walk(
+            [&](triton::gpu::WarpSpecializeOp wsOp) { wsOps.push_back(wsOp); });
+        for (auto wsOp : wsOps) {
+          auto partNumWarps = wsOp.getPartitionNumWarps();
+          auto partRegions = wsOp.getPartitionRegions();
+          for (auto [idx, pNumWarps] : llvm::enumerate(partNumWarps)) {
+            if (pNumWarps == funcNumWarps)
+              continue;
+            SmallVector<Operation *> partOps;
+            if (idx < partRegions.size()) {
+              for (Operation &op : partRegions[idx]->getOps())
+                partOps.push_back(&op);
+            }
+            if (failed(runConversion(pNumWarps, partOps)))
+              return signalPassFailure();
+          }
+        }
+
+        // Process the function (partition ops are already legal, skipped).
+        if (failed(runConversion(funcNumWarps, {func.getOperation()})))
+          return signalPassFailure();
+      }
+
+      // Restore module-level numWarps to the original value.
+      mod->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));
+    }
   }
 };
 

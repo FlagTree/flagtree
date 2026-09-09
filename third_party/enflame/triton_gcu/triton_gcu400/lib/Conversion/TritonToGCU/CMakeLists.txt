@@ -1,7 +1,14 @@
+if(ENABLE_TLE)
+  set(_TLE_IR_LIBS TleIR)
+else()
+  set(_TLE_IR_LIBS "")
+endif()
+
 add_mlir_conversion_library(MLIRTritonToGCU_${arch}
   TritonToGCU.cpp
   ReduceOpToGCU.cpp
   AccelerateMatmul.cpp
+  OptimizeDotOperands.cpp
   TritonWGDotToGCU.cpp
   ScanOpToGCU.cpp
   ElementwiseFusionOpToGCU.cpp
@@ -10,17 +17,21 @@ add_mlir_conversion_library(MLIRTritonToGCU_${arch}
   TritonFuncOpFlatten.cpp
   TritonFusion.cpp
   TritonLoadStoreToDma.cpp
+  TritonGCURemoveLayoutConversions.cpp
   TritonGCULayoutOptimize.cpp
-  OptimizeDotLayout.cpp
   TritonConvertTensorPointer.cpp
   Utility.cpp
   TritonGPUtoTrtionGCU.cpp
   TTSmemLowerToGCU.cpp
+  TleLowerPipeToGcuws.cpp
   TleToTritonGCU.cpp
   TleOpToGCU.cpp
   TritonGCULocalMemOptimize.cpp
+  TritonGCUInsertProducerFences.cpp
   AllocateWarpGroups.cpp
   AnnotateDotAccReuse.cpp
+  AnnotateDotFusion.cpp
+  AnnotateDotAllocaReuse.cpp
   ReduceScanCommon.cpp
   Vectorize.cpp
   Constants.h
@@ -37,6 +48,7 @@ add_mlir_conversion_library(MLIRTritonToGCU_${arch}
   TritonGCUAnalysis_${arch}
   MemrefExtIR_${arch}
   MathExtIR_${arch}
+  ${_TLE_IR_LIBS}
   MLIRAffineDialect
   MLIRAffineToStandard
   MLIRArithDialect
@@ -48,5 +60,6 @@ add_mlir_conversion_library(MLIRTritonToGCU_${arch}
   MLIRPass
   MLIRSupport
   MLIRSideEffectInterfaces
+  MLIRTensorDialect
   MLIRTransforms
   )

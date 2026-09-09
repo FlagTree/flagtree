@@ -2,6 +2,8 @@
 #include "TritonMUSACommon/BarrierUtils.h"
 #include "TritonMUSACommon/MMAContractUtils.h"
 #include "TritonMUSACommon/MMAEncodingUtils.h"
+#include "TritonMUSACommon/MMAOperandUtils.h"
+#include "TritonMUSACommon/MusaArchTraits.h"
 #include "TritonMUSACommon/TMEUtils.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
@@ -99,6 +101,13 @@ static LogicalResult verifyDotShapeContract(Operation *op,
   if (cShape != dShape)
     return op->emitError("expected result shape to match accumulator shape");
   return success();
+}
+
+static LogicalResult verifySqmmaMemDescOperandContract(SquadDotOp op,
+                                                       Value operand,
+                                                       unsigned operandIdx) {
+  return verifySqmmaMemDescOperandProducerContract(op.getOperation(), operand,
+                                                   operandIdx);
 }
 
 static bool isFP8Type(Type type) {
@@ -218,8 +227,15 @@ LogicalResult SquadDotOp::verify() {
   if ((aTy.getElementType().isF32() || bTy.getElementType().isF32()) &&
       getInputPrecision() != static_cast<int32_t>(triton::InputPrecision::TF32))
     return emitError("SQMMA f32 operands require TF32 input precision");
+  auto sqArch = triton::musa::getMusaArchFromSqmmaVersion(
+      mmaEnc.getVersionMajor(), mmaEnc.getVersionMinor());
+  const triton::musa::MusaSqmmaArchTraits *sqTraits =
+      sqArch ? triton::musa::getMusaSqmmaArchTraits(*sqArch) : nullptr;
+  if (!sqTraits)
+    return emitError("SQMMA encoding uses an unsupported MUSA SQMMA version");
   if (!triton::musa::isSupportedSqmma(getEltTypeA(), getEltTypeB(),
-                                      getEltTypeC(), getM(), getN(), getK()))
+                                      getEltTypeC(), getM(), getN(), getK(),
+                                      *sqTraits))
     return emitError(
         "SQMMA encoding carries an unsupported PH1 shape/type combination");
   Dialect &dialect = aEncoding.getDialect();
@@ -230,6 +246,9 @@ LogicalResult SquadDotOp::verify() {
   if (interface->inferDotOpEncoding(aEncoding, 0, retEnc, getLoc()).failed())
     return failure();
   if (interface->inferDotOpEncoding(bEncoding, 1, retEnc, getLoc()).failed())
+    return failure();
+  if (failed(verifySqmmaMemDescOperandContract(*this, getA(), 0)) ||
+      failed(verifySqmmaMemDescOperandContract(*this, getB(), 1)))
     return failure();
   if (failed(verifyDotShapeContract(getOperation(), aTy.getShape(),
                                     bTy.getShape(), accTy.getShape(),
@@ -414,7 +433,9 @@ LogicalResult WmmaDotOp::verify() {
   if ((aTy.getElementType().isF32() || bTy.getElementType().isF32()) &&
       getInputPrecision() != static_cast<int32_t>(triton::InputPrecision::TF32))
     return emitError("WMMA f32 operands require TF32 input precision");
-  if (!triton::musa::lookupWmmaIntrinsic(aTy.getElementType(), instrShape))
+  if (!triton::musa::lookupWmmaIntrinsic(aTy.getElementType(), instrShape,
+                                         mmaEnc.getVersionMajor(),
+                                         mmaEnc.getVersionMinor()))
     return emitError(
         "WMMA encoding carries an unsupported shape/type combination");
 
@@ -470,11 +491,31 @@ LogicalResult InitArrivalOp::verify() {
   return verifyNonNegativeI32Constant(getOperation(), getPhaseId(), "phaseId");
 }
 
+#ifdef __TLE__
+static LogicalResult verifyTMEIssueThread(Operation *op) {
+  Attribute attr = op->getAttr(triton::musa::kTMEIssueThreadAttr);
+  if (!attr)
+    return success();
+  auto issueThread = dyn_cast<IntegerAttr>(attr);
+  if (!issueThread || !issueThread.getType().isInteger(32) ||
+      issueThread.getInt() < 0)
+    return op->emitOpError("musa.tme.issue_thread must be a non-negative i32");
+  return success();
+}
+#endif // __TLE__
+
 LogicalResult BarrierAddTransOp::verify() {
   if (failed(verifyAsyncBarrierId(getOperation(), getBarId(), "barId")))
     return failure();
+#ifdef __TLE__
+  if (failed(verifyNonNegativeI32Constant(getOperation(), getTransBytes(),
+                                          "transBytes")))
+    return failure();
+  return verifyTMEIssueThread(getOperation());
+#else
   return verifyNonNegativeI32Constant(getOperation(), getTransBytes(),
                                       "transBytes");
+#endif // __TLE__
 }
 
 LogicalResult ArriveBarrierOp::verify() {
@@ -482,8 +523,22 @@ LogicalResult ArriveBarrierOp::verify() {
 }
 
 LogicalResult ArriveBarrierNoRetOp::verify() {
+#ifdef __TLE__
+  if (failed(verifyAsyncBarrierId(getOperation(), getBarId(), "barId")))
+    return failure();
+  return verifyTMEIssueThread(getOperation());
+#else
   return verifyAsyncBarrierId(getOperation(), getBarId(), "barId");
+#endif // __TLE__
 }
+
+#ifdef __TLE__
+LogicalResult WarpArriveBarrierOp::verify() {
+  if (failed(verifyAsyncBarrierId(getOperation(), getBarId(), "barId")))
+    return failure();
+  return verifyNonNegativeI32Constant(getOperation(), getPhaseId(), "phaseId");
+}
+#endif // __TLE__
 
 LogicalResult WaitBarrierOp::verify() {
   if (failed(verifyAsyncBarrierId(getOperation(), getBarId(), "barId")))
@@ -542,7 +597,13 @@ LogicalResult AsyncTMECopyGlobalToLocalOp::verify() {
   if (failed(verifyTMECopyShapeContract(getOperation(), getCoord(),
                                         getBlockShape())))
     return failure();
+#ifdef __TLE__
+  if (failed(verifyTMESwizzleContract(*this)))
+    return failure();
+  return verifyTMEIssueThread(getOperation());
+#else
   return verifyTMESwizzleContract(*this);
+#endif // __TLE__
 }
 
 LogicalResult AsyncTMECopyLocalToGlobalOp::verify() {
@@ -550,6 +611,43 @@ LogicalResult AsyncTMECopyLocalToGlobalOp::verify() {
                                         getBlockShape())))
     return failure();
   return verifyTMESwizzleContract(*this);
+}
+
+LogicalResult TMEEncodeDescriptorOp::verify() {
+  auto rank = getShape().size();
+  if (rank == 0 || rank > 5 || rank != getStrides().size())
+    return emitOpError("expects shape/strides rank in [1, 5] and matching");
+
+  auto baseTy = dyn_cast<triton::PointerType>(getBase().getType());
+  if (!baseTy)
+    return emitOpError("base must be a Triton pointer");
+  Type elemTy = baseTy.getPointeeType();
+  auto expectedType = getMUSATMEDataType(elemTy);
+  if (!expectedType)
+    return emitOpError("unsupported base element type for TME descriptor");
+
+  unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+  if (bitWidth == 0 || bitWidth % 8 != 0 || getElemSize() != bitWidth / 8)
+    return emitOpError("elem_size does not match the base element type");
+  bool elemTypeMatches = getElemType() == *expectedType;
+  if (!elemTypeMatches && elemTy.isSignlessInteger()) {
+    auto unsignedTy =
+        IntegerType::get(elemTy.getContext(), bitWidth, IntegerType::Unsigned);
+    if (auto unsignedType = getMUSATMEDataType(unsignedTy))
+      elemTypeMatches = getElemType() == *unsignedType;
+  }
+  if (!elemTypeMatches)
+    return emitOpError("elem_type does not match the base element type");
+
+  int32_t padding = static_cast<int32_t>(getPadding());
+  if (padding != static_cast<int32_t>(tt::PaddingOption::PAD_ZERO) &&
+      padding != static_cast<int32_t>(tt::PaddingOption::PAD_NAN))
+    return emitOpError("padding must be a Triton zero or nan padding value");
+  if (!getMUSATMEConstantFill(getElemType(),
+                              static_cast<tt::PaddingOption>(padding)))
+    return emitOpError("padding nan is only supported for floating-point "
+                       "TME descriptor element types");
+  return success();
 }
 
 void AsyncTMECopyGlobalToLocalOp::getEffects(

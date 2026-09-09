@@ -3,6 +3,7 @@
 #include "DotOpToLLVM.h"
 #include "TritonMUSACommon/MMAContractUtils.h"
 #include "TritonMUSACommon/MMAOperandUtils.h"
+#include "TritonMUSACommon/MusaArchTraits.h"
 #include "TritonMUSACommon/TMEUtils.h"
 #include "TritonMUSAGPUToLLVM/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -576,8 +577,12 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   auto mmaEnc = dyn_cast<MUSASqmmaEncodingAttr>(dTy.getEncoding());
   if (!mmaEnc)
     return op.emitError("MUSA SQMMA: expected #ttg.musa_sqmma result encoding");
-  if (!mmaEnc.isPH1())
-    return op.emitError("MUSA SQMMA: unsupported version");
+  auto sqArch = triton::musa::getMusaArchFromSqmmaVersion(
+      mmaEnc.getVersionMajor(), mmaEnc.getVersionMinor());
+  const triton::musa::MusaSqmmaArchTraits *sqTraits =
+      sqArch ? triton::musa::getMusaSqmmaArchTraits(*sqArch) : nullptr;
+  if (!sqTraits)
+    return op.emitError("MUSA SQMMA: unsupported encoding version");
 
   unsigned rank = dTy.getRank();
   if (rank != 2 && rank != 3)
@@ -601,17 +606,20 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   Value adaptorA = getDotAdaptorA(adaptor);
   Value adaptorB = getDotAdaptorB(adaptor);
   Value adaptorC = getDotAdaptorC(adaptor);
+
   auto aOperand = triton::musa::resolveSharedOperandWithAffineBase(
       opA, adaptorA, loc, typeConverter, rewriter);
-  auto bOperand = triton::musa::resolveSharedOperandWithAffineBase(
-      opB, adaptorB, loc, typeConverter, rewriter);
   if (failed(aOperand))
     return op.emitError(
         "MUSA SQMMA requires operand A from ttg.local_load(shared memdesc)");
+
+  auto bOperand = triton::musa::resolveSharedOperandWithAffineBase(
+      opB, adaptorB, loc, typeConverter, rewriter);
   if (failed(bOperand))
     return op.emitError(
         "MUSA SQMMA requires operand B from ttg.local_load(shared memdesc)");
 
+  auto aTy = cast<TensorOrMemDesc>(opA.getType());
   auto aMemTy = aOperand->memDescTy;
   auto bMemTy = bOperand->memDescTy;
 
@@ -625,8 +633,17 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   auto eltTypeC = getDotEltTypeC(op);
   auto eltTypeA = getDotEltTypeA(op);
   auto eltTypeB = getDotEltTypeB(op);
+  auto layoutA = getDotLayoutA(op);
+  auto layoutB = getDotLayoutB(op);
+  int elemBitWidth = aTy.getElementType().getIntOrFloatBitWidth();
+  if (elemBitWidth <= 0)
+    return op.emitError("MUSA SQMMA: unsupported operand element width");
+  unsigned elemBytes = static_cast<unsigned>((elemBitWidth + 7) / 8);
+  if (elemBytes == 0)
+    elemBytes = 1;
 
-  if (!isSupportedSqmma(eltTypeA, eltTypeB, eltTypeC, instM, instN, instK))
+  if (!isSupportedSqmma(eltTypeA, eltTypeB, eltTypeC, instM, instN, instK,
+                        *sqTraits, layoutA, layoutB, elemBytes, true, true))
     return op.emitError("MUSA SQMMA: unsupported shape or element type");
   std::string sqmmaIntrinsic =
       triton::musa::lookupSqmmaIntrinsic(eltTypeA, instM, instN, instK);
@@ -651,7 +668,7 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   auto ceilDiv = [](unsigned x, unsigned y) { return (x + y - 1) / y; };
   unsigned numRepM = ceilDiv(blockM, tileM);
   unsigned numRepN = ceilDiv(blockN, tileN);
-  int64_t kDimVal = aMemTy.getShape().back();
+  int64_t kDimVal = aTy.getShape().back();
   if (kDimVal <= 0)
     return op.emitError("MUSA SQMMA requires static positive K dimension");
   unsigned kDim = static_cast<unsigned>(kDimVal);
@@ -672,20 +689,14 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
 
   bool zeroAcc = isZeroConst(opC);
   SmallVector<Value> fc;
-  SmallVector<Value> fcFragments;
   if (zeroAcc) {
-    if (carrierMode) {
-      fcFragments.resize(repCount);
-    } else {
+    if (!carrierMode) {
       Type accElemTy = typeConverter->convertType(dTy.getElementType());
       Value zero = LLVM::ZeroOp::create(rewriter, loc, accElemTy);
       fc.assign(totalAccElems, zero);
     }
   } else {
-    if (carrierMode) {
-      fcFragments = mlir::LLVM::MUSA::unpackSqmmaAccumulatorCarrier(
-          loc, adaptorC, dTy, rewriter);
-    } else {
+    if (!carrierMode) {
       fc = ::mlir::unpackLLElements(loc, adaptorC, rewriter);
     }
   }
@@ -709,8 +720,6 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   Value squadMN = b.udiv(squad, b.i32_val(squadsM));
   Value squadN = b.urem(squadMN, b.i32_val(squadsN));
 
-  auto layoutA = getDotLayoutA(op);
-  auto layoutB = getDotLayoutB(op);
   bool loaderTransA = layoutA == triton::musa::SQMMALayout::col;
   bool loaderTransB = layoutB == triton::musa::SQMMALayout::row;
   int32_t intrinsicTransA = (layoutA == triton::musa::SQMMALayout::col) ? 1 : 0;
@@ -744,6 +753,10 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   SqmmaSmemLoader bLoader(bOperand->memDesc, bOperand->affineBase, *bMatrixView,
                           squadN, squadsN, loaderTransB, instN, instK,
                           *bDescSpec, rewriter, loc);
+  auto loadAOperandForTile = [&](const SqmmaTileState &tile,
+                                 unsigned kRep) -> FailureOr<Value> {
+    return aLoader.smemDesc(tile.batch, tile.mRep, kRep, rewriter, loc);
+  };
 
   auto accumulationMode = getDotAccumulationMode(op);
   uint32_t maxNumImpreciseAcc = getDotMaxNumImpreciseAcc(op);
@@ -755,11 +768,10 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   Type accVecTy = vec_ty(accLaneTy, accElemsPerThread);
 
   SmallVector<Value> mmaResults;
-  SmallVector<Value> mmaCarrierFragments;
   if (!carrierMode && !usesSoftwareAccumulator)
     mmaResults.resize(expectedAccElems);
-  if (carrierMode && !usesSoftwareAccumulator)
-    mmaCarrierFragments.resize(repCount);
+  Value softwareCarrierResult;
+  Value mmaCarrierResult;
 
   for (const SqmmaTileState &tile : *tilePlan) {
     size_t accBase = tile.regBase;
@@ -780,7 +792,10 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
         Value accSliceVec;
         if (carrierMode) {
           accSliceVec = mlir::LLVM::MUSA::carrierFragmentToMathVec(
-              loc, fcFragments[fragmentIdx], dTy, rewriter);
+              loc,
+              mlir::LLVM::MUSA::extractSqmmaAccumulatorCarrierFragment(
+                  loc, adaptorC, fragmentIdx, dTy, rewriter),
+              dTy, rewriter);
         } else {
           auto accSlice = loadAccSlice(rewriter, loc, fc, accBase,
                                        accElemsPerThread, nullptr);
@@ -799,13 +814,14 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
         accumElems = unpackLLVector(loc, accSliceVec, rewriter);
       }
       for (unsigned kRep = 0; kRep < numRepK; ++kRep) {
-        Value opA =
-            aLoader.smemDesc(tile.batch, tile.mRep, kRep, rewriter, loc);
+        auto opA = loadAOperandForTile(tile, kRep);
+        if (failed(opA))
+          return op.emitError("MUSA SQMMA failed to materialize operand A");
         Value opB =
             bLoader.smemDesc(tile.batch, tile.nRep, kRep, rewriter, loc);
 
         SmallVector<Value> args = {
-            opA,
+            *opA,
             opB,
             LLVM::ZeroOp::create(rewriter, loc, ivecTy),
             b.i32_val(intrinsicTransA),
@@ -835,8 +851,12 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
       }
       if (carrierMode) {
         Value accumVec = packLLVector(loc, accumElems, rewriter);
-        fcFragments[fragmentIdx] = mlir::LLVM::MUSA::mathVecToCarrierFragment(
+        Value carrierFragment = mlir::LLVM::MUSA::mathVecToCarrierFragment(
             loc, accumVec, dTy, rewriter);
+        softwareCarrierResult =
+            mlir::LLVM::MUSA::insertSqmmaAccumulatorCarrierFragment(
+                loc, softwareCarrierResult, carrierFragment, fragmentIdx, dTy,
+                rewriter);
       } else {
         for (unsigned i = 0; i < accumElems.size(); ++i)
           fc[accBase + i] = accumElems[i];
@@ -847,8 +867,10 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
     Type accElemTy = accLaneTy;
     Value accVec;
     if (carrierMode) {
-      accVec = zeroAcc ? LLVM::ZeroOp::create(rewriter, loc, ivecTy)
-                       : fcFragments[fragmentIdx];
+      accVec = zeroAcc
+                   ? LLVM::ZeroOp::create(rewriter, loc, accVecTy)
+                   : mlir::LLVM::MUSA::extractSqmmaAccumulatorCarrierFragment(
+                         loc, adaptorC, fragmentIdx, dTy, rewriter);
       if (!zeroAcc && (!useCConst || !*useCConst)) {
         Value zeroVec = LLVM::ZeroOp::create(rewriter, loc, accVec.getType());
         accVec =
@@ -878,7 +900,9 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
     uint32_t numLowPrecAcc = 0;
     Value partialAcc;
     for (unsigned kRep = 0; kRep < numRepK; ++kRep) {
-      Value opA = aLoader.smemDesc(tile.batch, tile.mRep, kRep, rewriter, loc);
+      auto opA = loadAOperandForTile(tile, kRep);
+      if (failed(opA))
+        return op.emitError("MUSA SQMMA failed to materialize operand A");
       Value opB = bLoader.smemDesc(tile.batch, tile.nRep, kRep, rewriter, loc);
       numLowPrecAcc += instK;
       bool requireAdd =
@@ -889,7 +913,7 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
           mmaAcc ? mmaAcc : LLVM::ZeroOp::create(rewriter, loc, ivecTy);
 
       SmallVector<Value> args = {
-          opA,
+          *opA,
           opB,
           inputAcc,
           b.i32_val(intrinsicTransA),
@@ -948,7 +972,10 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
                                : b.bitcast(finalReg, accVecTy);
       Value carrierFragment = mlir::LLVM::MUSA::mathVecToCarrierFragment(
           loc, finalMathVec, dTy, rewriter);
-      mmaCarrierFragments[fragmentIdx] = carrierFragment;
+      mmaCarrierResult =
+          mlir::LLVM::MUSA::insertSqmmaAccumulatorCarrierFragment(
+              loc, mmaCarrierResult, carrierFragment, fragmentIdx, dTy,
+              rewriter);
     } else {
       Value finalAcc = finalReg.getType() == currentAccVecTy
                            ? finalReg
@@ -964,11 +991,8 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
       LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.musa.sqmma.wait",
                                       TypeRange{}, {});
     }
-    Value res = mlir::LLVM::MUSA::packSqmmaAccumulatorCarrier(
-        loc,
-        usesSoftwareAccumulator ? ValueRange(fcFragments)
-                                : ValueRange(mmaCarrierFragments),
-        dTy, rewriter);
+    Value res =
+        usesSoftwareAccumulator ? softwareCarrierResult : mmaCarrierResult;
     rewriter.replaceOp(op, res);
     return success();
   }

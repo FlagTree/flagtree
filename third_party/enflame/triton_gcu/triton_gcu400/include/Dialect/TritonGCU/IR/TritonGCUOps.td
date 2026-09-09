@@ -86,6 +86,11 @@ def TTGCU_StoreOp : TTGCU_Op<"store",
                               [MemoryEffects<[MemWrite]>, AttrSizedOperandSegments]> {
   let summary = "store";
   let description = [{
+    `offsets` are the per-dimension within-tile offsets of the valid region
+    (the mask start): for a `>=`-style mask the valid data lives at the END of
+    the tile, so `offsets` carries the mask start (e.g. half). The store
+    lowering (ConfigGcuStore) combines `offsets` with each warp's partition
+    to compute the per-warp source slice offset and destination offset.
   }];
   let arguments = (ins AnyStaticShapeTensor:$value,
                        TTGCU_PtrType:$ptr,
@@ -113,7 +118,7 @@ def TTGCU_YieldOp : TTGCU_Op<"yield", [
   let description = [{
   }];
   let arguments = (ins Variadic<AnyType>:$operands);
-  let assemblyFormat = [{ $operands attr-dict `:` type($operands)}];
+  let assemblyFormat = [{ ($operands^ `:` type($operands))? attr-dict }];
 }
 
 //
@@ -494,7 +499,7 @@ def TritonGCU_MaskedStoreOp : TTGCU_Op<"maskedstore", [
 def TTGCU_WarpGroupDotOp : TTGCU_Op<"warp_group_dot", [
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-  DeclareOpInterfaceMethods<DotOpInterface>,
+  DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
   TypesMatchWith<"result's type matches accumulator's type", "d", "c", "$_self">
 ]> {
   let summary = "warp group dot";

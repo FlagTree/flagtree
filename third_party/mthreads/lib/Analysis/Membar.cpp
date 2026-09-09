@@ -6,6 +6,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "llvm/ADT/DenseSet.h"
 #include <deque>
 
 namespace mlir {
@@ -34,8 +35,17 @@ bool shouldTrackMusaSquadDotOp(Operation *op) {
 AllocationSlice::AllocationSlice(Value value,
                                  Interval<size_t> allocationInterval)
     : allocationInterval(allocationInterval) {
+#ifdef __TLE__
+  // With TLE, alias propagation may associate pointer-type values (e.g.
+  // derived from tle.local_pointers / tt.addptr) with shared memory buffers.
+  // Use dyn_cast so we degrade gracefully instead of asserting.
+  this->accessTy = dyn_cast<triton::gpu::MemDescType>(value.getType());
+  if (!accessTy)
+    return;
+#else
   auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
   this->accessTy = accessTy;
+#endif
 
   // Get the memdesc_subslice information if present. If no subslice is
   // present the whole interval is accessed
@@ -260,6 +270,57 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
                                  triton::gpu::AddrSpace::Local);
 }
 
+#ifdef __TLE__
+static bool syncPipeLocalStoreGroups(Operation *wait, BlockInfo *blockInfo,
+                                     Allocation *allocation) {
+  auto waitGroups = wait->getAttrOfType<DenseI64ArrayAttr>(
+      "musa_tle.pipe_local_store_wait_groups");
+  if (!waitGroups || waitGroups.empty())
+    return false;
+
+  llvm::DenseSet<int64_t> selectedGroups;
+  selectedGroups.insert(waitGroups.asArrayRef().begin(),
+                        waitGroups.asArrayRef().end());
+
+  Operation *function = wait->getParentOp();
+  while (function && !isa<FunctionOpInterface>(function))
+    function = function->getParentOp();
+  if (!function)
+    return false;
+
+  auto syncSlice = [&](const AllocationSlice &completed) {
+    auto eraseCompleted = [&](BlockInfo::SliceMapT &slices) {
+      for (auto it = slices.begin(); it != slices.end();) {
+        if (it->first.isWithinAllocation(completed))
+          it = slices.erase(it);
+        else
+          ++it;
+      }
+    };
+    eraseCompleted(blockInfo->syncReadSlices);
+    eraseCompleted(blockInfo->syncWriteSlices);
+  };
+
+  bool matchedAllocation = false;
+  function->walk([&](triton::gpu::LocalAllocOp alloc) {
+    auto group =
+        alloc->getAttrOfType<IntegerAttr>("musa_tle.pipe_local_store_group");
+    if (!group || !selectedGroups.contains(group.getInt()))
+      return;
+    for (Value result : alloc->getResults()) {
+      for (auto bufferId : allocation->getBufferIds(result)) {
+        if (bufferId == Allocation::InvalidBufferId)
+          continue;
+        auto interval = allocation->getAllocatedInterval(bufferId);
+        syncSlice(AllocationSlice(result, interval));
+        matchedAllocation = true;
+      }
+    }
+  });
+  return matchedAllocation;
+}
+#endif
+
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
@@ -279,6 +340,20 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     return;
   }
 
+#ifdef __TLE__
+  // LowerPipe marks only full async waits with no intervening memory effects
+  // before the writer's warp arrivals. The full/empty protocol supplies the
+  // cross-warp edge; this thread-local wait must not clear other hazards.
+  if (isa<triton::gpu::AsyncWaitOp>(op) &&
+      op->hasAttr("musa_tle.pipe_async_wait"))
+    return;
+  if (syncPipeLocalStoreGroups(op, blockInfo, allocation)) {
+    // The pipe hardware wait is the acquire edge for this local-store
+    // generation.  Clear only the corresponding payload allocation so
+    // unrelated shared-memory dependencies remain tracked.
+    return;
+  }
+#endif
   if (op->hasTrait<mlir::OpTrait::MemWaitOpTrait>() &&
       !containsLocalBarrier(op->getNextNode())) {
     // If the current op is an async wait and the next op is not a barrier we
@@ -364,9 +439,16 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
 
     if (!curBlockInfo.syncReadSlices.empty() ||
         !curBlockInfo.syncWriteSlices.empty()) {
+#ifdef __TLE__
+      // Some scratch-buffer ops can also carry explicit shared-memory
+      // effects (e.g. tle.gpu.local_ptr accesses). Keep conservative
+      // dependency tracking instead of hard-failing here; the normal
+      // barrier-insertion logic below will handle overlaps.
+#else
       llvm::report_fatal_error(
           "scratch buffer operations should not have any shared memory "
           "dependencies");
+#endif
     }
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
     auto scratchSlice = AllocationSlice(interval);

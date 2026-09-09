@@ -22,10 +22,19 @@ set(_core_dialect_libs
   MathExtIR_gcu300
 )
 
-add_library(triton_gcu300_core SHARED triton_gcu300_core.cpp ${TRITON_OUTPUT_FILES})
+if(FLAGTREE_TLE)
+  list(APPEND _core_dialect_libs
+    TleIR
+    TleToLLVM
+    TritonTLETransforms
+    TritonTLEAnalysis
+    TritonNVIDIAGPUToLLVM
+    NVGPUIR
+  )
+endif()
+
+add_library(triton_gcu300_core SHARED triton_gcu300_core.cpp)
 target_compile_features(triton_gcu300_core PRIVATE cxx_std_17)
-set_source_files_properties(${TRITON_OUTPUT_FILES} PROPERTIES
-  EXTERNAL_OBJECT TRUE GENERATED TRUE)
 
 target_link_libraries(triton_gcu300_core PRIVATE
   ${_core_dialect_libs}
@@ -71,8 +80,4 @@ set_target_properties(triton_gcu300_core PROPERTIES
 
 message(STATUS "[gcu300] Built core library: libtriton_gcu300_core.so")
 
-# Install core library
-install(TARGETS triton_gcu300_core
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION lib
-)
+# libtriton_gcu300_core.so is built for the wheel, but intentionally NOT installed.

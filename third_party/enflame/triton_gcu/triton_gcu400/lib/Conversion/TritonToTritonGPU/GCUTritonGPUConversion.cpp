@@ -14,18 +14,26 @@
  * limitations under the License.
  */
 #include "GCUTritonGPUConversion.h"
+#include "Utils/TritonVersionCompat.h"
 
 #include <algorithm>
 #include <numeric>
+#include <optional>
 #include <utility>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
+#ifdef ENABLE_TRITON_DISTRIBUTED
+#include "TritonDistributed/Dialect/Distributed/IR/Dialect.h"
+#include "TritonDistributed/Dialect/SIMT/IR/Dialect.h"
+#endif
 
 #ifdef ENABLE_TLE
 #include "tle/dialect/include/IR/Dialect.h"
@@ -76,6 +84,38 @@ triton::gpu::BlockedEncodingAttr mlir::getBlockedEncodingWithOrder(
                                                threadsPerWarp, numCTAs);
 }
 
+// Compute dot-op-compatible warpsPerCTA using the same algorithm as
+// TritonDotPattern: shapePerWarp[M] = 8, shapePerWarp[N] = 128.
+// This ensures non-dot tensors (loads, stores, elementwise) use the same
+// warp distribution as dot operands, minimizing convert_layout ops.
+SmallVector<unsigned>
+mlir::computeDotWarpsPerCTA(const triton::gpu::BlockedEncodingAttr &encoding,
+                            ArrayRef<int64_t> shape, unsigned numWarps) {
+  unsigned rank = shape.size();
+  SmallVector<int64_t> shapePerCTA = getShapePerCTA(encoding, shape);
+  SmallVector<unsigned> shapePerWarp(rank, 1);
+  if (rank >= 2) {
+    shapePerWarp[rank - 1] = 128; // N dimension
+    shapePerWarp[rank - 2] = 8;   // M dimension
+  }
+  SmallVector<unsigned> warpsPerCTA(rank, 1);
+  SmallVector<unsigned> order(encoding.getOrder());
+  unsigned remainingNumWarps = numWarps;
+  for (unsigned d = 0; d < rank; ++d) {
+    unsigned i = order[d];
+    warpsPerCTA[i] = std::clamp<unsigned>(
+        static_cast<unsigned>(shapePerCTA[i]) / shapePerWarp[i], 1,
+        remainingNumWarps);
+    remainingNumWarps /= warpsPerCTA[i];
+  }
+  if (remainingNumWarps > 1 && rank >= 2) {
+    warpsPerCTA[rank - 1] *= 2;
+    remainingNumWarps /= 2;
+  }
+  warpsPerCTA[order[rank - 1]] *= remainingNumWarps;
+  return warpsPerCTA;
+}
+
 //===----------------------------------------------------------------------===//
 // GCUTritonGPUTypeConverter
 //===----------------------------------------------------------------------===//
@@ -83,21 +123,32 @@ triton::gpu::BlockedEncodingAttr mlir::getBlockedEncodingWithOrder(
 GCUTritonGPUTypeConverter::GCUTritonGPUTypeConverter(
     MLIRContext *context, int numWarps, int threadsPerWarp, int numCTAs,
     ArrayRef<unsigned> defaultOrder,
-    const llvm::SmallDenseMap<unsigned, unsigned> &axisFreq)
+    const llvm::SmallDenseMap<unsigned, unsigned> &axisFreq, bool hasDotOp)
     : context(context), numWarps(numWarps), threadsPerWarp(threadsPerWarp),
-      numCTAs(numCTAs) {
+      numCTAs(numCTAs), defaultOrder(defaultOrder.begin(), defaultOrder.end()),
+      axisFreq(axisFreq), hasDotOp(hasDotOp) {
   addConversion([](Type type) { return type; });
 
-  addConversion([this, defaultOrder = SmallVector<unsigned>(defaultOrder),
-                 axisFreq = llvm::SmallDenseMap<unsigned, unsigned>(axisFreq)](
-                    RankedTensorType tensorType) -> RankedTensorType {
+  addConversion([this](RankedTensorType tensorType) -> RankedTensorType {
+#ifdef ENABLE_TLE
+    return convertRankedTensorType(tensorType, this->numWarps);
+#else
     if (tensorType.getEncoding())
       return tensorType;
     ArrayRef<int64_t> shape = tensorType.getShape();
     auto encoding = getBlockedEncodingWithOrder(
-        this->context, shape, defaultOrder, axisFreq, this->numWarps,
-        this->threadsPerWarp, this->numCTAs);
+        this->context, shape, this->defaultOrder, this->axisFreq,
+        this->numWarps, this->threadsPerWarp, this->numCTAs);
+    if (this->hasDotOp) {
+      SmallVector<unsigned> warpsPerCTA =
+          computeDotWarpsPerCTA(encoding, shape, this->numWarps);
+      encoding = BlockedEncodingAttr::get(
+          this->context, encoding.getSizePerThread(),
+          encoding.getThreadsPerWarp(), warpsPerCTA, encoding.getOrder(),
+          triton_gcu::compat::getCGALayout(encoding));
+    }
     return tensorType.cloneWithEncoding(encoding);
+#endif
   });
 
   addConversion([this](triton::PointerType ptrType) -> triton::PointerType {
@@ -110,6 +161,26 @@ GCUTritonGPUTypeConverter::GCUTritonGPUTypeConverter(
                                     ptrType.getAddressSpace());
   });
 
+#ifdef ENABLE_TLE
+  addConversion([this](Value value) -> std::optional<Type> {
+    Type type = value.getType();
+    int valueNumWarps = getNumWarps(value);
+    if (auto tensorType = dyn_cast<RankedTensorType>(type))
+      return convertRankedTensorType(tensorType, valueNumWarps);
+
+    if (auto ptrType = dyn_cast<triton::PointerType>(type)) {
+      auto pointeeTensorType =
+          dyn_cast<RankedTensorType>(ptrType.getPointeeType());
+      if (pointeeTensorType)
+        return triton::PointerType::get(
+            convertRankedTensorType(pointeeTensorType, valueNumWarps),
+            ptrType.getAddressSpace());
+    }
+
+    return std::nullopt;
+  });
+#endif
+
   addTargetMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
                               ValueRange inputs, Location loc) {
     auto cast =
@@ -117,6 +188,36 @@ GCUTritonGPUTypeConverter::GCUTritonGPUTypeConverter(
     return cast.getResult();
   });
 }
+
+#ifdef ENABLE_TLE
+int GCUTritonGPUTypeConverter::getNumWarps(Value value) const {
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    if (Block *owner = blockArg.getOwner()) {
+      if (Region *region = owner->getParent()) {
+        if (region->getParentOp())
+          return triton::gpu::lookupNumWarps(region);
+      }
+    }
+  }
+  if (Operation *op = value.getDefiningOp()) {
+    if (std::optional<int> contextualNumWarps =
+            triton::gpu::maybeLookupNumWarps(op))
+      return *contextualNumWarps;
+  }
+  return numWarps;
+}
+
+RankedTensorType GCUTritonGPUTypeConverter::convertRankedTensorType(
+    RankedTensorType tensorType, int contextualNumWarps) const {
+  if (tensorType.getEncoding())
+    return tensorType;
+  ArrayRef<int64_t> shape = tensorType.getShape();
+  auto encoding =
+      getBlockedEncodingWithOrder(context, shape, defaultOrder, axisFreq,
+                                  contextualNumWarps, threadsPerWarp, numCTAs);
+  return tensorType.cloneWithEncoding(encoding);
+}
+#endif
 
 //===----------------------------------------------------------------------===//
 // GCUTritonGPUConversionTarget
@@ -132,8 +233,15 @@ GCUTritonGPUConversionTarget::GCUTritonGPUConversionTarget(
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
                              triton::TritonDialect, cf::ControlFlowDialect,
-                             scf::SCFDialect, ub::UBDialect>(
+                             scf::SCFDialect, ub::UBDialect,
+                             tensor::TensorDialect>(
       [&](Operation *op) { return isDynamicallyLegal(op, typeConverter); });
+
+#ifdef ENABLE_TRITON_DISTRIBUTED
+  addDynamicallyLegalDialect<triton::distributed::DistributedDialect,
+                             triton::simt::SIMTDialect>(
+      [&](Operation *op) { return isDynamicallyLegal(op, typeConverter); });
+#endif
 
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {
     Attribute aEncoding =

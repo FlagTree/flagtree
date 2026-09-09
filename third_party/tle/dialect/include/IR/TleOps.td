@@ -1,3 +1,26 @@
+/*
+ * Copyright 2025-     FlagOS Contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 #ifndef TLE_RAW_OPS
 #define TLE_RAW_OPS
 
@@ -56,6 +79,22 @@ def Tle_InsertTileOp
   let hasVerifier = 1;
 }
 
+def Tle_SetLayoutOp : Tle_Op<"gpu.set_layout", [
+    Pure,
+    SameOperandsAndResultShape,
+    SameOperandsAndResultElementType
+]> {
+  let summary = "Attach a requested distributed encoding to a tensor value";
+  let description = [{
+    Carries a user-requested TritonGPU distributed encoding through the TLE
+    frontend. The op is lowered during Triton-to-TritonGPU conversion, after
+    encoding propagation has selected legal layouts for dependent values.
+  }];
+  let arguments = (ins TT_Tensor:$src, AnyAttr:$target_encoding);
+  let results = (outs TT_Tensor:$result);
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+}
+
 // End TLE-Lite
 
 // Begin TLE-Raw
@@ -91,6 +130,31 @@ def Tle_MemDescWGMMAViewOp : Tle_Op<"memdesc_wgmma_view", [Pure,
   let arguments = (
     ins TTG_MemDescType:$src,
     DenseI32ArrayAttr:$order
+  );
+
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasVerifier = 1;
+}
+
+def Tle_MemDescAliasOp : Tle_Op<"memdesc_alias", [Pure, MemDescViewTrait]> {
+  let summary = "create a typed view that aliases an existing shared memory descriptor";
+
+  let description = [{
+    This operation returns a descriptor-only view into an existing shared memory
+    descriptor. It does not allocate or move shared memory.
+
+    The result type carries the logical shape, element type, and encoding used
+    by consumers. The source descriptor provides the backing storage. The
+    offset_bytes attribute is a static byte offset from the source descriptor's
+    current view base.
+  }];
+
+  let arguments = (
+    ins TTG_MemDescType:$src,
+    I64Attr:$offset_bytes
   );
 
   let results = (outs TTG_MemDescType:$result);
@@ -319,29 +383,42 @@ def Tle_TMAStoreCommitGroupOp
 def Tle_DistributedBarrierOp : Tle_Op<"distributed_barrier",
                                       [MemoryEffects<[MemRead, MemWrite]>]> {
   let arguments = (ins
+    Optional<AnyType>:$src,
+    OptionalAttr<StrAttr>:$space,
+    OptionalAttr<StrAttr>:$barrier_type,
+    OptionalAttr<StrAttr>:$order,
     OptionalAttr<StrAttr>:$group_kind,
+    OptionalAttr<I32Attr>:$barrier_index,
+    OptionalAttr<I32Attr>:$context_id,
+    OptionalAttr<StrAttr>:$memory_scope,
     OptionalAttr<I32Attr>:$group_rank,
     OptionalAttr<DenseI32ArrayAttr>:$group_shape,
     OptionalAttr<DenseI32ArrayAttr>:$group_axes,
     OptionalAttr<DenseI32ArrayAttr>:$group_mask
   );
-  let assemblyFormat = "attr-dict";
   let hasVerifier = 1;
 }
 
-def Tle_RemotePointersOp : Tle_Op<"remote_pointers", [Pure]> {
+def Tle_RemotePointersOp : Tle_Op<"remote_pointers", [
+    Pure,
+    AttrSizedOperandSegments
+]> {
   let arguments = (ins
-    Tle_LocalPointerResultType:$src,
+    Optional<Tle_LocalPointerResultType>:$src,
+    Optional<I64>:$comm,
     TT_Int:$shard_id,
     StrAttr:$space,
-    Optional<TT_IntLike>:$offset
+    Optional<TT_IntLike>:$offset,
+    Optional<I32>:$net_idx,
+    OptionalAttr<Tle_FlagCXCoopKindAttr>:$coop_kind
   );
 
   let results = (outs Tle_LocalPointerResultType:$result);
   let hasVerifier = 1;
 }
+
 def Tle_GetNumPesOp : Tle_Op<"get_num_pes"> {
-  let summary = "Get nume pes";
+  let summary = "Get the number of intra-node PEs";
   let arguments = (ins
     Tle_LocalPointerResultType:$src
   );
@@ -349,14 +426,60 @@ def Tle_GetNumPesOp : Tle_Op<"get_num_pes"> {
   let hasVerifier = 1;
 }
 
+class Tle_NodeTransferOp<string mnemonic> : Tle_Op<mnemonic, [
+    MemoryEffects<[MemRead, MemWrite]>
+]> {
+  let summary = "execute a fused inter-node memory transfer";
+  let description = [{
+    Represents an explicit inter-node transfer after a node-space
+    tle.remote_pointers marker and its load/store users have been fused.
+    Offsets and nelems are expressed in elements; elem_bytes is applied during
+    lowering to form byte offsets and the byte count passed to FlagCX. Nelems
+    must be greater than zero.
+  }];
+
+  let arguments = (ins
+    I64:$src,
+    I64:$dst_mem,
+    I64:$comm,
+    I32:$peer,
+    I64:$src_offset,
+    I64:$dst_offset,
+    I64:$nelems,
+    I32:$net_idx,
+    I64Attr:$elem_bytes,
+    Tle_FlagCXCoopKindAttr:$coop_kind
+  );
+
+  let hasVerifier = 1;
+}
+
+def Tle_NodePutOp : Tle_NodeTransferOp<"node_put"> {
+  let summary = "put data from local registered memory to a remote node";
+}
+
+def Tle_NodeGetOp : Tle_NodeTransferOp<"node_get"> {
+  let summary = "get data from a remote node into local registered memory";
+}
+
 def Tle_GetDeviceIdOp : Tle_Op<"get_device_id"> {
   let summary = "Get local PE id";
   let arguments = (ins
-     AnyType:$input
+     Optional<AnyType>:$input
   );
   let results = (outs I32:$result);
   let hasVerifier = 1;
 }
+
+def Tle_GetWorldRankOp : Tle_Op<"get_world_rank"> {
+  let summary = "Get global PE rank";
+  let arguments = (ins
+     Tle_LocalPointerResultType:$input
+  );
+  let results = (outs I32:$result);
+  let hasVerifier = 1;
+}
+
 
 def Tle_DSLRegionOp : Tle_Op<"dsl_region", [IsolatedFromAbove, MemDescViewTrait,
                                             DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -427,6 +550,56 @@ def Tle_PackOp
   let results = (outs Tle_TensorType:$output);
   let assemblyFormat = "$input attr-dict `:` type($input) `to` type($output)";
   let hasVerifier = 1;
+}
+
+def Tle_SignalOp : Tle_Op<"signal", [MemoryEffects<[MemRead, MemWrite]>]> {
+  let summary = "Atomically update a remote signal slot";
+  let description = [{
+    Obtains a pre-allocated network context from `comm`, then either
+    increments the selected remote signal slot by one or adds `value` to it.
+    This operation only sends a signal; it does not transfer user data or wait
+    for the remote signal to reach a value.
+  }];
+
+  let arguments = (ins
+    Tle_LocalPointerResultType:$comm,
+    I32:$peer,
+    I32:$slot_id,
+    Optional<I64>:$value,
+    Tle_SignalOpKindAttr:$signal_op,
+    Tle_FlagCXTeamKindAttr:$team_kind,
+    Tle_FlagCXCoopKindAttr:$coop_kind,
+    I32Attr:$context_idx
+  );
+
+  let hasVerifier = true;
+}
+
+def Tle_SignalWaitOp : Tle_Op<"signal_wait"> {
+  let summary = "Wait for a remote signal slot to become the target value";
+  let description = [{
+    Obtains a pre-allocated network context from `comm`, then spin-waits the selected
+    signal slot to reach the target value (actual value >= target),
+    or waits the signal to reach its shadow value.
+  }];
+
+  let arguments = (ins
+    Tle_LocalPointerResultType:$comm,
+    I32:$slot_id,
+    Tle_SignalWaitKindAttr:$wait_kind,
+    Optional<I64>:$target,
+    Tle_FlagCXCoopKindAttr:$coop_kind,
+    I32Attr:$context_idx
+  );
+
+  let results = (outs);
+
+  let assemblyFormat = [{
+    `(` $wait_kind `,` $coop_kind `)` $comm `,` $slot_id (`,` $target^)?  attr-dict `:`
+    functional-type(operands, results)
+  }];
+
+  let hasVerifier = true;
 }
 
 #endif

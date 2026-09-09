@@ -1,6 +1,33 @@
+# Copyright 2025-     FlagOS Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 # flagtree tle
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import builtins
 import triton.language.core as tl
+
+if TYPE_CHECKING:
+    from . import TLESemantic
 
 
 def _tle_pick_sum_dtype(in_dtype, dtype):
@@ -20,7 +47,7 @@ def _tle_pick_sum_dtype(in_dtype, dtype):
 
 @tl.builtin
 def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-         volatile=False, is_async=False, _semantic=None):
+         volatile=False, is_async=False, _semantic: TLESemantic | None = None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
 
@@ -71,7 +98,8 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
 
 @tl.builtin
-def cumsum(input, axis=0, reverse=False, dtype: tl.constexpr = None, _semantic=None, _generator=None):
+def cumsum(input, axis=0, reverse=False, dtype: tl.constexpr = None, _semantic: TLESemantic | None = None,
+           _generator=None):
     """
     Compute exclusive cumulative sum and total sum along :code:`axis`.
 
@@ -195,7 +223,7 @@ def _linearize_static_multidim_index(index_list, src_shape, tile_shape_ints):
     return linear
 
 
-def _linearize_dynamic_multidim_index(index_tuple, src_shape, tile_shape_ints, _semantic):
+def _linearize_dynamic_multidim_index(index_tuple, src_shape, tile_shape_ints, _semantic: TLESemantic | None):
     """
     Convert dynamic multi-dimensional tile index to linear index IR.
     Example:
@@ -250,7 +278,7 @@ def extract_tile(
     x: tl.tensor,
     index,
     tile_shape: tuple,
-    _semantic=None,
+    _semantic: TLESemantic | None = None,
 ) -> tl.tensor:
     """
     Extract a tile from a tensor at a given tile index.
@@ -392,7 +420,7 @@ def insert_tile(
     x: tl.tensor,
     tile: tl.tensor,
     index,
-    _semantic=None,
+    _semantic: TLESemantic | None = None,
 ) -> tl.tensor:
     """
     Insert a tile into source tensor.

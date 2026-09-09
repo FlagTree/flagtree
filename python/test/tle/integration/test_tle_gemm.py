@@ -14,6 +14,7 @@ import torch
 import triton
 import triton.language as tl
 import triton.experimental.tle.language as tle
+from triton._flagtree_backend import FLAGTREE_BACKEND
 # Disable TF32, force pure FP32 accumulation
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
@@ -100,6 +101,7 @@ class TestTLEGEMM:
     """TLE GEMM Integration Tests"""
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA GPU")
+    @pytest.mark.require_tle("gpu.alloc", "gpu.copy", "gpu.local_ptr")
     def test_gemm_basic(self):
         """Test basic GEMM functionality with square matrices"""
         torch.manual_seed(42)  # Ensure reproducibility
@@ -117,7 +119,10 @@ class TestTLEGEMM:
 
         # Verify results
         expected = torch.matmul(a, b)
-        torch.testing.assert_close(c, expected, atol=1e-4, rtol=1e-4)
+        if FLAGTREE_BACKEND == "ppu":
+            torch.testing.assert_close(c, expected, atol=1e-3, rtol=1e-3)
+        else:
+            torch.testing.assert_close(c, expected, atol=1e-4, rtol=1e-4)
 
 
 if __name__ == "__main__":

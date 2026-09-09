@@ -455,7 +455,7 @@ public:
     auto defOp = lhs.getDefiningOp();
     if (!defOp || !(isa<math::ExpOp>(defOp) || [](auto op) {
           auto o = dyn_cast<triton::ExternElementwiseOp>(op);
-          return o.getSymbol() == "__nv_expf";
+          return o && o.getSymbol() == "__nv_expf";
         }(defOp))) {
       return failure();
     }
@@ -524,7 +524,7 @@ public:
     auto defOp = lhs.getDefiningOp();
     if (!defOp || !(isa<math::ExpOp>(defOp) || [](auto op) {
           auto o = dyn_cast<triton::ExternElementwiseOp>(op);
-          return o.getSymbol() == "__nv_expf";
+          return o && o.getSymbol() == "__nv_expf";
         }(defOp))) {
       return failure();
     }
@@ -572,15 +572,25 @@ public:
     // Check if the dot op is an acc reuse candidate
     Value input = cvtOp->getOperand(0);
     auto dotOp = getDotOp(input);
-    if (!dotOp || !dotOp->hasAttr("acc_reuse_candidate") ||
-        mlir::cast<StringAttr>(dotOp->getAttr("acc_reuse_candidate"))
-                .getValue() != "acc_reuse_oacc")
+    if (!dotOp)
+      return failure();
+
+    if (!dotOp.getResult().hasOneUse())
       return failure();
 
     // Update oacc store mode
     const char *const kAccStore = "acc_store";
     if (!dotOp->hasAttr(kAccStore))
       return failure();
+
+    if (dotOp->hasAttr("acc_reuse_candidate")) {
+      if (mlir::cast<StringAttr>(dotOp->getAttr("acc_reuse_candidate"))
+              .getValue() != "acc_reuse_oacc")
+        return failure();
+    } else if (dotOp->getBlock() != cvtOp->getBlock()) {
+      return failure();
+    }
+
     dotOp->setAttr(kAccStore,
                    StringAttr::get(dotOp.getContext(), "cvt_global"));
 
@@ -590,7 +600,10 @@ public:
 
 private:
   static triton::DotOp getDotOp(Value val) {
-    if (auto dotOp = dyn_cast<triton::DotOp>(val.getDefiningOp()))
+    auto *defOp = val.getDefiningOp();
+    if (!defOp)
+      return nullptr;
+    if (auto dotOp = dyn_cast<triton::DotOp>(defOp))
       return dotOp;
 
     if (auto forResult = dyn_cast<OpResult>(val)) {

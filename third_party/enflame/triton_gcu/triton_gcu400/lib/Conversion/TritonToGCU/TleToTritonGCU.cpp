@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "Conversion/TritonToGCU/TritonToGCUPass.h"
+#include "Utils/TritonVersionCompat.h"
 
 #include "Dialect/TritonGCU/IR/TritonGCUDialect.h"
 #include "Dialect/TritonGCU/IR/TritonGCUTypes.h"
@@ -965,7 +966,7 @@ struct ConvertTMACopyOp : public RewritePattern {
     SmallVector<unsigned> order(rank);
     for (int i = 0; i < rank; i++)
       order[i] = rank - 1 - i;
-    auto ctaLayout = triton::gpu::CTAEncodingAttr::fromSplitParams(
+    auto ctaLayout = triton_gcu::compat::getCGALayoutFromSplitParams(
         op->getContext(),
         /*ctasPerCGA=*/SmallVector<unsigned>(rank, 1),
         /*ctaSplitNum=*/SmallVector<unsigned>(rank, 1),
@@ -1184,6 +1185,55 @@ static void fixRemoteAddrSpaceTypes(Value startVal) {
   }
 }
 
+/// Rewrite AS 7 (remote) → AS 3 (shared) in tt.func parameter / result types
+/// and tt.call operand / result types so that callee signatures stay consistent
+/// after fixRemoteAddrSpaceTypes has rewritten all value types.
+static void fixRemoteAddrSpaceFuncSignatures(gpu::GPUModuleOp module) {
+  module.walk([](Operation *op) {
+    if (auto funcOp = dyn_cast<triton::FuncOp>(op)) {
+      auto funcTy = funcOp.getFunctionType();
+      bool changed = false;
+
+      SmallVector<Type> newInputs;
+      for (Type t : funcTy.getInputs()) {
+        Type nt = rewriteRemoteAddrSpace(t);
+        newInputs.push_back(nt);
+        if (nt != t)
+          changed = true;
+      }
+      SmallVector<Type> newResults;
+      for (Type t : funcTy.getResults()) {
+        Type nt = rewriteRemoteAddrSpace(t);
+        newResults.push_back(nt);
+        if (nt != t)
+          changed = true;
+      }
+
+      if (changed) {
+        auto newFuncTy =
+            FunctionType::get(op->getContext(), newInputs, newResults);
+        funcOp.setFunctionType(newFuncTy);
+        if (!funcOp.isDeclaration()) {
+          Block &entry = funcOp.getBody().front();
+          for (unsigned i = 0; i < entry.getNumArguments(); ++i) {
+            if (entry.getArgument(i).getType() != newInputs[i]) {
+              entry.getArgument(i).setType(newInputs[i]);
+              fixRemoteAddrSpaceTypes(entry.getArgument(i));
+            }
+          }
+        }
+      }
+    } else if (op->getName().getStringRef() == "tt.call") {
+      for (unsigned i = 0; i < op->getNumResults(); ++i) {
+        Type oldTy = op->getResult(i).getType();
+        Type newTy = rewriteRemoteAddrSpace(oldTy);
+        if (newTy != oldTy)
+          op->getResult(i).setType(newTy);
+      }
+    }
+  });
+}
+
 static void postProcessRemotePointers(gpu::GPUModuleOp module) {
   SmallVector<Operation *> remoteOps;
   module.walk([&](Operation *op) {
@@ -1239,6 +1289,12 @@ static void postProcessRemotePointers(gpu::GPUModuleOp module) {
     fixRemoteAddrSpaceTypes(replacement);
     remoteOp->erase();
   }
+
+  // After all tle.remote_pointers have been lowered, AS 7 pointers no longer
+  // exist as values.  However tt.func / tt.call signatures may still reference
+  // AS 7 in their parameter and result types.  Rewrite those signatures so the
+  // MLIR verifier does not flag an operand-type mismatch.
+  fixRemoteAddrSpaceFuncSignatures(module);
 }
 
 // ===----------------------------------------------------------------------===
@@ -1420,7 +1476,7 @@ static void preProcessLocalPointers(gpu::GPUModuleOp module) {
               continue;
             newOrder.push_back(o - 1);
           }
-          auto reducedCTA = triton::gpu::CTAEncodingAttr::getDefault(
+          auto reducedCTA = triton_gcu::compat::getDefaultCGALayout(
               builder.getContext(), newOrder.size());
           reducedEncoding = triton::gpu::SwizzledSharedEncodingAttr::get(
               builder.getContext(), swizzled.getVec(), swizzled.getPerPhase(),
@@ -1428,7 +1484,7 @@ static void preProcessLocalPointers(gpu::GPUModuleOp module) {
         } else if (auto nvmmaShared =
                        dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
                            reducedEncoding)) {
-          auto reducedCTA = triton::gpu::CTAEncodingAttr::getDefault(
+          auto reducedCTA = triton_gcu::compat::getDefaultCGALayout(
               builder.getContext(), newShapeSize);
           reducedEncoding = triton::gpu::NVMMASharedEncodingAttr::get(
               builder.getContext(), nvmmaShared.getSwizzlingByteWidth(),
