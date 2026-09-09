@@ -49,14 +49,13 @@ jobs:
   # Job 1: generate FlagGems baseline (only on push)
   generate-flaggems-baseline:
     runs-on: nvidia3.6
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.repository == 'flagos-ai/flagtree' && github.event_name == 'push' }}
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-'nvidia3.6'
       cancel-in-progress: false
     outputs:
       commit_id: ${{ steps.set-commit.outputs.commit_id }}
     steps:
-      # Step 1: Setup Environment
       - name: Setup Environment
         id: setup
         shell: bash
@@ -68,7 +67,10 @@ jobs:
           echo "GPU devices: $GPU_DEVICES"
           echo "FlagGems tag: $FLAGGEMS_TAG"
 
-      # Step 2: Set commit ID and paths
+          FLAGGEMS_REPO_DIR="${FLAGGEMS_CI_DIR}/FlagGems/baseline_${GITHUB_RUN_ID}"
+          echo "FLAGGEMS_REPO_DIR=$FLAGGEMS_REPO_DIR" >> $GITHUB_OUTPUT
+          echo "✅ FlagGems repo: $FLAGGEMS_REPO_DIR"
+
       - name: Set Commit ID and Paths
         id: set-commit
         shell: bash
@@ -96,7 +98,6 @@ jobs:
           echo "📄 Summary file: $BASELINE_SUMMARY"
           echo "📁 BEST dir: $BEST_DIR"
 
-      # Step 3: Smart Checkout - Checkout the current push code
       - name: Smart Checkout
         id: smart-checkout-flagtree
         uses: flagos-ai/FlagTree/.github/actions/smart-checkout@main
@@ -104,13 +105,11 @@ jobs:
           checkout_version: 'v6'
         continue-on-error: false
 
-      # Step 4: Cleanup FlagTree Environment
       - name: Cleanup FlagTree Environment
         id: cleanup-flagtree-env
         uses: flagos-ai/FlagTree/.github/actions/cleanup-flagtree-env@main
         if: success()
 
-      # Step 5: Install FlagTree
       - name: Install FlagTree
         id: install-flagtree
         shell: bash
@@ -120,7 +119,6 @@ jobs:
           source ~/env-3.6.sh
           MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
 
-      # Step 6: Clone FlagGems
       - name: Clone FlagGems Repo
         id: clone-flaggems
         uses: flagos-ai/FlagTree/.github/actions/git-clone-retry@main
@@ -128,25 +126,23 @@ jobs:
         with:
           repo-url: 'https://github.com/flagos-ai/FlagGems.git'
           ref: ${{ env.FLAGGEMS_TAG }}
-          clone-dir: ${{ env.FLAGGEMS_CI_DIR }}
+          clone-dir: ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}
 
-      # Step 7: Install FlagGems
       - name: Install FlagGems
         id: install-flaggems
         shell: bash
         if: success()
         run: |
-          cd ${FLAGGEMS_CI_DIR}/FlagGems
+          cd ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems
           python3 -m pip uninstall -y flag_gems --break-system-packages || true
           pip install -v -e . --no-build-isolation --no-deps
 
-      # Step 8: Run FlagGems Test for Baseline
       - name: Run FlagGems Test for Baseline
         id: run-flaggems-test
         uses: flagos-ai/FlagTree/.github/actions/run-flaggems-test@main
         if: success()
         with:
-          flaggems-path: '${{ env.FLAGGEMS_CI_DIR }}/FlagGems'
+          flaggems-path: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
           gpus: '${{ steps.setup.outputs.gpus }}'
           output-base-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline'
           output-subdir: '${{ steps.set-commit.outputs.date }}_${{ steps.set-commit.outputs.commit_id }}'
@@ -154,7 +150,6 @@ jobs:
           skip-file: 'tools/ci/skip_list.yaml'
           first-parameter-only: 'true'
 
-      # Step 9: Check if best baseline exists
       - name: Check Best Baseline Exists
         id: check-best
         shell: bash
@@ -169,24 +164,22 @@ jobs:
             echo "ℹ️ No best baseline found, this will be the first"
           fi
 
-      # Step 10: Compare with best baseline
       - name: Compare with Best Baseline
         id: compare-with-best
         uses: ./.github/actions/compare-flaggems-test
-        if: success() && steps.check-best.outputs.best_exists == 'true'
+        if: ${{ success() && steps.check-best.outputs.best_exists == 'true' }}
         continue-on-error: true
         with:
           baseline-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline/best'
           candidate-dir: '${{ steps.run-flaggems-test.outputs.test-output-dir }}'
           compare-script: 'tools/ci/compare_test_result.py'
-          working-directory: '${{ env.FLAGGEMS_CI_DIR }}/FlagGems'
+          working-directory: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
           fail-on-missing-baseline: 'false'
 
-      # Step 11: Update best directory
       - name: Update Best Baseline
         id: update-best
         shell: bash
-        if: success() && (steps.check-best.outputs.best_exists == 'false' || steps.compare-with-best.outputs.compare-exit-code == '0')
+        if: ${{ success() && (steps.check-best.outputs.best_exists == 'false' || steps.compare-with-best.outputs.compare-exit-code == '0') }}
         run: |
           DATE="${{ steps.set-commit.outputs.date }}"
           COMMIT_ID="${{ steps.set-commit.outputs.commit_id }}"
@@ -221,7 +214,19 @@ jobs:
             exit 1
           fi
 
-      # Step 12: Handle failure
+      - name: Cleanup FlagGems Repo
+        id: cleanup-flaggems-repo
+        shell: bash
+        if: always()
+        run: |
+          if [[ -d "${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}" ]]; then
+            echo "🧹 Cleaning up FlagGems repo: ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}"
+            rm -rf "${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}"
+            echo "✅ FlagGems repo cleaned up"
+          else
+            echo "ℹ️ FlagGems repo directory not found, skipping cleanup"
+          fi
+
       - name: Handle Failure
         id: handle-failure
         if: failure()
@@ -244,7 +249,9 @@ jobs:
           echo "    - Clone FlagGems: ${{ steps.clone-flaggems.outcome }}"
           echo "    - Install FlagGems: ${{ steps.install-flaggems.outcome }}"
           echo "    - Run FlagGems Test: ${{ steps.run-flaggems-test.outcome }}"
+          echo "    - Compare with Best Baseline: ${{ steps.compare-with-best.outcome }}"
           echo "    - Update Best: ${{ steps.update-best.outcome }}"
+          echo "    - Cleanup FlagGems Repo: ${{ steps.cleanup-flaggems-repo.outcome }}"
           echo ""
           echo "Please investigate the failure and re-run if needed."
           exit 1
@@ -252,7 +259,7 @@ jobs:
   # Job 2: main job - run FlagGems test
   flaggems-test:
     runs-on: nvidia3.6
-    if: ${{ github.repository == 'flagos-ai/flagtree' && (github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)) }}
+    if: ${{ github.repository == 'flagos-ai/flagtree' && (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
     steps:
       - name: Setup Environment
         id: setup
@@ -265,7 +272,13 @@ jobs:
           echo "GPU devices: $GPU_DEVICES"
           echo "FlagGems tag: $FLAGGEMS_TAG"
 
+          FLAGGEMS_REPO_DIR="${FLAGGEMS_CI_DIR}/FlagGems/test_${GITHUB_RUN_ID}"
+          echo "FLAGGEMS_REPO_DIR=$FLAGGEMS_REPO_DIR" >> $GITHUB_OUTPUT
+          echo "FLAGGEMS_REPO_DIR=$FLAGGEMS_REPO_DIR" >> $GITHUB_ENV
+          echo "✅ FlagGems repo: $FLAGGEMS_REPO_DIR"
+
       - name: Smart Checkout
+        id: smart-checkout-flagtree
         uses: flagos-ai/FlagTree/.github/actions/smart-checkout@main
         with:
           checkout_version: 'v6'
@@ -273,39 +286,44 @@ jobs:
       - name: Check if backend-relevant files changed
         id: check_backend
         uses: flagos-ai/FlagTree/.github/actions/check-backend-changed@main
+        if: success()
         with:
           backend: nvidia
 
-      - name: Clone FlagGems Repo
-        if: ${{ steps.check_backend.outputs.should_skip != 'true' }}
-        uses: flagos-ai/FlagTree/.github/actions/git-clone-retry@main
-        with:
-          repo-url: 'https://github.com/flagos-ai/FlagGems.git'
-          ref: ${{ env.FLAGGEMS_TAG }}
-          clone-dir: ${{ env.FLAGGEMS_CI_DIR }}
-
-      - name: Install FlagGems
-        if: ${{ steps.check_backend.outputs.should_skip != 'true' }}
-        shell: bash
-        run: |
-          cd ${{ env.FLAGGEMS_CI_DIR }}/FlagGems
-          python3 -m pip uninstall -y flag_gems --break-system-packages || true
-          pip install -v -e . --no-build-isolation --no-deps
-
       - name: Cleanup FlagTree Environment
-        if: ${{ steps.check_backend.outputs.should_skip != 'true' }}
+        id: cleanup-flagtree-env
+        if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
         uses: flagos-ai/FlagTree/.github/actions/cleanup-flagtree-env@main
 
-      - name: Build FlagTree
-        if: ${{ steps.check_backend.outputs.should_skip != 'true' }}
+      - name: Install FlagTree
+        id: install-flagtree
+        if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
         shell: bash
         run: |
           set -x
           source ~/env-3.6.sh
           MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
 
+      - name: Clone FlagGems Repo
+        id: clone-flaggems
+        if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
+        uses: flagos-ai/FlagTree/.github/actions/git-clone-retry@main
+        with:
+          repo-url: 'https://github.com/flagos-ai/FlagGems.git'
+          ref: ${{ env.FLAGGEMS_TAG }}
+          clone-dir: ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}
+
+      - name: Install FlagGems
+        id: install-flaggems
+        if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
+        shell: bash
+        run: |
+          cd ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems
+          python3 -m pip uninstall -y flag_gems --break-system-packages || true
+          pip install -v -e . --no-build-isolation --no-deps
+
       - name: Clear cache if ClearCache label present
-        if: steps.check_backend.outputs.should_skip != 'true'
+        if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
         id: clear_cache
         uses: flagos-ai/FlagTree/.github/actions/clear-cache-if-labeled@main
         with:
@@ -313,11 +331,11 @@ jobs:
           backend: nvidia
 
       - name: Run FlagGems Test
-        if: ${{ steps.check_backend.outputs.should_skip != 'true' && github.event_name == 'pull_request' }}
+        if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' && github.event_name == 'pull_request' }}
         uses: flagos-ai/FlagTree/.github/actions/run-flaggems-test@main
         id: run-flaggems-test
         with:
-          flaggems-path: '${{ env.FLAGGEMS_CI_DIR }}/FlagGems'
+          flaggems-path: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
           gpus: '${{ steps.setup.outputs.gpus }}'
           output-base-dir: '${{ env.FLAGGEMS_CI_DIR }}/PR'
           pr-number: '${{ github.event.pull_request.number }}'
@@ -325,12 +343,53 @@ jobs:
           skip-file: 'tools/ci/skip_list.yaml'
           first-parameter-only: 'true'
 
-      - name: Compare with Best Baseline
-        if: ${{ steps.check_backend.outputs.should_skip != 'true' && github.event_name == 'pull_request' }}
+      - name: Compare with Baseline
+        id: compare-baseline
+        if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' && github.event_name == 'pull_request' }}
         uses: ./.github/actions/compare-flaggems-test
         with:
           baseline-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline/best'
           candidate-dir: '${{ steps.run-flaggems-test.outputs.test-output-dir }}'
           compare-script: 'tools/ci/compare_test_result.py'
-          working-directory: '${{ env.FLAGGEMS_CI_DIR }}/FlagGems'
+          working-directory: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
           fail-on-missing-baseline: 'true'
+
+      - name: Cleanup FlagGems Repo
+        id: cleanup-flaggems-repo
+        shell: bash
+        if: always()
+        run: |
+          if [[ -d "${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}" ]]; then
+            echo "🧹 Cleaning up FlagGems repo: ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}"
+            rm -rf "${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}"
+            echo "✅ FlagGems repo cleaned up"
+          else
+            echo "ℹ️ FlagGems repo directory not found, skipping cleanup"
+          fi
+
+      - name: Handle Failure
+        id: handle-failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "❌❌❌ FlagGems test failed ❌❌❌"
+          echo "Job: ${{ github.job }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref }}"
+          echo ""
+          echo "Failed step details:"
+          echo "  - Check the logs above for the exact failure"
+          echo "  - Check the following steps were executed:"
+          echo "    - Setup Environment: ${{ steps.setup.outcome }}"
+          echo "    - Smart Checkout: ${{ steps.smart-checkout-flagtree.outcome }}"
+          echo "    - Cleanup Environment: ${{ steps.cleanup-flagtree-env.outcome }}"
+          echo "    - Install FlagTree: ${{ steps.install-flagtree.outcome }}"
+          echo "    - Clone FlagGems: ${{ steps.clone-flaggems.outcome }}"
+          echo "    - Install FlagGems: ${{ steps.install-flaggems.outcome }}"
+          echo "    - Run FlagGems Test: ${{ steps.run-flaggems-test.outcome }}"
+          echo "    - Compare With Baseline: ${{ steps.compare-baseline.outcome }}"
+          echo "    - Cleanup FlagGems Repo: ${{ steps.cleanup-flaggems-repo.outcome }}"
+          echo ""
+          echo "Please investigate the failure and re-run if needed."
+          exit 1
