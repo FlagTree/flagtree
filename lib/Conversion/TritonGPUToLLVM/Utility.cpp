@@ -261,6 +261,7 @@ Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x) {
 }
 
 } // namespace triton::gpu
+
 #ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 namespace {
 

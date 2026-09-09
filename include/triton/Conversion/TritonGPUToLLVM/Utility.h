@@ -350,6 +350,7 @@ namespace mlir {
 constexpr int kProfileScratchBufferOffset = -1;
 constexpr int kGlobalScratchBufferOffset = -2;
 constexpr int kSharedMemoryOffset = -3;
+
 #ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // A route from destination hardware locations to equivalent source locations
 // in the same block and warp. Register broadcasting is removed from the
