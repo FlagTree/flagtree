@@ -13,6 +13,8 @@ from .registry import (
     sort_1d_pack,
     merge_exhaust_sort4,
     unpack_sort,
+    compare_scalar,
+    gather_mask,
 )
 
 __all__ = [
@@ -24,4 +26,6 @@ __all__ = [
     "sort_1d_pack",
     "merge_exhaust_sort4",
     "unpack_sort",
+    "compare_scalar",
+    "gather_mask",
 ]

@@ -13,6 +13,10 @@ custom_ops/
 ├── mem_ops/
 │   ├── gather_gm_to_l1.cpp         # GM → L1/CBUF 按索引行 gather
 │   └── gather_gm_to_ub.cpp         # GM → UB 按索引行 gather
+├── mask_ops/
+│   ├── compare_scalar.cpp         # FP32 标量相等比较 → uint16 位掩码
+│   ├── gather_mask.cpp            # 按位掩码稳定压紧，并返回数量
+│   └── mask_common.h              # UB memref → AscendC LocalTensor
 └── sort_ops/
     ├── sort_1d_pack.cpp            # sort_1d_pack ABI 与路径分发
     ├── sort_common.h                # 共享 vmrgsort4 / proposal inline 工具
@@ -225,3 +229,38 @@ FLAGTREE_BACKEND=ascend MAX_JOBS=32 \
 cd /root/xcs_flagtree/python/triton/experimental/tle/language/dsa/ascend/custom_ops
 ./build_custom_ops.sh
 ```
+
+
+## compare_scalar / gather_mask
+
+这两个 VECTOR / PIPE_V 原语封装 AscendC 的 CompareScalar 和 GatherMask，
+不读取 GM，也不包含专家循环、路由偏移或写回逻辑。
+
+- `compare_scalar(src, scalar, out=mask)`：仅支持 FP32 相等比较（EQ）。
+  `src` 是 UB 中的一维 FP32[N]，`scalar` 为 FP32 标量；`mask` 是一维
+  uint16[N/16]。第 i 个 word 的第 j 位表示 `src[16*i+j] == scalar`，低位在前。
+- `gather_mask(src, mask, out=[selected, count])`：`src` 为一维 FP32[N]，
+  `mask` 与上述位序一致；`selected` 为一维 FP32[N]，`count` 为 int32[8]。
+  保持被选元素的原始顺序；八个 count 元素都保存有效数量，通常读取 count[0]。
+  仅 selected 的有效前缀有定义，尾部内容不保证。全零/全一掩码返回 0/N。
+- 初始支持 N=256、512、1024、2048、4096；掩码至少占一个 32 字节 UB block。
+  输入和输出均需连续、互不重叠。其他 dtype、rank、长度在注册接口中拒绝。
+- GatherMask 的硬件数量寄存器在该原语内部读取，不单独暴露依赖硬件状态的
+  `get_rsvd_cnt()` 接口。调用者负责处理尾部无效元素；例如非负专家 ID 可用 -1 填充。
+
+```python
+values = tl.load(Src + tl.arange(0, N))
+mask = tl.full((N // 16,), 0, tl.uint16)
+mask = tle.dsa.ascend.raw("compare_scalar", values, scalar, out=mask)
+selected = tl.full((N,), 0, tl.float32)
+count = tl.full((8,), 0, tl.int32)
+selected, count = tle.dsa.ascend.raw("gather_mask", values, mask,
+                                      out=[selected, count])
+found = tl.sum(tl.where(tl.arange(0, 8) == 0, count, 0), 0)
+tl.store(Out + tl.arange(0, N), selected, tl.arange(0, N) < found)
+```
+
+两个源文件均生成普通和 mix bitcode，并链接到统一 `custom_ops.bc`。
+构建时使用 CANN 的 AscendC 头文件，非标准安装可通过 CMake
+`-DASCENDC_INCLUDE_DIR=...` 或手动脚本的同名环境变量指定 `tikcfw` 目录。
+正确性测试：`python3 python/tutorials/tle/custom/test_mask_ops.py`。

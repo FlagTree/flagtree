@@ -430,12 +430,15 @@ def test_unpack_sort():
 
 
 def main():
+    from test_mask_ops import main as test_mask_ops
+
     for torch_dtype, tol in ((torch.float16, 1e-3), (torch.bfloat16, 1e-2)):
         test_gather_gm_to_l1(torch_dtype, tol)
         test_gather_gm_to_ub(torch_dtype)
     test_sort_1d_pack()
     test_merge_exhaust_sort4()
     test_unpack_sort()
+    test_mask_ops()
     print("\nAll custom op correctness tests passed.")
 
 
