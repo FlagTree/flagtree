@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-name: Ppu3.6-Core-Build-And-Test
+name: Tsingmicro3.6-Build-And-Test
 
 on:
   push:
@@ -36,8 +36,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ppu36x-core-test:
-    runs-on: ppu3.6
+  tsingmicro36x-unit-test:
+    runs-on: tsingmicro3.6
     if: ${{ github.repository == 'flagos-ai/flagtree' && github.event.pull_request.draft == false }}
     steps:
       - name: Setup environment
@@ -55,7 +55,7 @@ jobs:
         id: check_backend
         uses: flagos-ai/FlagTree/.github/actions/check-backend-changed@main
         with:
-          backend: ppu
+          backend: tsingmicro
 
       - name: Cleanup FlagTree Environment
         if: steps.check_backend.outputs.should_skip != 'true'
@@ -66,8 +66,15 @@ jobs:
         shell: bash
         run: |
           set -x
-          export FLAGTREE_BACKEND=ppu
-          MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
+          export FLAGTREE_BACKEND=tsingmicro
+          export TRITON_APPEND_CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
+          export TX8_DEPS_ROOT=~/.flagtree/tsingmicro/tx8_deps
+          export LLVM_SYSPATH=~/.flagtree/tsingmicro/tsingmicro-llvm22
+          export LLVM_BINARY_DIR=${LLVM_SYSPATH}/bin
+          export PYTHONPATH=${LLVM_SYSPATH}/python_packages/mlir_core:$PYTHONPATH
+          export LD_LIBRARY_PATH=$TX8_DEPS_ROOT/lib:$LD_LIBRARY_PATH
+          export PATH=${LLVM_BINARY_DIR}:${PATH}
+          python3 -m pip install . --no-build-isolation -v
 
       - name: Clear cache if ClearCache label present
         if: steps.check_backend.outputs.should_skip != 'true'
@@ -75,12 +82,34 @@ jobs:
         uses: flagos-ai/FlagTree/.github/actions/clear-cache-if-labeled@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          backend: ppu
+          backend: tsingmicro
 
-      - name: Unit Language Core Test
+      - name: Unit Test
         if: steps.check_backend.outputs.should_skip != 'true'
         shell: bash
         run: |
           set -x
           source ~/env.sh
-          python3 -m pytest third_party/ppu/python/test/unit/language/test_core.py
+          export TX8_DEPS_ROOT=~/.flagtree/tsingmicro/tx8_deps
+          export LLVM_SYSPATH=~/.flagtree/tsingmicro/tsingmicro-llvm22
+          export LLVM_BINARY_DIR=${LLVM_SYSPATH}/bin
+          export PYTHONPATH=${LLVM_SYSPATH}/python_packages/mlir_core:$PYTHONPATH
+          export LD_LIBRARY_PATH=$TX8_DEPS_ROOT/lib:$LD_LIBRARY_PATH
+
+          ## examples
+          pushd third_party/tsingmicro/examples
+          python3 bare_matmul_autotune.py
+          python3 embedding.py
+          python3 mult_ir.py
+          python3 profile_matmul.py
+          python3 quant_gptq.py
+          python3 test_cos.py
+          python3 test_embedding.py
+          #python3 test_flip.py
+          python3 test_layernorm.py
+          python3 test_matmul.py
+          python3 test_print.py
+          python3 test_softmax.py
+          python3 test_vec_add.py
+          python3 time1.py
+          popd

@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-name: CD-Ppu3.6
+name: CD-Tsingmicro3.6
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ on:
         default: '0.7.0'
       PYTHON_VER:
         required: true
-        default: '3.12'
+        default: '3.10'
       PLATFORM:
         required: true
         default: 'x86_64'
@@ -44,7 +44,7 @@ on:
         default: '3.6'
       BACKEND:
         required: true
-        default: 'ppu'
+        default: 'tsingmicro'
       FLAGTREE_PYPI_KEY:
         required: false
   workflow_call:
@@ -56,7 +56,7 @@ on:
       PYTHON_VER:
         type: string
         required: true
-        default: '3.12'
+        default: '3.10'
       PLATFORM:
         type: string
         required: true
@@ -72,7 +72,7 @@ on:
       BACKEND:
         type: string
         required: true
-        default: 'ppu'
+        default: 'tsingmicro'
       FLAGTREE_PYPI_KEY:
         type: string
         required: false
@@ -83,7 +83,7 @@ concurrency:
 
 jobs:
   delivery:
-    runs-on: ppu3.6-cd
+    runs-on: tsingmicro3.6-cd
     if: ${{ github.repository == 'FlagTree/flagtree' || github.repository == 'flagos-ai/flagtree' }}
     steps:
       - name: Check branch
@@ -129,6 +129,13 @@ jobs:
             echo "✅ flagtree===${FLAGTREE_WHEEL_VERSION} does not exist, proceed to build"
           fi
           source ~/env.sh
+
+          export TX8_DEPS_ROOT=~/.flagtree/tsingmicro/tx8_deps  # tsingmicro3.6
+          export LLVM_SYSPATH=~/.flagtree/tsingmicro/tsingmicro-llvm22
+          export LLVM_BINARY_DIR=${LLVM_SYSPATH}/bin
+          export PYTHONPATH=${LLVM_SYSPATH}/python_packages/mlir_core:$PYTHONPATH
+          export LD_LIBRARY_PATH=$TX8_DEPS_ROOT/lib:$LD_LIBRARY_PATH
+          export PATH=${LLVM_BINARY_DIR}:${PATH}
 
           rm -rf ./build ./*.egg-info
           { export FLAGTREE_PYPI_KEY=${{ inputs.FLAGTREE_PYPI_KEY }}; } 2>/dev/null

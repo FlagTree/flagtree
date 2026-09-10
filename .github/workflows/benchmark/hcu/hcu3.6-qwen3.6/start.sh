@@ -41,20 +41,19 @@ if [[ -f "$PID_FILE" ]]; then
         fi
     fi
 fi
-bash "${SCRIPT_DIR}/clear_fuser_process.sh"
+bash "${SCRIPT_DIR}/clear_vllm_process.sh"
 
 start=$(date +%s)
 
 export VLLM_PLUGINS=fl
+export VLLM_CONFIGURE_LOGGING=1
 
 nohup vllm serve ./Qwen3.6-27B/  \
     --tensor-parallel-size 2 \
     --port "${VLLM_QWEN3_PORT}" \
     --served-model-name qwen36 \
-    --max-model-len 32768 \
-    --trust-remote-code \
-    --limit-mm-per-prompt '{"image": 1}' \
     --gpu-memory-utilization 0.8 \
+    --trust-remote-code \
     --dtype bfloat16 2>&1 >vllm.log &
 echo "$!" >pid.txt
 
