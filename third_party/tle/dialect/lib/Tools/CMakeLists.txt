@@ -1,12 +1,15 @@
-add_triton_library(TleTools FlagcxUtils.cpp
+add_triton_library(TleTools
+  FlagcxUtils.cpp
 
   DEPENDS
   TleTableGen
+  TritonTableGen
   TritonGPUTableGen
   TritonGPUAttrDefsIncGen
-  ${TLE_TRITON_GPU_ATTR_DEPENDS}
   TritonGPUTypeInterfacesIncGen
+  TritonGPUCTAAttrIncGen
   TritonGPUOpInterfacesIncGen
+  ${TLE_TRITON_GPU_ATTR_DEPENDS}
 
   LINK_LIBS PUBLIC
   TritonIR
