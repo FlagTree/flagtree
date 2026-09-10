@@ -131,15 +131,6 @@ jobs:
           ref: ${{ env.FLAGGEMS_TAG }}
           clone-dir: ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}
 
-      - name: Install FlagGems
-        id: install-flaggems
-        shell: bash
-        if: success()
-        run: |
-          cd ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems
-          python3 -m pip uninstall -y flag_gems --break-system-packages || true
-          pip install -v -e . --no-build-isolation --no-deps
-
       - name: Run FlagGems Test for Baseline
         id: run-flaggems-test
         uses: flagos-ai/FlagTree/.github/actions/run-flaggems-test@main
@@ -236,35 +227,6 @@ jobs:
             echo "ℹ️ FlagGems repo directory not found, skipping cleanup"
           fi
 
-      - name: Handle Failure
-        id: handle-failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "❌❌❌ Baseline generation failed ❌❌❌"
-          echo "Job: ${{ github.job }}"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Branch: ${{ github.ref }}"
-          echo ""
-          echo "Failed step details:"
-          echo "  - Check the logs above for the exact failure"
-          echo "  - Check the following steps were executed:"
-          echo "    - Setup Environment: ${{ steps.setup.outcome }}"
-          echo "    - Set Commit ID: ${{ steps.set-commit.outcome }}"
-          echo "    - Smart Checkout: ${{ steps.smart-checkout-flagtree.outcome }}"
-          echo "    - Cleanup Environment: ${{ steps.cleanup-flagtree-env.outcome }}"
-          echo "    - Install FlagTree: ${{ steps.install-flagtree.outcome }}"
-          echo "    - Clone FlagGems: ${{ steps.clone-flaggems.outcome }}"
-          echo "    - Install FlagGems: ${{ steps.install-flaggems.outcome }}"
-          echo "    - Run FlagGems Test: ${{ steps.run-flaggems-test.outcome }}"
-          echo "    - Compare with Best Baseline: ${{ steps.compare-with-best.outcome }}"
-          echo "    - Update Best: ${{ steps.update-best.outcome }}"
-          echo "    - Cleanup FlagGems Repo: ${{ steps.cleanup-flaggems-repo.outcome }}"
-          echo ""
-          echo "Please investigate the failure and re-run if needed."
-          exit 1
-
   # Job 2: main job - run FlagGems test
   flaggems-test:
     runs-on: nvidia3.6
@@ -322,15 +284,6 @@ jobs:
           ref: ${{ env.FLAGGEMS_TAG }}
           clone-dir: ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}
 
-      - name: Install FlagGems
-        id: install-flaggems
-        if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
-        shell: bash
-        run: |
-          cd ${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems
-          python3 -m pip uninstall -y flag_gems --break-system-packages || true
-          pip install -v -e . --no-build-isolation --no-deps
-
       - name: Clear cache if ClearCache label present
         if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
         id: clear_cache
@@ -375,30 +328,3 @@ jobs:
           else
             echo "ℹ️ FlagGems repo directory not found, skipping cleanup"
           fi
-
-      - name: Handle Failure
-        id: handle-failure
-        if: failure()
-        shell: bash
-        run: |
-          echo "❌❌❌ FlagGems test failed ❌❌❌"
-          echo "Job: ${{ github.job }}"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Branch: ${{ github.ref }}"
-          echo ""
-          echo "Failed step details:"
-          echo "  - Check the logs above for the exact failure"
-          echo "  - Check the following steps were executed:"
-          echo "    - Setup Environment: ${{ steps.setup.outcome }}"
-          echo "    - Smart Checkout: ${{ steps.smart-checkout-flagtree.outcome }}"
-          echo "    - Cleanup Environment: ${{ steps.cleanup-flagtree-env.outcome }}"
-          echo "    - Install FlagTree: ${{ steps.install-flagtree.outcome }}"
-          echo "    - Clone FlagGems: ${{ steps.clone-flaggems.outcome }}"
-          echo "    - Install FlagGems: ${{ steps.install-flaggems.outcome }}"
-          echo "    - Run FlagGems Test: ${{ steps.run-flaggems-test.outcome }}"
-          echo "    - Compare With Baseline: ${{ steps.compare-baseline.outcome }}"
-          echo "    - Cleanup FlagGems Repo: ${{ steps.cleanup-flaggems-repo.outcome }}"
-          echo ""
-          echo "Please investigate the failure and re-run if needed."
-          exit 1
