@@ -857,7 +857,7 @@ download_flagtree_third_party("flir", condition=(flagtree_backend == "tsingmicro
 
 download_flagtree_third_party("flagcx", condition=(not flagtree_backend), hook="handle_flagcx", required=True)
 
-download_flagtree_third_party("tileir", condition=(flagtree_backend == "tileir"), required=True)
+download_flagtree_third_party("cuda-tile", condition=(flagtree_backend == "tileir"), required=True)
 
 handle_flagtree_backend()
 
