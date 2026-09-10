@@ -20,9 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-
-source ~/env.sh
-source "${SCRIPT_DIR}/disable_local_proxy.sh"
-
-curl "http://127.0.0.1:${VLLM_QWEN3_PORT}/v1/models"
+rm -r ~/.triton/cache
+rm -r ~/.flaggems
+rm -r /tmp/torchinductor_root
