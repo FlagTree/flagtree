@@ -35,6 +35,13 @@ namespace mlir::triton {
 bool squareSublayoutIsIdentity(const LinearLayout &ll,
                                ArrayRef<StringAttr> dimNames);
 
+// Backport from Triton main: triton/pull/11646.
+// Compute B.invertAndCompose(A), mapping bits broadcast by A in localDims to
+// the corresponding input bits without changing the composition.
+[[nodiscard]] LinearLayout
+invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
+                      ArrayRef<StringAttr> localDims);
+
 // Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
 // Output bits affected by the specified input dimensions.
 uint32_t getOutputBasisMask(const LinearLayout &layout,

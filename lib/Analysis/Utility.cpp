@@ -273,14 +273,21 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   return elementSizeInBytes * getScratchSizeInElems();
 }
 
-static SmallVector<DecomposedWarpConversion::TranspositionInfo>
-getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
-                          std::vector<std::vector<int32_t>> &regBases,
-                          int bitwidth);
+// Backport from Triton main: triton/pull/11646.
+static void computeTranspositionSelectors(
+    SmallVector<DecomposedWarpConversion::TranspositionInfo>
+        &mixedTranspositions,
+    std::vector<std::vector<int32_t>> &regBases, int nPack);
 
+// Triton main: triton/pull/11646.
+// FlagTree adaptation for triton/pull/11646.
+// Keep the tensor-type API and strip broadcast registers here.
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                                   RankedTensorType dstTy, int bitwidth) {
+  auto kRegister = StringAttr::get(srcTy.getContext(), "register");
+  auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+  auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
   // Two layouts, ll_src and ll_dst, representing the same tensor can be
   // viewed as surjections of GF(2) vector spaces:
   //
@@ -290,7 +297,8 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // matrix with zero columns possibly inserted. A layout conversion can be
   // viewed as a map P': H_src -> H_dst which factors ll_src = ll_dst \circ P'.
   //
-  // For a conversion not needing data movement between different warps, we
+  // Triton main: triton/pull/11646.
+  // For permutation cases not needing data movement between different warps, we
   // choose the following representation, where P is a permutation matrix and
   // K_1 and K_2 are (possibly trivial) spaces meant to ensure equally sized
   // lane and register dimensions between layouts:
@@ -309,31 +317,32 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // subsequences of consecutive lane bits from cycles involving both bit types.
   // Further explanation of this method is below.
   //
-  // The decomposition is performed in three stages. First, we compute the
+  // For permutations, the decomposition has three stages. First, we compute the
   // permutation matrix `P` by using `invertAndCompose` to generate a skeleton
   // and then fill in any zero columns. Second, we walk the cycles of `P` to
   // factor out mixed transpositions to build `mixedTranspositions`, `pReg`, and
   // `pLane`. Finally, we determine any selectors needed for byte permute
   // instructions in place of `selp` instructions when packing registers.
 
-  // We remove any broadcasting in the register dimensions of the layouts before
-  // forming the permutation `P` as the components of the decomposition directly
-  // inform the number of emitted instructions, and leaving broadcasting in
-  // would unnecessarily inflate the count.
-  auto srcLayout = toLinearLayout(srcTy);
-  auto dstLayout = toLinearLayout(dstTy);
-  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-  auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-  srcLayout = removeBroadcastSrc.apply(srcLayout);
-  dstLayout = removeBroadcastDst.apply(dstLayout);
+  // Triton main: triton/pull/11646.
+  assert(actionRemoveBroadcastedRegs(srcLayout).isIdentity() &&
+         actionRemoveBroadcastedRegs(dstLayout).isIdentity() &&
+         "expected layouts without broadcasted registers");
 
   // We want to describe the conversion from `srcLayout` to `dstLayout` as a
   // permutation. Since this requires that each input dimension have the same
   // size in each of the layouts, we first pad the lane and register dimensions
   // with zero vectors if needed.
-  auto *ctx = srcTy.getContext();
+  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   StringAttr kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  // Triton main: triton/pull/11646.
+  // Preserve the full map when extracting warp/CTA-owned source lanes.
+  auto conversion = dstLayout.invertAndCompose(srcLayout);
+  uint32_t ownerLaneMask =
+      getOutputBasisMask(conversion, {kWarp, kBlock}, kLane);
 
   // Determine the target sizes of the register and lane dimensions for padding.
   int nSrcRegBases = srcLayout.getInDimSizeLog2(kReg);
@@ -347,6 +356,8 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   auto outDimNames = llvm::to_vector(srcLayout.getOutDimNames());
   auto S = srcLayout.sublayout(inDimNames, outDimNames);
   auto T = dstLayout.sublayout(inDimNames, outDimNames);
+  // FlagTree adaptation for triton/pull/11646.
+  // resizeInDim only supports shrinking; pad explicitly.
   // Conditionally pad.
   if (nSrcRegBases != nDstRegBases || nSrcLaneBases != nDstLaneBases) {
     auto padWithZeros = [&](const LinearLayout &ll) {
@@ -366,6 +377,17 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     };
     S = padWithZeros(S);
     T = padWithZeros(T);
+  }
+
+  // Triton main: triton/pull/11646.
+  // Project out source lane bits selected by warp/CTA coordinates.
+  if (ownerLaneMask) {
+    auto bases = S.getBases();
+    for (auto [bit, basis] : llvm::enumerate(bases[kLane]))
+      if (ownerLaneMask & (uint32_t{1} << bit))
+        std::fill(basis.begin(), basis.end(), 0);
+    S = LinearLayout(std::move(bases), S.getOutDims(),
+                     /*requireSurjective=*/false);
   }
 
   // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
@@ -399,16 +421,18 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     pBases[inDim][srcIdx][dstDimIdx] = 1 << dstIdx;
   }
 
-  // We walk the cycles of `P` to build the bases for `pReg` and `pLane` while
-  // factoring out mixed transpositions from cycles that include both register
-  // and lane basis vectors. `pReg` and `pLane` themselves only have one input
-  // and output dimension each.
-  LinearLayout::BasesT pRegBases, pLaneBases;
+  // Triton main: triton/pull/11646.
+  // Walk the cycles of `P`, building the register permutation and inverse
+  // lane map while factoring out mixed register/lane transpositions.
+  LinearLayout::BasesT pRegBases;
+  auto shuffleBases =
+      conversion.sublayout({kReg, kLane, kWarp, kBlock}, kLane).getBases();
   auto &regBases = pRegBases[kReg];
-  auto &laneBases = pLaneBases[kLane];
+  auto &laneBases = shuffleBases[kLane];
   regBases.resize(nRegBases, {0});
-  laneBases.resize(nLaneBases, {0});
-  SmallVector<std::pair<int, int>> mixedTranspositions;
+  shuffleBases[kReg].assign(nRegBases, {0});
+  laneBases.assign(nLaneBases, {0});
+  SmallVector<DecomposedWarpConversion::TranspositionInfo> mixedTranspositions;
 
   llvm::BitVector visited(nRegBases + nLaneBases, false);
   auto flatIdx = [&](StringAttr dim, int32_t index) {
@@ -437,12 +461,10 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
       // indicates a contiguous subsequence of lane basis vectors. Note that the
       // transposition does not commute with the other two cycles.
       //
-      // The following variables are used to track the start and end points of
-      // such subsequences.
+      // Track the start of each lane subsequence.
+      // Triton main: triton/pull/11646.
       int32_t /*r_m*/ regStartIdx = -1;
       int32_t /*l_j*/ laneStartIdx = -1;
-      int32_t /*l_k*/ laneEndIdx = -1;
-      int32_t /*r_i*/ regEndIdx = -1;
 
       do {
         // Determine the next basis vector in the current cycle.
@@ -456,29 +478,28 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
             nextIdx = llvm::Log2_32(nextVal);
           }
         }
-        // Set a `pReg` or `pLane` vector, or mark an r->l or l->r transition.
+        // Triton main: triton/pull/11646.
+        // Record a register edge, an inverse lane edge, or a mixed transition.
         if (currDim == kReg && nextDim == kReg) {
           regBases[currIdx][0] = 1 << nextIdx;
         } else if (currDim == kLane && nextDim == kLane) {
-          laneBases[currIdx][0] = 1 << nextIdx;
+          laneBases[nextIdx][0] = (1u << currIdx) & ~ownerLaneMask;
         } else if (currDim == kReg && nextDim == kLane) {
           regStartIdx = currIdx;
           laneStartIdx = nextIdx;
         } else {
-          regEndIdx = nextIdx;
-          laneEndIdx = currIdx;
-        }
-        // If a subsequence of the form (.. r_m l_j .. l_k r_i ..) has been
-        // found, perform the prescribed factorization.
-        if (regEndIdx >= 0) {
+          // Factor (.. r_m l_j .. l_k r_i ..) at this l_k -> r_i edge.
           // Assign r_m to map to r_i as in (.. r_m r_i ..).
-          regBases[regStartIdx][0] = 1 << regEndIdx;
-          // Assign l_k to map to l_j as in (l_j .. l_k).
-          laneBases[laneEndIdx][0] = 1 << laneStartIdx;
-          // Record (r_i l_j) as a factor.
-          mixedTranspositions.emplace_back(regEndIdx, laneStartIdx);
-          // Reset the auxiliary variables.
-          regStartIdx = laneStartIdx = laneEndIdx = regEndIdx = -1;
+          regBases[regStartIdx][0] = 1 << nextIdx;
+          // Triton main: triton/pull/11646.
+          // Padded endpoints need no lane predicate when warp/CTA selects
+          // source lanes. Omit their artificial closing edge as well.
+          int srcLane = ownerLaneMask && nextIdx >= nDstRegBases ? -1 : currIdx;
+          int dstLane =
+              ownerLaneMask && regStartIdx >= nSrcRegBases ? -1 : laneStartIdx;
+          if (srcLane >= 0 && dstLane >= 0)
+            laneBases[dstLane][0] = 1 << srcLane;
+          mixedTranspositions.push_back({nextIdx, srcLane, dstLane});
         }
 
         currDim = nextDim;
@@ -488,37 +509,39 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   }
   assert(visited.all() && "Cycle walk incomplete");
 
+  // Triton main: triton/pull/11646.
   // Determine degree of packing and selectors.
   int m = mixedTranspositions.size();
   int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
   int nPack = std::min(nPackPrelim, nRegBases - m);
-  auto processedTranspos =
-      getTranspositionSelectors(mixedTranspositions, regBases, nPack);
+  computeTranspositionSelectors(mixedTranspositions, regBases, nPack);
 
   auto pReg = LinearLayout(std::move(pRegBases), {{kReg, 1 << nRegBases}},
                            /*requireSurjective=*/true);
-  auto pLane = LinearLayout(std::move(pLaneBases), {{kLane, 1 << nLaneBases}},
-                            /*requireSurjective=*/true);
-  return {std::move(pReg), std::move(pLane), std::move(processedTranspos),
-          nPack};
+  // Triton main: triton/pull/11646.
+  // Add register-selected lane bits without losing warp/CTA inputs.
+  for (const auto &t : mixedTranspositions)
+    if (t.srcLane >= 0)
+      shuffleBases[kReg][t.regBit][0] ^= 1u << t.srcLane;
+  auto shuffleMap =
+      LinearLayout(std::move(shuffleBases), {{kLane, 1 << nLaneBases}},
+                   /*requireSurjective=*/false);
+  return {std::move(pReg), std::move(shuffleMap),
+          std::move(mixedTranspositions), nPack};
 }
 
-static SmallVector<DecomposedWarpConversion::TranspositionInfo>
-getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
-                          std::vector<std::vector<int32_t>> &regBases,
-                          int nPack) {
+// Triton main: triton/pull/11646.
+static void computeTranspositionSelectors(
+    SmallVector<DecomposedWarpConversion::TranspositionInfo>
+        &mixedTranspositions,
+    std::vector<std::vector<int32_t>> &regBases, int nPack) {
   // When possible, we fuse permutations of 'low' register bits together
   // with a mixed transposition, resulting in byte permute instructions instead
   // of `select` instructions. After processing, no low register bits appear in
-  // the returned list of mixed transpositions.
+  // the mixed transpositions.
 
-  SmallVector<DecomposedWarpConversion::TranspositionInfo> ret;
-  ret.reserve(mixedTranspositions.size());
-  if (nPack == 0) {
-    for (auto &t : mixedTranspositions)
-      ret.push_back(DecomposedWarpConversion::TranspositionInfo{t});
-    return ret;
-  }
+  if (nPack == 0)
+    return;
   // Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
   // This algorithm performs further algebraic processing.
   //
@@ -589,9 +612,10 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     return std::pair{topSel, botSel};
   };
 
+  // Triton main: triton/pull/11646.
   llvm::SmallSet<int32_t, 6> pairedRegBits;
-  for (auto [rBit, lBit] : mixedTranspositions)
-    pairedRegBits.insert(rBit);
+  for (const auto &t : mixedTranspositions)
+    pairedRegBits.insert(t.regBit);
 
   // Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
   // A low bit in a mixed transposition must be replaced by a high bit. The
@@ -600,8 +624,9 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
   // choice. We reorder the transpositions to guarantee this during processing.
   // This also guarantees the correct ordering for the lowering algorithm.
   auto next = [&](int b) { return llvm::Log2_32(regBases[b][0]); };
-  auto nextHighFree = [&](auto p) {
-    int curr = p.first;
+  // Triton main: triton/pull/11646.
+  auto nextHighFree = [&](const auto &t) {
+    int curr = t.regBit;
     do {
       if (curr >= nPack)
         return true;
@@ -643,9 +668,9 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     return potentialPartner;
   };
 
-  for (auto p : mixedTranspositions) {
-    int rBit = p.first;
-    int lBit = p.second;
+  // Triton main: triton/pull/11646.
+  for (auto &info : mixedTranspositions) {
+    int rBit = info.regBit;
     SmallVector<int> cycle;
     int currBit = rBit;
     do {
@@ -702,22 +727,20 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     auto [topPreSel, botPreSel] = generateSelectors(head, tail, preShufLoBits);
     regBases[tail][0] = 1 << head;
 
-    DecomposedWarpConversion::TranspositionInfo info;
-    info.transposition = {partnerBit, lBit};
+    // Triton main: triton/pull/11646.
+    info.regBit = partnerBit;
     info.topPreSel = topPreSel;
     info.botPreSel = botPreSel;
     info.topPostSel = topPostSel;
     info.botPostSel = botPostSel;
-
-    // Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
-    // Keep the partitioned selector order.
-    ret.push_back(info);
   }
   // Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
-  // Fold remaining low-bit permutations into pre-shuffle selectors.
-  if (nPack == 2 && regBases[0][0] == 2 && regBases[1][0] == 1 && ret.size()) {
+  // Triton main: triton/pull/11646.
+  // Update the first transposition in place after folding low bits.
+  if (nPack == 2 && regBases[0][0] == 2 && regBases[1][0] == 1 &&
+      !mixedTranspositions.empty()) {
     // If (r0 r1) remains in pReg, fold it into a mixed transposition.
-    auto &t = ret.front();
+    auto &t = mixedTranspositions.front();
     for (int lowBit : {0, 1, 0}) {
       t.topPreSel = permuteSelector(t.topPreSel, lowBit);
       t.botPreSel = permuteSelector(t.botPreSel, lowBit);
@@ -725,7 +748,8 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     regBases[0][0] = 1;
     regBases[1][0] = 2;
   }
-  return ret;
+  // Triton main: triton/pull/11646.
+  // Selectors are updated in place; no result vector is returned.
 }
 
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
@@ -1021,17 +1045,66 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
+// FlagTree adaptation for triton/pull/11646.
+// Backport the upstream permutation guard as a local helper.
+static bool hasPowerOfTwoBases(const LinearLayout &ll) {
+  LinearLayout flattened = ll.flattenIns().flattenOuts();
+  auto inDim = *flattened.getInDimNames().begin();
+  LinearLayout withoutBroadcast = flattened.removeZeroBasesAlongDim(inDim);
+  return llvm::all_of(
+      withoutBroadcast.getBases().lookup(inDim),
+      [](const auto &basis) { return llvm::isPowerOf2_32(basis.front()); });
+}
+
+// FlagTree adaptation for triton/pull/11646.
+// Use the upstream guard without adding a dialect-wide API.
+static bool isPermutationMatrixLayout(const LinearLayout &ll) {
+  if (!hasPowerOfTwoBases(ll))
+    return false;
+  LinearLayout flattened = ll.flattenIns().flattenOuts();
+  auto inDim = *flattened.getInDimNames().begin();
+  return flattened.removeZeroBasesAlongDim(inDim).isInvertible();
+}
+
+// FlagTree adaptation for triton/pull/11646.
+// Backport the upstream LinearLayout identity check locally.
+static bool isIdentityOnOutDim(const LinearLayout &layout, StringAttr dim) {
+  if (!layout.hasInDim(dim) || !layout.hasOutDim(dim))
+    return false;
+  SmallVector<StringAttr> otherInDims;
+  for (StringAttr inDim : layout.getInDimNames()) {
+    if (inDim != dim)
+      otherInDims.push_back(inDim);
+  }
+  return squareSublayoutIsIdentity(layout, {dim}) &&
+         layout.sublayoutIsZero(otherInDims, {dim});
+}
+
+// Triton main: triton/pull/11646.
+// FlagTree adaptation for triton/pull/11646.
+// Keep the tensor-type API and the existing mixed-transposition cost test.
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto layout = minimalCvtLayout(srcTy, dstTy);
+  if (cvtReordersRegisters(srcTy, dstTy))
+    return false;
   MLIRContext *ctx = srcTy.getContext();
   auto kRegister = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
-  if (to_vector(layout.getOutDimNames()) ==
-      SmallVector<StringAttr, 2>{kRegister, kLane}) {
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, 32);
-    return (factors.mixedTranspositions.size() < 2);
+  auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+  auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+  bool canShuffle = isPermutationMatrixLayout(srcLayout) &&
+                    isPermutationMatrixLayout(dstLayout);
+  if (canShuffle) {
+    auto kWarp = StringAttr::get(ctx, "warp");
+    auto kBlock = StringAttr::get(ctx, "block");
+    // Triton main: triton/pull/11646.
+    // Choose local broadcast copies before checking warp/CTA identity.
+    auto conversion =
+        invertAndComposeLocal(srcLayout, dstLayout, {kWarp, kBlock});
+    canShuffle = isIdentityOnOutDim(conversion, kWarp) &&
+                 isIdentityOnOutDim(conversion, kBlock) &&
+                 conversion.sublayoutIsZero({kWarp, kBlock}, kRegister);
   }
-  return false;
+  return canShuffle && getWarpLayoutConvertDecomposition(srcTy, dstTy, 32)
+                               .mixedTranspositions.size() < 2;
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {

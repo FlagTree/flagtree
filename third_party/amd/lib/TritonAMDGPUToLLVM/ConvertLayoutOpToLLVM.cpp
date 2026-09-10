@@ -36,15 +36,28 @@ public:
     StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
 
+    // Backport from Triton main: triton/pull/11646.
+    // permlane_swap handles permutations; broadcast-owner shuffles use the
+    // common lowering, which also accounts for warp/block-dependent lanes.
+    auto conversion = minimalCvtLayout(srcTy, dstTy);
+    if (llvm::to_vector(conversion.getOutDimNames()) !=
+        SmallVector<StringAttr, 2>{kReg, kLane})
+      return failure();
+
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     int bitwidth = elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
+    // Triton main: triton/pull/11646.
+    // FlagTree adaptation for triton/pull/11646.
+    // Use the existing tensor-type analysis interface.
     auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
-    auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
+    auto &[pReg, shuffleMap, mixedTranspositions, nPack] = factors;
 
     if (mixedTranspositions.size() != 1)
       return failure();
+    // Triton main: triton/pull/11646.
     auto t = mixedTranspositions[0];
-    auto [rBit, lBit] = t.transposition;
+    int rBit = t.regBit;
+    int lBit = t.dstLane;
 
     // Following `transferWithinWarp` and `getWarpLayoutConvertDecomposition`,
     // an intra-warp layout conversion can be described as a permutation of
@@ -70,10 +83,12 @@ public:
       return failure();
     }
 
+    // Triton main: triton/pull/11646.
     bool isSingleTransposition =
-        mlir::triton::squareSublayoutIsIdentity(pLane, kLane);
+        mlir::triton::squareSublayoutIsIdentity(shuffleMap, kLane);
 
-    const auto &laneBases = pLane.getBases().lookup(kLane);
+    // Triton main: triton/pull/11646.
+    const auto &laneBases = shuffleMap.getBases().lookup(kLane);
     auto next = [&](size_t b) { return llvm::Log2_32(laneBases[b][0]); };
     for (size_t b = 0; b < laneBases.size(); ++b) {
       if (b == 4 || b == 5)
@@ -110,23 +125,13 @@ public:
     auto srcLL = triton::gpu::toLinearLayout(srcTy);
     auto rmSrc = actionRemoveBroadcastedRegs(srcLL);
     inVals = rmSrc.apply(inVals);
+    // Triton main: triton/pull/11646.
     // The input values may require broadcasting so that the conversion can be
     // described as a permutation. This does not cost anything for simple cases.
-    int regDim = inVals.size();
-    int pRegDim = pReg.getInDimSize(kReg);
-    if (pRegDim > regDim) {
-      SmallVector<Value> original(inVals.begin(), inVals.end());
-      inVals.clear();
-      inVals.reserve(pRegDim);
-      while (inVals.size() < pRegDim)
-        inVals.append(original.begin(), original.end());
-      regDim = pRegDim;
-    }
-
-    // Apply pReg.
+    int regDim = pReg.getInDimSize(kReg);
     SmallVector<Value> newInVals(regDim);
-    for (const auto &[i, v] : llvm::enumerate(inVals))
-      newInVals[pReg.apply({{kReg, i}})[0].second] = v;
+    for (int r = 0; r < regDim; ++r)
+      newInVals[pReg.apply({{kReg, r}})[0].second] = inVals[r % inVals.size()];
     inVals = std::move(newInVals);
 
     // Handle register packing.
