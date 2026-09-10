@@ -55,8 +55,8 @@ def get_flagtree_version(git_commit_hash_fn):
             return flagtree_ver
         return flagtree_ver + git_commit_hash_fn().replace("+", ".")
     if flagtree_backend:
-        return "0.6.0+" + flagtree_backend + git_commit_hash_fn().replace("+", ".")
-    return "0.6.0" + git_commit_hash_fn()
+        return "0.7.0+" + flagtree_backend + git_commit_hash_fn().replace("+", ".")
+    return "0.7.0" + git_commit_hash_fn()
 
 
 def get_long_description():
