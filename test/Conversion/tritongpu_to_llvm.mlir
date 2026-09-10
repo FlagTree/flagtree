@@ -958,6 +958,27 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// FlagTree regression coverage for triton/pull/11646.
+// The 16x1 pointer case comes from FlagTree #1047.
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @convert_layout_broadcast_warp_pointer
+  tt.func @convert_layout_broadcast_warp_pointer(%arg0: tensor<16x1x!tt.ptr<f32>, #src>) {
+    // CHECK-NOT: nvvm.bar
+    // CHECK-NOT: llvm.store
+    // CHECK-COUNT-2: nvvm.shfl.sync idx
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK-NOT: nvvm.bar
+    // CHECK-NOT: llvm.load
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<16x1x!tt.ptr<f32>, #src> -> tensor<16x1x!tt.ptr<f32>, #dst>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
