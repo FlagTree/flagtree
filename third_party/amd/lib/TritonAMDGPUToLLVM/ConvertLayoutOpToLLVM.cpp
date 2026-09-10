@@ -50,14 +50,26 @@ public:
     // FlagTree adaptation for triton/pull/11646.
     // Use the existing tensor-type analysis interface.
     auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
-    auto &[pReg, shuffleMap, mixedTranspositions, nPack] = factors;
+    // FlagTree compatibility for triton/pull/11646 (FlagTree #1150).
+    // Metax compiles this AMD source with its own pre-#11646 analysis.
+    auto &pReg = factors.pReg;
+    auto &mixedTranspositions = factors.mixedTranspositions;
+    int nPack = factors.nPack;
 
     if (mixedTranspositions.size() != 1)
       return failure();
     // Triton main: triton/pull/11646.
     auto t = mixedTranspositions[0];
+    // FlagTree compatibility for triton/pull/11646 (FlagTree #1150).
+    // Read the matching representation without changing Metax's shuffle gate.
+#ifdef USE_MACA
+    const auto &laneMap = factors.pLane;
+    auto [rBit, lBit] = t.transposition;
+#else
+    const auto &laneMap = factors.shuffleMap;
     int rBit = t.regBit;
     int lBit = t.dstLane;
+#endif
 
     // Following `transferWithinWarp` and `getWarpLayoutConvertDecomposition`,
     // an intra-warp layout conversion can be described as a permutation of
@@ -83,12 +95,13 @@ public:
       return failure();
     }
 
-    // Triton main: triton/pull/11646.
+    // FlagTree compatibility for triton/pull/11646 (FlagTree #1150).
+    // The permlane guard admits only ordinary register/lane permutations.
     bool isSingleTransposition =
-        mlir::triton::squareSublayoutIsIdentity(shuffleMap, kLane);
+        mlir::triton::squareSublayoutIsIdentity(laneMap, kLane);
 
-    // Triton main: triton/pull/11646.
-    const auto &laneBases = shuffleMap.getBases().lookup(kLane);
+    // FlagTree compatibility for triton/pull/11646 (FlagTree #1150).
+    const auto &laneBases = laneMap.getBases().lookup(kLane);
     auto next = [&](size_t b) { return llvm::Log2_32(laneBases[b][0]); };
     for (size_t b = 0; b < laneBases.size(); ++b) {
       if (b == 4 || b == 5)
