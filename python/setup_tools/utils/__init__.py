@@ -60,7 +60,7 @@ submodule_registrar = SubmoduleRegistrar(submodules=(
     },
     {
         "name": "flir", "url": "https://github.com/tsingmicro-public-e/flir.git", "commit_id":
-        "5452aa58d5712cee22267c743f2e54c9c49d5fb9"
+        "4b950511caf6930d0ba2c177d9cef2c588b96669"
     },
     #{"name": "flir", "url": "https://github.com/FlagTree/flir.git"},
     # FlagPrism: register the external component without vendoring its sources.
