@@ -38,6 +38,7 @@ set(ASCEND_CUSTOM_OPS
   "mask_ops/compare_scalar.cpp::dav-c220-vec"
   "mask_ops/gather_mask.cpp::dav-c220-vec"
   "cast_ops/cast_int4_to_fp16.cpp::dav-c220-vec"
+  "sync_ops/cube_boundary.cpp::dav-c220-cube"
 )
 
 # The mask and cast primitives wrap the AscendC APIs. This cache variable can also
@@ -63,7 +64,7 @@ foreach(entry IN LISTS ASCEND_CUSTOM_OPS)
   if(src MATCHES "^mask_ops/")
     list(APPEND op_deps "${ASCEND_CUSTOM_OPS_DIR}/mask_ops/mask_common.h")
   endif()
-  if(src MATCHES "^(mask_ops|cast_ops)/")
+  if(src MATCHES "^(mask_ops|cast_ops|sync_ops)/")
     list(APPEND op_include_flags
       -I "${ASCENDC_INCLUDE_DIR}"
       -I "${ASCENDC_INCLUDE_DIR}/interface"

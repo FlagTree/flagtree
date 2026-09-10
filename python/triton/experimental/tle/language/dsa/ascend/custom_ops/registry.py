@@ -346,3 +346,41 @@ class cast_int4_to_fp16:
             "cast_int4_to_fp16 requires a 1D float16 output with twice the source element count")
         self.symbol = "custom_cast_int4_to_fp16"
         self.bitcode = CUSTOM_OPS_BITCODE
+
+
+@al.register_custom_op
+class cube_begin:
+    """Wait for all pipelines on the calling CUBE core at a region boundary.
+
+    token: int32 scalar (for example program_id), ignored by the device body.
+    No outputs, allocation, cross-core synchronization or ownership change.
+    This is a local PIPE_ALL barrier, not a replacement for sync_block_*.
+    """
+
+    core = al.CORE.CUBE
+    pipe = al.PIPE.PIPE_ALL
+    mode = al.MODE.SIMD
+
+    def __init__(self, token):
+        self.arg_type["token"] = tl.int32
+        self.symbol = "custom_cube_begin"
+        self.bitcode = CUSTOM_OPS_BITCODE
+
+
+@al.register_custom_op
+class cube_end:
+    """Wait for all pipelines on the calling CUBE core at a region boundary.
+
+    token: int32 scalar (for example program_id), ignored by the device body.
+    No outputs, allocation, cross-core synchronization or ownership change.
+    This is a local PIPE_ALL barrier, not a replacement for sync_block_*.
+    """
+
+    core = al.CORE.CUBE
+    pipe = al.PIPE.PIPE_ALL
+    mode = al.MODE.SIMD
+
+    def __init__(self, token):
+        self.arg_type["token"] = tl.int32
+        self.symbol = "custom_cube_end"
+        self.bitcode = CUSTOM_OPS_BITCODE

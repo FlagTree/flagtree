@@ -289,3 +289,12 @@ values = tle.dsa.ascend.raw("cast_int4_to_fp16", packed, out=values)
 普通及 mix 两套入口均构建到现有 `custom_ops.bc`。测试入口为
 `python python/tutorials/tle/custom/test_cast_ops.py`，也已接入
 `test_custom_ops.py`。测试包含全部字节编码、不同块大小、图重放以及参数校验。
+
+## Cube region boundaries
+
+`raw("cube_begin", tl.program_id(0))` and `raw("cube_end", tl.program_id(0))`
+are CUBE-only local `AscendC::PipeBarrier<PIPE_ALL>()` wrappers, with no output.
+The int32 token is ignored. Both have identical barrier semantics; their names
+mark entry and exit in caller code. They do not implement cross-core handshakes,
+allocate buffers, or initialize/finalize a GEMM. Use TLE `sync_block_set/wait`
+for Vector/Cube producer-consumer synchronization and `tl.dot` for computation.

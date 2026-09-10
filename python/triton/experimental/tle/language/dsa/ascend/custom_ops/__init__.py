@@ -16,6 +16,8 @@ from .registry import (
     compare_scalar,
     gather_mask,
     cast_int4_to_fp16,
+    cube_begin,
+    cube_end,
 )
 
 __all__ = [
@@ -30,4 +32,6 @@ __all__ = [
     "compare_scalar",
     "gather_mask",
     "cast_int4_to_fp16",
+    "cube_begin",
+    "cube_end",
 ]
