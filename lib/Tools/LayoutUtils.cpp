@@ -60,6 +60,41 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
       ll, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
 }
 
+// Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
+uint32_t getOutputBasisMask(const LinearLayout &layout,
+                            ArrayRef<StringAttr> inDims, StringAttr outDim) {
+  assert(layout.hasOutDim(outDim));
+  unsigned outIdx = layout.getOutDimIndex(outDim);
+  uint32_t mask = 0;
+  for (StringAttr inDim : inDims) {
+    assert(layout.hasInDim(inDim));
+    for (const auto &basis : layout.getBases().lookup(inDim))
+      mask |= uint32_t(basis[outIdx]);
+  }
+  return mask;
+}
+
+// Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
+uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
+                           ArrayRef<StringAttr> outDims) {
+  assert(layout.hasInDim(inDim));
+  SmallVector<unsigned> outIndices;
+  for (StringAttr outDim : outDims) {
+    assert(layout.hasOutDim(outDim));
+    outIndices.push_back(layout.getOutDimIndex(outDim));
+  }
+
+  uint64_t mask = 0;
+  for (const auto &indexedBasis :
+       llvm::enumerate(layout.getBases().lookup(inDim))) {
+    const auto &basis = indexedBasis.value();
+    if (llvm::any_of(outIndices,
+                     [&](unsigned outIdx) { return basis[outIdx] != 0; }))
+      mask |= uint64_t{1} << indexedBasis.index();
+  }
+  return mask;
+}
+
 LinearLayout
 ensureLayoutNotLargerThan(const LinearLayout &layout,
                           const llvm::SmallDenseMap<StringAttr, int64_t> &shape,

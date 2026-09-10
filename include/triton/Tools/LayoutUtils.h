@@ -35,6 +35,17 @@ namespace mlir::triton {
 bool squareSublayoutIsIdentity(const LinearLayout &ll,
                                ArrayRef<StringAttr> dimNames);
 
+// Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
+// Output bits affected by the specified input dimensions.
+uint32_t getOutputBasisMask(const LinearLayout &layout,
+                            ArrayRef<StringAttr> inDims, StringAttr outDim);
+
+// Upstream prerequisite: triton@af85fc304db5 (before triton/pull/11646).
+// Nonzero input bases along inDim, considering only the given output
+// dimensions.
+uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
+                           ArrayRef<StringAttr> outDims);
+
 // For each output dimension d, ensure that the layout's output size (i.e., its
 // codomain) does not exceed shape[d]. Do this without changing the size of the
 // layout's inputs (i.e., leave its domain unchanged).
