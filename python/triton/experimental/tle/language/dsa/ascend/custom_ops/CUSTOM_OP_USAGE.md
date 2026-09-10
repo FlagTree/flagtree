@@ -298,3 +298,27 @@ The int32 token is ignored. Both have identical barrier semantics; their names
 mark entry and exit in caller code. They do not implement cross-core handshakes,
 allocate buffers, or initialize/finalize a GEMM. Use TLE `sync_block_set/wait`
 for Vector/Cube producer-consumer synchronization and `tl.dot` for computation.
+
+## CANN 9.0 compatibility
+
+The public call sites are identical across supported toolkits. For CANN 9.0,
+FlagTree configures raw-address ABI adapters for CompareScalar, GatherMask,
+INT4 Cast and Cube boundaries. Registration and all shape/dtype validation stay
+in FlagTree. The Ascend backend preserves the custom operations through core
+assignment, then lowers the adapted calls when invoking CANN's `hivmc`.
+
+This is integrated into the backend stages, not installed by an application
+monkey patch. The intermediate text is carried with the individual compilation;
+there is no global last-kernel IR state. Kernels without adapted custom calls
+follow the existing pipeline. CANN 9.1+, older or unrecognized toolkit versions
+use the native path. Mixing unadapted custom ABIs with adapted calls, or using
+nonempty custom scratch operands in this compatibility path, raises an error.
+CANN 9.1 native device validation remains pending.
+
+CANN 9.0 adapters use the packaged primitive C++ sources and CANN compiler and
+headers. Generated adapter bitcodes and subprocess wrappers live under Triton's
+cache directory, not in the application or installed source package. A FlagTree
+source checkout with its AscendNPU-IR Template headers is discovered directly;
+otherwise `FLAGTREE_TEMPLATE_INCLUDE` must name the directory containing
+`Utils.h`. These headers are a FlagTree build/runtime requirement for this
+compatibility path; no FlagGems or FlagGems-vllm code is required.

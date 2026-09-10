@@ -289,6 +289,8 @@ class compare_scalar:
         self.arg_type["scalar"] = tl.float32
         self.symbol = "custom_compare_scalar_float"
         self.bitcode = CUSTOM_OPS_BITCODE
+        from .cann90 import configure
+        configure(self, "compare_scalar", src)
 
 
 @al.register_custom_op
@@ -318,6 +320,8 @@ class gather_mask:
             out[1].shape) == 1 and out[1].numel.value == 8, ("gather_mask count output must be int32[8]")
         self.symbol = "custom_gather_mask_float"
         self.bitcode = CUSTOM_OPS_BITCODE
+        from .cann90 import configure
+        configure(self, "gather_mask", src)
 
 
 @al.register_custom_op
@@ -346,6 +350,8 @@ class cast_int4_to_fp16:
             "cast_int4_to_fp16 requires a 1D float16 output with twice the source element count")
         self.symbol = "custom_cast_int4_to_fp16"
         self.bitcode = CUSTOM_OPS_BITCODE
+        from .cann90 import configure
+        configure(self, "cast_int4_to_fp16", src)
 
 
 @al.register_custom_op
@@ -365,6 +371,8 @@ class cube_begin:
         self.arg_type["token"] = tl.int32
         self.symbol = "custom_cube_begin"
         self.bitcode = CUSTOM_OPS_BITCODE
+        from .cann90 import configure
+        configure(self, "cube_begin")
 
 
 @al.register_custom_op
@@ -384,3 +392,5 @@ class cube_end:
         self.arg_type["token"] = tl.int32
         self.symbol = "custom_cube_end"
         self.bitcode = CUSTOM_OPS_BITCODE
+        from .cann90 import configure
+        configure(self, "cube_end")
