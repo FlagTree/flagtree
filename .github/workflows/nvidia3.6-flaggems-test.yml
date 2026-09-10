@@ -22,9 +22,9 @@ name: Nvidia3.6-FlagGems-Test
 
 on:
   push:
-    branches: [ "main", "triton_v3.6.x", "fix/my-bug-fix-main-v7-best-and-separate" ]
+    branches: [ "main", "fix/my-bug-fix-main-v7-best-and-separate" ]
   pull_request:
-    branches: [ "main", "triton_v3.6.x" ]
+    branches: [ "main" ]
     types: [opened, synchronize, reopened, ready_for_review]
 
 env:
@@ -82,16 +82,19 @@ jobs:
           COMMIT_ID="${GITHUB_SHA}"
           BASELINE_DIR="${FLAGGEMS_CI_DIR}/Baseline/${DATE}_${COMMIT_ID}"
           BASELINE_SUMMARY="${BASELINE_DIR}/summary.json"
-          BEST_DIR="${FLAGGEMS_CI_DIR}/Baseline/best"
+          BEST_DIR="${FLAGGEMS_CI_DIR}/Baseline/best_FlagGems_${FLAGGEMS_TAG}"
+          BEST_ARCHIVE_DIR="${FLAGGEMS_CI_DIR}/Baseline/best_archive"
 
           echo "commit_id=$COMMIT_ID" >> $GITHUB_OUTPUT
           echo "baseline_dir=$BASELINE_DIR" >> $GITHUB_OUTPUT
           echo "baseline_summary=$BASELINE_SUMMARY" >> $GITHUB_OUTPUT
           echo "best_dir=$BEST_DIR" >> $GITHUB_OUTPUT
+          echo "best_archive_dir=$BEST_ARCHIVE_DIR" >> $GITHUB_OUTPUT
 
           echo "BASELINE_DIR=$BASELINE_DIR" >> $GITHUB_ENV
           echo "BASELINE_SUMMARY=$BASELINE_SUMMARY" >> $GITHUB_ENV
           echo "BEST_DIR=$BEST_DIR" >> $GITHUB_ENV
+          echo "BEST_ARCHIVE_DIR=$BEST_ARCHIVE_DIR" >> $GITHUB_ENV
 
           echo "📝 Commit ID: $COMMIT_ID"
           echo "📁 Baseline dir: $BASELINE_DIR"
@@ -155,7 +158,7 @@ jobs:
         shell: bash
         if: success()
         run: |
-          BEST_SUMMARY="${FLAGGEMS_CI_DIR}/Baseline/best/summary.json"
+          BEST_SUMMARY="${{ steps.set-commit.outputs.best_dir }}/summary.json"
           if [[ -f "$BEST_SUMMARY" ]] && [[ -s "$BEST_SUMMARY" ]]; then
             echo "best_exists=true" >> $GITHUB_OUTPUT
             echo "✅ Best baseline exists"
@@ -170,11 +173,11 @@ jobs:
         if: ${{ success() && steps.check-best.outputs.best_exists == 'true' }}
         continue-on-error: true
         with:
-          baseline-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline/best'
+          baseline-dir: '${{ steps.set-commit.outputs.best_dir }}'
           candidate-dir: '${{ steps.run-flaggems-test.outputs.test-output-dir }}'
           compare-script: 'tools/ci/compare_test_result.py'
           working-directory: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
-          fail-on-missing-baseline: 'false'
+          fail-on-missing-baseline: 'true'
 
       - name: Update Best Baseline
         id: update-best
@@ -186,16 +189,22 @@ jobs:
           BASELINE_DIR="${{ steps.set-commit.outputs.baseline_dir }}"
           BASELINE_SUMMARY="${{ steps.set-commit.outputs.baseline_summary }}"
           BEST_DIR="${{ steps.set-commit.outputs.best_dir }}"
+          ARCHIVE_DIR="${{ steps.set-commit.outputs.best_archive_dir }}/${DATE}"
 
           if [[ -f "$BASELINE_SUMMARY" ]] && [[ -s "$BASELINE_SUMMARY" ]]; then
             echo "✅ Baseline generated successfully for commit: $COMMIT_ID"
 
+            if [[ -d "$BEST_DIR" ]]; then
+              mkdir -p "$ARCHIVE_DIR"
+              echo "📦 Archiving old best to: $ARCHIVE_DIR"
+              mv "$BEST_DIR" "$ARCHIVE_DIR"
+            fi
+
             # Create best directory and copy baseline files
-            rm -rf "$BEST_DIR" || true
             mkdir -p "$BEST_DIR"
 
             # Copy all files from commit directory to best
-            cp -raf "$BASELINE_DIR"/* "$BEST_DIR/" 2>/dev/null || true
+            cp -raf "$BASELINE_DIR"/* "$BEST_DIR/"
 
             # Also copy the commit ID for reference
             echo "$DATE : $COMMIT_ID" > "${BEST_DIR}/commit_id.txt"
@@ -348,7 +357,7 @@ jobs:
         if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' && github.event_name == 'pull_request' }}
         uses: ./.github/actions/compare-flaggems-test
         with:
-          baseline-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline/best'
+          baseline-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline/best_FlagGems_${{ env.FLAGGEMS_TAG }}'
           candidate-dir: '${{ steps.run-flaggems-test.outputs.test-output-dir }}'
           compare-script: 'tools/ci/compare_test_result.py'
           working-directory: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
