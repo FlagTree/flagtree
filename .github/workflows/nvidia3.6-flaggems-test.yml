@@ -133,7 +133,7 @@ jobs:
 
       - name: Run FlagGems Test for Baseline
         id: run-flaggems-test
-        uses: flagos-ai/FlagTree/.github/actions/run-flaggems-test@main
+        uses: ./.github/actions/run-flaggems-test
         if: success()
         with:
           flaggems-path: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
@@ -294,7 +294,7 @@ jobs:
 
       - name: Run FlagGems Test
         if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' && github.event_name == 'pull_request' }}
-        uses: flagos-ai/FlagTree/.github/actions/run-flaggems-test@main
+        uses: ./.github/actions/run-flaggems-test
         id: run-flaggems-test
         with:
           flaggems-path: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'

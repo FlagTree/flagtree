@@ -100,7 +100,8 @@ runs:
       run: |
         set -x
 
-        export PYTHONPATH="${{ inputs.flaggems-path }}/src/:${PYTHONPATH}"
+        # Set PYTHONPATH to the FlagGems source directory so script can run without installing FlagGems
+        export PYTHONPATH="${{ inputs.flaggems-path }}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
         cp /root/flaggems_ci/script/conftest.py tests/conftest.py
         cp -raf /root/flaggems_ci/script/ci tools
