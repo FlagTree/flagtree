@@ -96,8 +96,8 @@ def _discover_backends() -> dict[str, Backend]:
         # backends that are not present in this FlagTree checkout, so restrict
         # discovery to the active FlagTree backend when one is selected.
         # ==================== FLAGTREE XPU SYNC MARK ====================
-        if active_backend and ep.name != active_backend:
-            continue
+        # if active_backend and ep.name != active_backend:
+        #     continue
         compiler = importlib.import_module(f"{ep.value}.compiler")
         driver = importlib.import_module(f"{ep.value}.driver")
         backends[ep.name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),  # type: ignore
