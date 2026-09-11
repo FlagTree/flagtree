@@ -70,43 +70,13 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_F32_DEFAULT",
     "TRITON_PREFER_TMEM_16x256_LAYOUT",
     "TRITON_ENABLE_EXPERIMENTAL_CONSAN",
-    // [klx d116bdf4 sync] align with internal main-tree GetEnv.hpp: the
-    // prebuilt SDNN objects inline internal's getBoolEnv/getStrEnv checks,
-    // and at runtime a single inline-variable definition (ODR) wins the link;
-    // it must recognize every env var the objects may read.
-    "TRITONXPU_HP_MODE",
-    "TRITONXPU_BF16_ROUND_MID",
-    "TRITONXPU_BF16_FAST",
-    "TRITONXPU_FP16_FAST",
-    "TRITONXPU_PROBE_BOUNDARY",
-    "TRITONXPU_LM_WAR_FENCE",
-    "TRITONXPU_LIVE_RANGE",
-    "TRITONXPU_PROBE_SIDE",
-    "TRITON_PRINT_VERBOSE",
-    "TRITON_TUNE_BUFFER_LM_SIZE",
-    "LLVM_ERROR_LM_SIZE",
-    "TRITONXCN_AMD_MODE_FDIV",
-    "TRITONJUPITER_AMD_MODE_FDIV",
-    "USE_FAST_MATH",
     // clang-format on
 };
 
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
     // clang-format off
     "TRITON_REPRODUCER_PATH",
-    "TRITON_DISABLE_CRASH_RECOVERY",
     "TRITON_ENABLE_PYTHON_STACKTRACE",
-    "TRITONXPU_UNROLL_DRYRUN",
-    "TRITONXPU_REDUCE_BOUNDARY",
-    "TRITONXPU_REDUCE_REGION",
-    "TRITONXPU_VEC_COST",
-    "TRITONXPU_LM_REPORT",
-    "TRITONXPU_TILE_REPORT",
-    "TRITONXPU_VEC_REPORT",
-    "TRITONXPU_TILE_PLAN",
-    "TRITONXPU_TILE_DECIDE",
-    "TRITONXPU_VFLOW_REPORT",
-    "TRITONXPU_VEC_HYPO_COVER",
     // clang-format on
 };
 
