@@ -248,7 +248,6 @@ struct DecomposedWarpConversion {
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                                   RankedTensorType dstTy, int bitwidth);
-
 #else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // This struct represents the factorization of a warp-local layout conversion
 // into three components: a register-only permutation, a lane-only permutation,

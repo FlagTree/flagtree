@@ -752,7 +752,6 @@ static void computeTranspositionSelectors(
   // Triton main: triton/pull/11646.
   // Selectors are updated in place; no result vector is returned.
 }
-
 #else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 static SmallVector<DecomposedWarpConversion::TranspositionInfo>
 getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
@@ -1556,7 +1555,6 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   return canShuffle && getWarpLayoutConvertDecomposition(srcTy, dstTy, 32)
                                .mixedTranspositions.size() < 2;
 }
-
 #else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto layout = minimalCvtLayout(srcTy, dstTy);

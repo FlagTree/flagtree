@@ -102,7 +102,6 @@ public:
 
     if (!(isSingleTransposition || isThreeCycle))
       return failure();
-
 #else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
     MLIRContext *ctx = op.getContext();
     StringAttr kReg = str_attr("register");
@@ -183,7 +182,6 @@ public:
     auto srcLL = triton::gpu::toLinearLayout(srcTy);
     auto rmSrc = actionRemoveBroadcastedRegs(srcLL);
     inVals = rmSrc.apply(inVals);
-
 #ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
     // Triton main: triton/pull/11646.
     // The input values may require broadcasting so that the conversion can be
@@ -196,7 +194,6 @@ public:
                            r }})[0]
                     .second] = inVals[r % inVals.size()];
     inVals = std::move(newInVals);
-
 #else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
     // The input values may require broadcasting so that the conversion can be
     // described as a permutation. This does not cost anything for simple cases.

@@ -422,7 +422,6 @@ TEST_F(LinearLayoutTest, InvertAndComposeLocalPreservesNonBroadcastBits) {
   EXPECT_EQ(remote.compose(src), remoteDst);
   EXPECT_FALSE(remote.sublayoutIsZero(lane, warp));
 }
-#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 #endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {

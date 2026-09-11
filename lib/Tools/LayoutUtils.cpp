@@ -118,7 +118,6 @@ uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
   }
   return mask;
 }
-#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 #endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 LinearLayout

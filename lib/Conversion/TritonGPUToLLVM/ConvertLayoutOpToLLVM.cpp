@@ -93,7 +93,6 @@ struct ConvertLayoutOpConversion
     transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
     return success();
   }
-
 #else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
@@ -323,7 +322,6 @@ struct ConvertLayoutOpConversion
 
   // Use warp shuffles to implement a layout conversion where data only needs to
   // be moved within warps.
-
 #ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
   LogicalResult transferWithinWarp(ConvertLayoutOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
@@ -599,7 +597,6 @@ struct ConvertLayoutOpConversion
       vals = applySwap(t, /*preShuf=*/false);
     return vals;
   }
-
 #else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
   LogicalResult transferWithinWarp(ConvertLayoutOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
@@ -877,17 +874,14 @@ struct ConvertLayoutOpConversion
     // `transferWithinWarpSwapImpl`, but uses auxiliary registers to hold the
     // values to be shuffled, resulting in fewer emitted instructions.
     int numRegs = inVals.size();
-
 #ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
     // Triton main: triton/pull/11646.
     int rIdx = t.regBit - nPack;
     int lIdx = t.dstLane;
-
 #else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
     int rIdx = t.transposition.first - nPack;
     int lIdx = t.transposition.second;
 #endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
-
     int tileSize = 1 << (rIdx + 1);
     int numTiles = numRegs / tileSize;
 

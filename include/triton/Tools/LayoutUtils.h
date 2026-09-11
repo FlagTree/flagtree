@@ -53,7 +53,6 @@ uint32_t getOutputBasisMask(const LinearLayout &layout,
 // dimensions.
 uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
                            ArrayRef<StringAttr> outDims);
-#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 #endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 // For each output dimension d, ensure that the layout's output size (i.e., its
