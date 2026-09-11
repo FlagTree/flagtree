@@ -67,7 +67,8 @@ class FlagtreeConfigs:
 
     def __post_init__(self):
         if self.flagtree_backend == "amd":
-            self.flagtree_backend = None
+            # Remove the FLAGTREE_BACKEND environment variable to preserve
+            # the original CMakeLists.txt logic.
             os.environ.pop("FLAGTREE_BACKEND", None)
         backends = list(self.default_backends)
         _backends = [backend for backend in backends if os.environ.get(f"USE_{backend.upper()}", "ON").upper() != "OFF"]
