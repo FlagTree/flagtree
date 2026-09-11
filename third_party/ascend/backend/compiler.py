@@ -18,7 +18,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-from . import custom_op_compat
 import ctypes
 import functools
 import hashlib
@@ -215,8 +214,6 @@ def linalg_to_bc_by_triton_mlir_opt(linalg: str, metadata, opt):
     Returns:
         Bytecode data as bytes (not file path, to avoid temp directory cleanup issues)
     """
-    if custom_op_compat.needs_compat(linalg):
-        return custom_op_compat.TEXT_IR_PREFIX + linalg.encode("utf-8")
     with tempfile.TemporaryDirectory() as tmpdir:
         ttadapter_path = os.path.join(tmpdir, "kernel.ttadapter.mlir")
         bc_path = os.path.join(tmpdir, "kernel.mlirbc")
@@ -254,8 +251,6 @@ def bc_to_linalg_by_bishengir_opt(bc_data: bytes, metadata, opt):
     Returns:
         MLIR text as string
     """
-    if bc_data.startswith(custom_op_compat.TEXT_IR_PREFIX):
-        return custom_op_compat.prepare_linalg(bc_data[len(custom_op_compat.TEXT_IR_PREFIX):].decode("utf-8"))
     with tempfile.TemporaryDirectory() as tmpdir:
         bc_path = os.path.join(tmpdir, "kernel.mlirbc")
         mlir_path = os.path.join(tmpdir, "kernel.mlir")
@@ -650,9 +645,6 @@ def _compile_linalg_to_npu_bin(linalg: str, metadata, opt):
 
 
 def linalg_to_bin_enable_npu_compile_A2_A3(linalg: str, metadata, opt):
-    custom_compat = custom_op_compat.needs_compat(linalg)
-    if custom_compat:
-        linalg = custom_op_compat.prepare_linalg(linalg)
     linalg, metadata = _parse_linalg_metadata(linalg, metadata)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_file_name = "kernel.mlir" if opt.use_bytecode else "kernel.ttadapter.mlir"
@@ -809,10 +801,9 @@ def linalg_to_bin_enable_npu_compile_A2_A3(linalg: str, metadata, opt):
             _compile_option_list += \
                 [f"--enable-tuning-mode={enable_tuning_mode}"]
 
-        if _is_auto_map_parallel_blocks_enabled() and not custom_compat:
+        if _is_auto_map_parallel_blocks_enabled():
             _compile_option_list += ["--enable-auto-blockify-loop"]
         npu_compiler_path, env = _get_npucompiler_path()
-        npu_compiler_path, env = custom_op_compat.compiler_command(linalg, npu_compiler_path, env)
         if npu_compiler_path.endswith("bishengir-compile"):
             _compile_option_list += [
                 "--enable-hfusion-compile=true",

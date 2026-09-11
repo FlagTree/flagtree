@@ -74,14 +74,8 @@ def _init(src, out):
 def test_validation():
     for n in (32, 64, 128, 256, 512, 1024, 2048, 4096, 8192):
         op = _init(_tensor(tl.uint8, [n]), _tensor(tl.float16, [2 * n]))
-        from triton.backends.ascend.custom_op_compat import is_cann90
-        if is_cann90():
-            assert op.symbol.startswith("triton_cann90_cast_int4_to_fp16_")
-            assert op.extra_attr == "triton_pass_outputs=true"
-            assert op.bitcode.endswith(".bc")
-        else:
-            assert op.symbol == "custom_cast_int4_to_fp16"
-            assert op.bitcode.endswith("custom_ops.bc")
+        assert op.symbol == "custom_cast_int4_to_fp16"
+        assert op.bitcode.endswith("custom_ops.bc")
     src = _tensor(tl.uint8, [64])
     dst = _tensor(tl.float16, [128])
     invalid = [
