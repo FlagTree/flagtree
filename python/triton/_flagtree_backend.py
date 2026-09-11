@@ -34,10 +34,11 @@ FLAGTREE_BACKEND: str = _read_flagtree_backend()
 
 def get_active_backend_name() -> str:
     """Return the configured FlagTree backend, or detect the default GPU backend."""
-    if FLAGTREE_BACKEND:
-        return FLAGTREE_BACKEND
-
     from triton.backends import backends
+    if FLAGTREE_BACKEND:
+        if FLAGTREE_BACKEND == "amd":
+            backends[FLAGTREE_BACKEND].driver.is_active()
+        return FLAGTREE_BACKEND
 
     active = [
         backend_name for backend_name in ("nvidia", "amd")
