@@ -710,7 +710,6 @@ def reduce_scatter_multi_node(input_tensor: torch.Tensor, stream: torch.cuda.Str
     M, N = input_tensor.shape
     M_per_rank = M // ctx.world_size
 
-
     rs_result_per_node = reduce_scatter_for_each_node(input_tensor, stream, ctx, ready_flags, config=config)
 
     final_grid = lambda META: (triton.cdiv(M_per_rank, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]), )

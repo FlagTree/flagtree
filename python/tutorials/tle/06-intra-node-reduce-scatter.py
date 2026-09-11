@@ -215,11 +215,9 @@ _BASE_KERNEL_CONFIGS = [
 
 # Tune scatter concurrency independently. Reduce stays capped at 1x num_sms.
 SCATTER_GRID_FACTORS = (1, 2, 4)
-KERNEL_CONFIGS = [
-    {**config, "scatter_grid_factor": grid_factor}
-    for config in _BASE_KERNEL_CONFIGS
-    for grid_factor in SCATTER_GRID_FACTORS
-]
+KERNEL_CONFIGS = [{**config, "scatter_grid_factor": grid_factor}
+                  for config in _BASE_KERNEL_CONFIGS
+                  for grid_factor in SCATTER_GRID_FACTORS]
 
 
 def _grid_ctas(M_per_rank, N, block_m, block_n, num_sms, grid_factor=1):
@@ -402,7 +400,8 @@ def tle_reduce_scatter_device_barrier(
         scatter_kernel = scatter_kernel_opt.run(
             input_tensor,
             scatter_buf,
-            grid=grid_scatter, warmup=compile_only,
+            grid=grid_scatter,
+            warmup=compile_only,
             scatter_ctx=scatter_ctx,
             M_per_rank=M_per_rank,
             N=N,
@@ -430,7 +429,8 @@ def tle_reduce_scatter_device_barrier(
     with torch.cuda.stream(stream):
 
         barrier_kernel = device_barrier_kernel.run(
-            grid=(1,), warmup=compile_only,
+            grid=(1, ),
+            warmup=compile_only,
             scatter_ctx=scatter_ctx,
             mesh=tle.device_mesh(tle.MeshConfig(device=world_size)),
         )
@@ -439,7 +439,8 @@ def tle_reduce_scatter_device_barrier(
             output,
             M_per_rank,
             N,
-            grid=grid_reduce, warmup=compile_only,
+            grid=grid_reduce,
+            warmup=compile_only,
             LOCAL_RANK=local_rank,
             WORLD_SIZE=world_size,
             REDUCE_BLOCK_M=REDUCE_BLOCK_M,
@@ -616,8 +617,9 @@ def _select_best_config(configs, benchmark, *, warmup, iters):
     repeated_scores = {index: [] for index in finalists}
     for round_index in range(AUTOTUNE_RECHECK_ROUNDS):
         if dist.get_rank() == 0:
-            print(f"Recheck round {round_index + 1}/{AUTOTUNE_RECHECK_ROUNDS}: "
-                  f"{len(finalists)} finalists, {AUTOTUNE_RECHECK_ITERS} iterations", flush=True)
+            print(
+                f"Recheck round {round_index + 1}/{AUTOTUNE_RECHECK_ROUNDS}: "
+                f"{len(finalists)} finalists, {AUTOTUNE_RECHECK_ITERS} iterations", flush=True)
         round_order = finalists if round_index % 2 == 0 else list(reversed(finalists))
         for index in round_order:
             result = benchmark(configs[index], warmup, AUTOTUNE_RECHECK_ITERS)
@@ -629,8 +631,10 @@ def _select_best_config(configs, benchmark, *, warmup, iters):
     summary = {
         "skipped_configs": [configs[index] for index in skipped],
         "screening": [{"config": configs[index], "median_ms": score} for score, index in screening],
-        "finalists": [{"config": configs[index], "round_scores_ms": repeated_scores[index],
-                       "selection_score_ms": statistics.median(repeated_scores[index])} for index in finalists],
+        "finalists": [{
+            "config": configs[index], "round_scores_ms": repeated_scores[index], "selection_score_ms":
+            statistics.median(repeated_scores[index])
+        } for index in finalists],
     }
     return configs[best_index], summary
 
@@ -665,12 +669,13 @@ def main():
     num_sms = device_props.multi_processor_count
     max_shared_memory = triton.runtime.driver.active.utils.get_device_properties(local_rank)["max_shared_mem"]
     hardware = [None] * world_size
-    dist.all_gather_object(hardware, {
-        "name": device_props.name,
-        "capability": list(torch.cuda.get_device_capability(local_rank)),
-        "num_sms": num_sms,
-        "total_memory": device_props.total_memory,
-    })
+    dist.all_gather_object(
+        hardware, {
+            "name": device_props.name,
+            "capability": list(torch.cuda.get_device_capability(local_rank)),
+            "num_sms": num_sms,
+            "total_memory": device_props.total_memory,
+        })
     # Every rank must enumerate the same candidate list.
     shared_limit = torch.tensor(max_shared_memory, dtype=torch.int64, device="cuda")
     dist.all_reduce(shared_limit, op=dist.ReduceOp.MIN)
@@ -721,12 +726,26 @@ def main():
             torch.cuda.synchronize()
             dist.barrier()
             tle_reduce_scatter_device_barrier(
-                check_input, scatter_buf, scatter_ctx, output, M_per_rank, N,
-                local_rank, world_size, stream, num_sms=num_sms, config=cfg,
+                check_input,
+                scatter_buf,
+                scatter_ctx,
+                output,
+                M_per_rank,
+                N,
+                local_rank,
+                world_size,
+                stream,
+                num_sms=num_sms,
+                config=cfg,
             )
             torch.cuda.synchronize()
             _assert_close_on_all_ranks(
-                output, expected, shape=(M, N), stage=f"{stage}/{label}", atol=atol, rtol=rtol,
+                output,
+                expected,
+                shape=(M, N),
+                stage=f"{stage}/{label}",
+                atol=atol,
+                rtol=rtol,
             )
 
     compiled_configs = set()
@@ -738,8 +757,18 @@ def main():
         error = None
         try:
             tle_reduce_scatter_device_barrier(
-                input_tensor, scatter_buf, scatter_ctx, output, M_per_rank, N,
-                local_rank, world_size, stream, num_sms=num_sms, config=cfg, compile_only=True,
+                input_tensor,
+                scatter_buf,
+                scatter_ctx,
+                output,
+                M_per_rank,
+                N,
+                local_rank,
+                world_size,
+                stream,
+                num_sms=num_sms,
+                config=cfg,
+                compile_only=True,
             )
         except Exception as exc:
             # Only compilation/loading is caught; execution/correctness failures remain fatal.

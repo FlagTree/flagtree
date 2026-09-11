@@ -932,8 +932,10 @@ def main():
     args = _parse_args()
     M, N, K = args.M, args.N, args.K
     dtype = (get_test_dtype() if args.dtype is None else {
-        "bf16": torch.bfloat16, "bfloat16": torch.bfloat16,
-        "fp16": torch.float16, "float16": torch.float16,
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+        "fp16": torch.float16,
+        "float16": torch.float16,
     }[args.dtype])
 
     tle.get_mem_pool()
