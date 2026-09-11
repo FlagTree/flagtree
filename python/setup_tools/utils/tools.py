@@ -69,6 +69,7 @@ class FlagtreeConfigs:
         self.flagtree_backend = backend
 
     def __post_init__(self):
+        self.current_backend = self.flagtree_backend
         if self.flagtree_backend == "amd":
             self.flagtree_backend = None
             # Remove the FLAGTREE_BACKEND environment variable to preserve
