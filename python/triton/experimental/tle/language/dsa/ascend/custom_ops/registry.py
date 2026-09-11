@@ -250,3 +250,137 @@ class unpack_sort:
         self.symbol = "custom_unpack_sort_float"
         self.bitcode = CUSTOM_OPS_BITCODE
         self.extra_buffers = [(tl.float16, 0)]
+
+
+# Mask buffers must occupy at least one 32-byte UB block. The initial FP32
+# implementation covers the block sizes validated by the routing kernels.
+def _mask_source_size(src, op_name):
+    assert src.dtype == tl.float32, f"{op_name} requires an fp32 UB tensor"
+    assert len(src.shape) == 1, f"{op_name} requires a 1D source"
+    size = src.numel.value
+    assert size in (256, 512, 1024, 2048, 4096), (f"{op_name} requires 256, 512, 1024, 2048 or 4096 source elements")
+    return size
+
+
+def _check_mask_buffer(mask, size, op_name):
+    assert mask.dtype == tl.uint16, f"{op_name} requires a uint16 bitmask"
+    assert len(mask.shape) == 1 and mask.numel.value == size // 16, (
+        f"{op_name} requires a 1D bitmask with {size // 16} uint16 elements")
+
+
+@al.register_custom_op
+class compare_scalar:
+    """Compare a 1D FP32 UB tensor with an FP32 scalar for equality.
+
+    Required out: uint16[N / 16] in UB, where N is 256, 512, 1024, 2048 or
+    4096. Bit j of word i is (src[16*i+j] == scalar), least-significant bit
+    first. All output bits are defined. No comparison mode other than EQ
+    is supported. Input and output buffers must be contiguous and disjoint.
+    """
+
+    core = al.CORE.VECTOR
+    pipe = al.PIPE.PIPE_V
+    mode = al.MODE.SIMD
+
+    def __init__(self, src, scalar, out=None):
+        assert out is not None, "compare_scalar requires an output bitmask"
+        size = _mask_source_size(src, "compare_scalar")
+        _check_mask_buffer(out, size, "compare_scalar")
+        self.arg_type["scalar"] = tl.float32
+        self.symbol = "custom_compare_scalar_float"
+        self.bitcode = CUSTOM_OPS_BITCODE
+
+
+@al.register_custom_op
+class gather_mask:
+    """Stably compact FP32 UB values selected by a packed uint16 bitmask.
+
+    src: FP32[N], N in (256, 512, 1024, 2048, 4096).
+    mask: uint16[N / 16], same bit order as compare_scalar.
+    Required out: [FP32[N], int32[8]], in UB. All eight count elements
+    contain the selected count. Only out[0][:count] is defined; its tail
+    is unspecified. Empty/full masks yield count 0/N. Inputs and outputs
+    must be contiguous and disjoint. There are no GM accesses or routing
+    assumptions; get_rsvd_cnt is consumed inside this primitive.
+    """
+
+    core = al.CORE.VECTOR
+    pipe = al.PIPE.PIPE_V
+    mode = al.MODE.SIMD
+
+    def __init__(self, src, mask, out=None):
+        assert out is not None and len(out) == 2, ("gather_mask requires out=[selected, count]")
+        size = _mask_source_size(src, "gather_mask")
+        _check_mask_buffer(mask, size, "gather_mask")
+        assert out[0].dtype == tl.float32 and out[0].shape == src.shape, (
+            "gather_mask selected output must match the source shape and dtype")
+        assert out[1].dtype == tl.int32 and len(
+            out[1].shape) == 1 and out[1].numel.value == 8, ("gather_mask count output must be int32[8]")
+        self.symbol = "custom_gather_mask_float"
+        self.bitcode = CUSTOM_OPS_BITCODE
+
+
+@al.register_custom_op
+class cast_int4_to_fp16:
+    """Unpack signed INT4 values from a 1D uint8 UB tensor into FP16.
+
+    src: uint8[N] in UB, N a power of two from 32 through 8192 bytes.
+    Required out: float16[2*N] in UB. Each source byte encodes two signed
+    two's-complement values in [-8, 7]; the low nibble is emitted first.
+    All output elements are defined. No zero-point, scale or layout
+    conversion is applied. Inputs and outputs must be contiguous,
+    32-byte aligned and disjoint. GM accesses stay in the caller.
+    """
+
+    core = al.CORE.VECTOR
+    pipe = al.PIPE.PIPE_V
+    mode = al.MODE.SIMD
+
+    def __init__(self, src, out=None):
+        assert out is not None, "cast_int4_to_fp16 requires an output buffer"
+        assert src.dtype == tl.uint8 and len(src.shape) == 1, ("cast_int4_to_fp16 requires a 1D uint8 UB source")
+        size = src.numel.value
+        assert size in (32, 64, 128, 256, 512, 1024, 2048, 4096,
+                        8192), ("cast_int4_to_fp16 requires a power-of-two byte count in [32, 8192]")
+        assert out.dtype == tl.float16 and len(out.shape) == 1 and out.numel.value == 2 * size, (
+            "cast_int4_to_fp16 requires a 1D float16 output with twice the source element count")
+        self.symbol = "custom_cast_int4_to_fp16"
+        self.bitcode = CUSTOM_OPS_BITCODE
+
+
+@al.register_custom_op
+class cube_begin:
+    """Wait for all pipelines on the calling CUBE core at a region boundary.
+
+    token: int32 scalar (for example program_id), ignored by the device body.
+    No outputs, allocation, cross-core synchronization or ownership change.
+    This is a local PIPE_ALL barrier, not a replacement for sync_block_*.
+    """
+
+    core = al.CORE.CUBE
+    pipe = al.PIPE.PIPE_ALL
+    mode = al.MODE.SIMD
+
+    def __init__(self, token):
+        self.arg_type["token"] = tl.int32
+        self.symbol = "custom_cube_begin"
+        self.bitcode = CUSTOM_OPS_BITCODE
+
+
+@al.register_custom_op
+class cube_end:
+    """Wait for all pipelines on the calling CUBE core at a region boundary.
+
+    token: int32 scalar (for example program_id), ignored by the device body.
+    No outputs, allocation, cross-core synchronization or ownership change.
+    This is a local PIPE_ALL barrier, not a replacement for sync_block_*.
+    """
+
+    core = al.CORE.CUBE
+    pipe = al.PIPE.PIPE_ALL
+    mode = al.MODE.SIMD
+
+    def __init__(self, token):
+        self.arg_type["token"] = tl.int32
+        self.symbol = "custom_cube_end"
+        self.bitcode = CUSTOM_OPS_BITCODE

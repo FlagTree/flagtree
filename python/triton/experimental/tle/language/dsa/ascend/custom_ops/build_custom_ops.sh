@@ -38,10 +38,23 @@ CUSTOM_OPS=(
   "sort_ops/sort_1d_pack.cpp:dav-c220-vec"
   "sort_ops/merge_pack_sort.cpp:dav-c220-vec"
   "sort_ops/unpack_sort.cpp:dav-c220-vec"
+  "mask_ops/compare_scalar.cpp:dav-c220-vec"
+  "mask_ops/gather_mask.cpp:dav-c220-vec"
+  "cast_ops/cast_int4_to_fp16.cpp:dav-c220-vec"
+  "sync_ops/cube_boundary.cpp:dav-c220-cube"
 )
 
 if [[ ! -d "${TEMPLATE_INCLUDE}" ]]; then
   echo "error: Ascend Template include directory not found: ${TEMPLATE_INCLUDE}" >&2
+  exit 1
+fi
+
+# AscendC headers used by the mask and cast primitives. Allow an explicit path
+# for CANN layouts that differ from the standard toolkit installation.
+CANN_ROOT="${ASCEND_HOME_PATH:-${CCEC_BIN_DIR}/..}"
+ASCENDC_INCLUDE_DIR="${ASCENDC_INCLUDE_DIR:-${CANN_ROOT}/$(uname -m)-linux/tikcpp/tikcfw}"
+if [[ ! -f "${ASCENDC_INCLUDE_DIR}/kernel_operator.h" ]]; then
+  echo "error: AscendC kernel_operator.h not found in ${ASCENDC_INCLUDE_DIR}" >&2
   exit 1
 fi
 
@@ -58,6 +71,11 @@ for entry in "${CUSTOM_OPS[@]}"; do
     --cce-generic-addrspace=off -mllvm -disable-llvm-optzns
     --cce-aicore-arch="${arch}" --cce-enable-print
     --cce-enable-sanitizer -std=c++17 -I "${TEMPLATE_INCLUDE}" )
+
+  if [[ "${src}" == mask_ops/* || "${src}" == cast_ops/* || "${src}" == sync_ops/* ]]; then
+    CCEC_COMMON_ARGS+=( -I "${ASCENDC_INCLUDE_DIR}"
+      -I "${ASCENDC_INCLUDE_DIR}/interface" -I "${ASCENDC_INCLUDE_DIR}/impl" )
+  fi
 
   bc="${SCRIPT_DIR}/${src%.cpp}.bc"
   mix_bc="${SCRIPT_DIR}/${src%.cpp}.mix.bc"

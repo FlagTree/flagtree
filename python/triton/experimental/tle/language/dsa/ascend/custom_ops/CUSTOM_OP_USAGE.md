@@ -13,6 +13,12 @@ custom_ops/
 ├── mem_ops/
 │   ├── gather_gm_to_l1.cpp         # GM → L1/CBUF 按索引行 gather
 │   └── gather_gm_to_ub.cpp         # GM → UB 按索引行 gather
+├── cast_ops/
+│   └── cast_int4_to_fp16.cpp       # packed signed INT4 → FP16
+├── mask_ops/
+│   ├── compare_scalar.cpp         # FP32 标量相等比较 → uint16 位掩码
+│   ├── gather_mask.cpp            # 按位掩码稳定压紧，并返回数量
+│   └── mask_common.h              # UB memref → AscendC LocalTensor
 └── sort_ops/
     ├── sort_1d_pack.cpp            # sort_1d_pack ABI 与路径分发
     ├── sort_common.h                # 共享 vmrgsort4 / proposal inline 工具
@@ -225,3 +231,78 @@ FLAGTREE_BACKEND=ascend MAX_JOBS=32 \
 cd /root/xcs_flagtree/python/triton/experimental/tle/language/dsa/ascend/custom_ops
 ./build_custom_ops.sh
 ```
+
+
+## compare_scalar / gather_mask
+
+这两个 VECTOR / PIPE_V 原语封装 AscendC 的 CompareScalar 和 GatherMask，
+不读取 GM，也不包含专家循环、路由偏移或写回逻辑。
+
+- `compare_scalar(src, scalar, out=mask)`：仅支持 FP32 相等比较（EQ）。
+  `src` 是 UB 中的一维 FP32[N]，`scalar` 为 FP32 标量；`mask` 是一维
+  uint16[N/16]。第 i 个 word 的第 j 位表示 `src[16*i+j] == scalar`，低位在前。
+- `gather_mask(src, mask, out=[selected, count])`：`src` 为一维 FP32[N]，
+  `mask` 与上述位序一致；`selected` 为一维 FP32[N]，`count` 为 int32[8]。
+  保持被选元素的原始顺序；八个 count 元素都保存有效数量，通常读取 count[0]。
+  仅 selected 的有效前缀有定义，尾部内容不保证。全零/全一掩码返回 0/N。
+- 初始支持 N=256、512、1024、2048、4096；掩码至少占一个 32 字节 UB block。
+  输入和输出均需连续、互不重叠。其他 dtype、rank、长度在注册接口中拒绝。
+- GatherMask 的硬件数量寄存器在该原语内部读取，不单独暴露依赖硬件状态的
+  `get_rsvd_cnt()` 接口。调用者负责处理尾部无效元素；例如非负专家 ID 可用 -1 填充。
+
+```python
+values = tl.load(Src + tl.arange(0, N))
+mask = tl.full((N // 16,), 0, tl.uint16)
+mask = tle.dsa.ascend.raw("compare_scalar", values, scalar, out=mask)
+selected = tl.full((N,), 0, tl.float32)
+count = tl.full((8,), 0, tl.int32)
+selected, count = tle.dsa.ascend.raw("gather_mask", values, mask,
+                                      out=[selected, count])
+found = tl.sum(tl.where(tl.arange(0, 8) == 0, count, 0), 0)
+tl.store(Out + tl.arange(0, N), selected, tl.arange(0, N) < found)
+```
+
+两个源文件均生成普通和 mix bitcode，并链接到统一 `custom_ops.bc`。
+构建时使用 CANN 的 AscendC 头文件，非标准安装可通过 CMake
+`-DASCENDC_INCLUDE_DIR=...` 或手动脚本的同名环境变量指定 `tikcfw` 目录。
+正确性测试：`python3 python/tutorials/tle/custom/test_mask_ops.py`。
+
+
+## cast_int4_to_fp16
+
+将 UB 中的 packed signed INT4 解包为 FP16，只封装 AscendC `Cast`。
+输入 `src` 是一维 `uint8[N]`，N 为 32 至 8192 的 2 的幂；输出 `out`
+必须是一维 `float16[2*N]`。输入、输出连续、32 字节对齐且互不重叠。
+每个字节先输出低 4 位，再输出高 4 位，均按二进制补码解释为 [-8, 7]。
+例如 `0x78` 输出 `[-8, 7]`，`0xF0` 输出 `[0, -1]`。
+
+```python
+packed = tl.load(X + tl.arange(0, N))  # uint8[N]
+values = tl.full((2 * N,), 0, tl.float16)
+values = tle.dsa.ascend.raw("cast_int4_to_fp16", packed, out=values)
+```
+
+该接口不处理 uint4b8 的零点、不乘 scale、不进行 GM 访问或 MoE 调度。
+若源格式是 uint4b8，需要调用方先转换成这里约定的 signed INT4 编码。
+普通类型转换、广播与乘法可以继续由 Triton 表达。
+
+普通及 mix 两套入口均构建到现有 `custom_ops.bc`。测试入口为
+`python python/tutorials/tle/custom/test_cast_ops.py`，也已接入
+`test_custom_ops.py`。测试包含全部字节编码、不同块大小、图重放以及参数校验。
+
+## Cube region boundaries
+
+`raw("cube_begin", tl.program_id(0))` and `raw("cube_end", tl.program_id(0))`
+are CUBE-only local `AscendC::PipeBarrier<PIPE_ALL>()` wrappers, with no output.
+The int32 token is ignored. Both have identical barrier semantics; their names
+mark entry and exit in caller code. They do not implement cross-core handshakes,
+allocate buffers, or initialize/finalize a GEMM. Use TLE `sync_block_set/wait`
+for Vector/Cube producer-consumer synchronization and `tl.dot` for computation.
+
+
+## Toolchain requirement
+
+These primitives use the native Ascend custom-op compilation path and the
+prebuilt `custom_ops.bc`. The selected toolchain must support that path,
+including `hivm.hir.custom` lowering and its calling convention. This package
+does not provide CANN 9.0 ABI adapters or IR rewriting.
