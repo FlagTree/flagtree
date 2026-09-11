@@ -228,10 +228,7 @@ def get_hook_instance(hook_name):
 
 
 def enable_flagtree_third_party(name):
-    if name in ["triton_shared", "flagcx"]:
-        return os.environ.get(f"USE_{name.upper()}", 'OFF') == 'ON'
-    else:
-        return os.environ.get(f"USE_{name.upper()}", 'ON') == 'ON'
+    return os.environ.get(f"USE_{name.upper()}", 'ON') == 'ON'
 
 
 def download_flagtree_third_party(name, condition, required=False, hook=None):
@@ -372,7 +369,8 @@ def write_flagtree_backend_file(triton_pkg_dir=None):
         triton_pkg_dir = Path(__file__).resolve().parents[1] / "triton"
     os.makedirs(triton_pkg_dir, exist_ok=True)
     dest_file = Path(triton_pkg_dir) / "FLAGTREE_BACKEND"
-    dest_file.write_text(flagtree_backend)
+    configs.set_flagtree_backend(configs.current_backend)
+    dest_file.write_text(configs.current_backend)
 
 
 def write_backend_file_to_build_lib(build_lib):
@@ -855,7 +853,8 @@ download_flagtree_third_party("flir", condition=(flagtree_backend == "tsingmicro
    refer to https://github.com/flagos-ai/FlagCX
 '''
 
-download_flagtree_third_party("flagcx", condition=(not flagtree_backend), hook="handle_flagcx", required=True)
+download_flagtree_third_party("flagcx", condition=(flagtree_backend == "nvidia" or not flagtree_backend),
+                              hook="handle_flagcx", required=True)
 
 download_flagtree_third_party("cuda-tile", condition=(flagtree_backend == "tileir"), required=True)
 
