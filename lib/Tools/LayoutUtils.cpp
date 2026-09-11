@@ -60,6 +60,7 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
       ll, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
 }
 
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // Backport from Triton main: triton/pull/11646.
 LinearLayout invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                                    ArrayRef<StringAttr> localDims) {
@@ -117,6 +118,8 @@ uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
   }
   return mask;
 }
+#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 LinearLayout
 ensureLayoutNotLargerThan(const LinearLayout &layout,

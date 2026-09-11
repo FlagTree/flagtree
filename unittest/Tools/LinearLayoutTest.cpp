@@ -368,6 +368,7 @@ TEST_F(LinearLayoutTest, FlattenOutsEdgeCases) {
             LinearLayout(BasesArray{}, {}));
 }
 
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // FlagTree regression coverage for triton/pull/11646.
 TEST_F(LinearLayoutTest, InvertAndComposeLocalBroadcastWarp) {
   auto reg = S("register"), lane = S("lane"), warp = S("warp");
@@ -421,6 +422,8 @@ TEST_F(LinearLayoutTest, InvertAndComposeLocalPreservesNonBroadcastBits) {
   EXPECT_EQ(remote.compose(src), remoteDst);
   EXPECT_FALSE(remote.sublayoutIsZero(lane, warp));
 }
+#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {
   LinearLayout l1({{S("in1"), {{2}, {1}, {4}}}}, {S("out")});

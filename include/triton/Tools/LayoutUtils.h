@@ -35,6 +35,7 @@ namespace mlir::triton {
 bool squareSublayoutIsIdentity(const LinearLayout &ll,
                                ArrayRef<StringAttr> dimNames);
 
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // Backport from Triton main: triton/pull/11646.
 // Compute B.invertAndCompose(A), mapping bits broadcast by A in localDims to
 // the corresponding input bits without changing the composition.
@@ -52,6 +53,8 @@ uint32_t getOutputBasisMask(const LinearLayout &layout,
 // dimensions.
 uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
                            ArrayRef<StringAttr> outDims);
+#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 // For each output dimension d, ensure that the layout's output size (i.e., its
 // codomain) does not exceed shape[d]. Do this without changing the size of the

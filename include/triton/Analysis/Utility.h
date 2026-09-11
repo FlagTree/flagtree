@@ -197,6 +197,7 @@ private:
   RankedTensorType dstTy;
 };
 
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // Backport from Triton main: triton/pull/11646.
 // For permutation cases, this struct represents the factorization of a
 // warp-local layout conversion into three components: a register-only
@@ -247,6 +248,46 @@ struct DecomposedWarpConversion {
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
                                   RankedTensorType dstTy, int bitwidth);
+
+#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
+// This struct represents the factorization of a warp-local layout conversion
+// into three components: a register-only permutation, a lane-only permutation,
+// and a set of swaps between lane and register basis vectors. Algebraically, it
+// represents the factorization P = P_mixed \circ P_lane \circ P_reg. It is used
+// to aid in the implementation of the layout conversion using warp-shuffles.
+//
+// `pReg` and `pLane` are square layouts each with only one input and output
+// dimension. `mixedTranspositions` holds pairs of integers (i, j)
+// corresponding to the transposition (r_i l_j) of the i-th register basis
+// vector with the j-th lane basis vector along with 16-bit selectors for byte
+// permute instructions (where each of the four nybbles is in the range [0, 7]).
+// `nPack` gives the number of basis vectors that can be used for register
+// packing while ensuring packed elements arrive at the same destination lane.
+struct DecomposedWarpConversion {
+  struct TranspositionInfo {
+    std::pair<int, int> transposition;
+    uint16_t topPreSel = 0x3210;
+    uint16_t botPreSel = 0x7654;
+    uint16_t topPostSel = 0x3210;
+    uint16_t botPostSel = 0x7654;
+  };
+
+  triton::LinearLayout pReg, pLane;
+  SmallVector<TranspositionInfo> mixedTranspositions;
+  int nPack;
+};
+
+// Produces a decomposition of a permutation describing a warp-local layout
+// conversion as described in `DecomposedWarpConversion` above.
+//
+// This function handles cases where the numbers of register and lane basis
+// vectors differ between the two layouts. This is done by padding the smaller
+// dimension(s) with zero vectors, ensuring that the layout conversion can be
+// represented as a permutation.
+DecomposedWarpConversion
+getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
+                                  RankedTensorType dstTy, int bitwidth);
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 // Decomposes a reshape into simpler pieces.
 //

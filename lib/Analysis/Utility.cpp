@@ -273,6 +273,7 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   return elementSizeInBytes * getScratchSizeInElems();
 }
 
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // Backport from Triton main: triton/pull/11646.
 static void computeTranspositionSelectors(
     SmallVector<DecomposedWarpConversion::TranspositionInfo>
@@ -752,6 +753,454 @@ static void computeTranspositionSelectors(
   // Selectors are updated in place; no result vector is returned.
 }
 
+#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
+static SmallVector<DecomposedWarpConversion::TranspositionInfo>
+getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
+                          std::vector<std::vector<int32_t>> &regBases,
+                          int bitwidth);
+
+DecomposedWarpConversion
+getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
+                                  RankedTensorType dstTy, int bitwidth) {
+  // Two layouts, ll_src and ll_dst, representing the same tensor can be
+  // viewed as surjections of GF(2) vector spaces:
+  //
+  //            ll_src: H_src -> M   and   ll_dst: H_dst -> M,
+  //
+  // where each is represented by a 'subpermutation' matrix, i.e., a permutation
+  // matrix with zero columns possibly inserted. A layout conversion can be
+  // viewed as a map P': H_src -> H_dst which factors ll_src = ll_dst \circ P'.
+  //
+  // For a conversion not needing data movement between different warps, we
+  // choose the following representation, where P is a permutation matrix and
+  // K_1 and K_2 are (possibly trivial) spaces meant to ensure equally sized
+  // lane and register dimensions between layouts:
+  //                                  P
+  //     H_src -> H_src \oplus K_1 -------> H_dst \oplus K_2 -> H_dst.
+  //
+  // As a permutation, P can be viewed as a product of cycles permuting lane and
+  // register index bits. Any such permutation can be expressed as a composition
+  //
+  //                    P = P_mixed \circ P_lane \circ P_reg,
+  //
+  // where P_mixed is a product of disjoint transpositions (r_i l_j) between
+  // lane and register bits and where P_lane and P_reg are permutations purely
+  // involving lane bits and register bits, respectively. Such a representation
+  // is not unique, and we choose the factorization method which slices out
+  // subsequences of consecutive lane bits from cycles involving both bit types.
+  // Further explanation of this method is below.
+  //
+  // The decomposition is performed in three stages. First, we compute the
+  // permutation matrix `P` by using `invertAndCompose` to generate a skeleton
+  // and then fill in any zero columns. Second, we walk the cycles of `P` to
+  // factor out mixed transpositions to build `mixedTranspositions`, `pReg`, and
+  // `pLane`. Finally, we determine any selectors needed for byte permute
+  // instructions in place of `selp` instructions when packing registers.
+
+  // We remove any broadcasting in the register dimensions of the layouts before
+  // forming the permutation `P` as the components of the decomposition directly
+  // inform the number of emitted instructions, and leaving broadcasting in
+  // would unnecessarily inflate the count.
+  auto srcLayout = toLinearLayout(srcTy);
+  auto dstLayout = toLinearLayout(dstTy);
+  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
+  auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
+  srcLayout = removeBroadcastSrc.apply(srcLayout);
+  dstLayout = removeBroadcastDst.apply(dstLayout);
+
+  // We want to describe the conversion from `srcLayout` to `dstLayout` as a
+  // permutation. Since this requires that each input dimension have the same
+  // size in each of the layouts, we first pad the lane and register dimensions
+  // with zero vectors if needed.
+  auto *ctx = srcTy.getContext();
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+
+  // Determine the target sizes of the register and lane dimensions for padding.
+  int nSrcRegBases = srcLayout.getInDimSizeLog2(kReg);
+  int nDstRegBases = dstLayout.getInDimSizeLog2(kReg);
+  int nSrcLaneBases = srcLayout.getInDimSizeLog2(kLane);
+  int nDstLaneBases = dstLayout.getInDimSizeLog2(kLane);
+  int nRegBases = std::max(nSrcRegBases, nDstRegBases);
+  int nLaneBases = std::max(nSrcLaneBases, nDstLaneBases);
+  // Restrict attention to the input dimensions which matter.
+  SmallVector<StringAttr> inDimNames{kReg, kLane};
+  auto outDimNames = llvm::to_vector(srcLayout.getOutDimNames());
+  auto S = srcLayout.sublayout(inDimNames, outDimNames);
+  auto T = dstLayout.sublayout(inDimNames, outDimNames);
+  // Conditionally pad.
+  if (nSrcRegBases != nDstRegBases || nSrcLaneBases != nDstLaneBases) {
+    auto padWithZeros = [&](const LinearLayout &ll) {
+      auto newBases = ll.getBases();
+      auto padDim = [&](StringAttr dim, int dimSize) {
+        auto &dimBases = newBases[dim];
+        dimBases.reserve(dimSize);
+        for (int i = ll.getInDimSizeLog2(dim); i < dimSize; ++i)
+          dimBases.emplace_back(outDimNames.size(), 0);
+      };
+      padDim(kReg, nRegBases);
+      padDim(kLane, nLaneBases);
+      // Surjectivity is not expected in general since we do not consider
+      // the 'warp' and 'block' dimensions of the original layouts.
+      return LinearLayout(std::move(newBases), ll.getOutDims(),
+                          /*requireSurjective=*/false);
+    };
+    S = padWithZeros(S);
+    T = padWithZeros(T);
+  }
+
+  // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
+  // fill in zero columns, prioritizing producing fixed points. As we only need
+  // the basis vectors of `P`, we never actually produce the LinearLayout.
+  auto pBases = S.invertAndCompose(T).getBases();
+
+  // Find the common and uncommon zeros of S and T
+  S = S.flattenOuts();
+  T = T.flattenOuts();
+  SmallVector<std::pair<int32_t, int32_t>> srcFreeZeros;
+  SmallVector<std::pair<int32_t, int32_t>> dstFreeZeros;
+  for (auto [dimIdx, dim] : llvm::enumerate(inDimNames)) {
+    for (int inIdx = 0; inIdx < S.getInDimSizeLog2(dim); ++inIdx) {
+      int sVal = S.getBasis(dim, inIdx)[0];
+      int tVal = T.getBasis(dim, inIdx)[0];
+      if (sVal == 0 && tVal == 0) {
+        pBases[dim][inIdx][dimIdx] = 1 << inIdx;
+      } else if (sVal == 0) {
+        srcFreeZeros.emplace_back(dimIdx, inIdx);
+      } else if (tVal == 0) {
+        dstFreeZeros.emplace_back(dimIdx, inIdx);
+      }
+    }
+  }
+  // Fill in non-fixed-point zero vectors
+  for (auto [srcZeroLoc, dstZeroLoc] : llvm::zip(srcFreeZeros, dstFreeZeros)) {
+    auto [srcDimIdx, srcIdx] = srcZeroLoc;
+    auto [dstDimIdx, dstIdx] = dstZeroLoc;
+    auto inDim = inDimNames[srcDimIdx];
+    pBases[inDim][srcIdx][dstDimIdx] = 1 << dstIdx;
+  }
+
+  // We walk the cycles of `P` to build the bases for `pReg` and `pLane` while
+  // factoring out mixed transpositions from cycles that include both register
+  // and lane basis vectors. `pReg` and `pLane` themselves only have one input
+  // and output dimension each.
+  LinearLayout::BasesT pRegBases, pLaneBases;
+  auto &regBases = pRegBases[kReg];
+  auto &laneBases = pLaneBases[kLane];
+  regBases.resize(nRegBases, {0});
+  laneBases.resize(nLaneBases, {0});
+  SmallVector<std::pair<int, int>> mixedTranspositions;
+
+  llvm::BitVector visited(nRegBases + nLaneBases, false);
+  auto flatIdx = [&](StringAttr dim, int32_t index) {
+    return (dim == kReg) ? index : nRegBases + index;
+  };
+
+  for (auto dim : inDimNames) {
+    int inDimSize = S.getInDimSizeLog2(dim);
+    for (int i = 0; i < inDimSize; ++i) {
+      if (visited.test(flatIdx(dim, i)))
+        continue;
+
+      // Start a new cycle, tracking the entry basis vector and the 'current'
+      // one as we walk the cycle.
+      StringAttr entryDim = dim;
+      int32_t entryIdx = i;
+      StringAttr currDim = entryDim;
+      int32_t currIdx = entryIdx;
+
+      // We slice out subsequences of consecutive lane basis vectors appearing
+      // in mixed cycles by factoring out transpositions (r_i l_j) as in
+      //
+      // (.. r_m l_j .. l_k r_i ..) = (r_i l_j) * (.. r_m r_i ..)(l_j .. l_k).
+      //
+      // The permutations are applied right-to-left, and the block `l_j .. l_k`
+      // indicates a contiguous subsequence of lane basis vectors. Note that the
+      // transposition does not commute with the other two cycles.
+      //
+      // The following variables are used to track the start and end points of
+      // such subsequences.
+      int32_t /*r_m*/ regStartIdx = -1;
+      int32_t /*l_j*/ laneStartIdx = -1;
+      int32_t /*l_k*/ laneEndIdx = -1;
+      int32_t /*r_i*/ regEndIdx = -1;
+
+      do {
+        // Determine the next basis vector in the current cycle.
+        visited.set(flatIdx(currDim, currIdx));
+        auto nextVec = pBases.lookup(currDim)[currIdx];
+        StringAttr nextDim;
+        int32_t nextIdx;
+        for (auto [nextDimIdx, nextVal] : llvm::enumerate(nextVec)) {
+          if (nextVal != 0) {
+            nextDim = inDimNames[nextDimIdx];
+            nextIdx = llvm::Log2_32(nextVal);
+          }
+        }
+        // Set a `pReg` or `pLane` vector, or mark an r->l or l->r transition.
+        if (currDim == kReg && nextDim == kReg) {
+          regBases[currIdx][0] = 1 << nextIdx;
+        } else if (currDim == kLane && nextDim == kLane) {
+          laneBases[currIdx][0] = 1 << nextIdx;
+        } else if (currDim == kReg && nextDim == kLane) {
+          regStartIdx = currIdx;
+          laneStartIdx = nextIdx;
+        } else {
+          regEndIdx = nextIdx;
+          laneEndIdx = currIdx;
+        }
+        // If a subsequence of the form (.. r_m l_j .. l_k r_i ..) has been
+        // found, perform the prescribed factorization.
+        if (regEndIdx >= 0) {
+          // Assign r_m to map to r_i as in (.. r_m r_i ..).
+          regBases[regStartIdx][0] = 1 << regEndIdx;
+          // Assign l_k to map to l_j as in (l_j .. l_k).
+          laneBases[laneEndIdx][0] = 1 << laneStartIdx;
+          // Record (r_i l_j) as a factor.
+          mixedTranspositions.emplace_back(regEndIdx, laneStartIdx);
+          // Reset the auxiliary variables.
+          regStartIdx = laneStartIdx = laneEndIdx = regEndIdx = -1;
+        }
+
+        currDim = nextDim;
+        currIdx = nextIdx;
+      } while (flatIdx(currDim, currIdx) != flatIdx(entryDim, entryIdx));
+    }
+  }
+  assert(visited.all() && "Cycle walk incomplete");
+
+  // Determine degree of packing and selectors.
+  int m = mixedTranspositions.size();
+  int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
+  int nPack = std::min(nPackPrelim, nRegBases - m);
+  auto processedTranspos =
+      getTranspositionSelectors(mixedTranspositions, regBases, nPack);
+
+  auto pReg = LinearLayout(std::move(pRegBases), {{kReg, 1 << nRegBases}},
+                           /*requireSurjective=*/true);
+  auto pLane = LinearLayout(std::move(pLaneBases), {{kLane, 1 << nLaneBases}},
+                            /*requireSurjective=*/true);
+  return {std::move(pReg), std::move(pLane), std::move(processedTranspos),
+          nPack};
+}
+
+static SmallVector<DecomposedWarpConversion::TranspositionInfo>
+getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
+                          std::vector<std::vector<int32_t>> &regBases,
+                          int nPack) {
+  // When possible, we fuse permutations of 'low' register bits together
+  // with a mixed transposition, resulting in byte permute instructions instead
+  // of `select` instructions. After processing, no low register bits appear in
+  // the returned list of mixed transpositions.
+
+  SmallVector<DecomposedWarpConversion::TranspositionInfo> ret;
+  ret.reserve(mixedTranspositions.size());
+  if (nPack == 0) {
+    for (auto &t : mixedTranspositions)
+      ret.push_back(DecomposedWarpConversion::TranspositionInfo{t});
+    return ret;
+  }
+  // Consider for example the cycle
+  //
+  //        (r2 r1 l0 r0 r3) = (r0 l0) * (r2 r1 r0 r3)
+  //                         = (r3 r0) * (r3 l0) * (r3 r1) * (r3 r2)
+  //
+  // with `nPack` = 2 so that r0 and r1 are considered low bits. We want to
+  // factor out any low bits from `pReg` and to incorporate them into the data
+  // of the mixed transposition. After processing, the contribution to `pReg`
+  // is reduced to (r3 r2) and the mixed transposition recorded is (r3 l0), with
+  // the effects of (r3 r0) and (r3 r1) encoded in the returned selectors.
+  // In general, low bits occurring immediately before l_j modify the selectors
+  // of the `prmt` before the shuffle, while low bits occurring immediately
+  // after l_k modify the selectors of the `prmt` after the shuffle. Unmodified
+  // selectors correspond to `select` instructions.
+  // Cases like (l0 r0 r1) must be handled by selecting a 'partner' bit that is
+  // not used in another mixed transposition and conjugating out a low bit:
+  //
+  //           (l0 r0 r1) = (r2 r1) * (l0 r0 r2) * (r2 r1)
+  //                      = (r2 r1) * (r2 r0) * (r2 l0) * (r2 r1).
+  //
+  // Conjugation does not affect `pReg`. However, the set of fused mixed and
+  // low-bit transpositions is noncommutative in cases where there are no
+  // intervening high bits in between distinct sequences of lane bits as the
+  // paired low bit is used in modifying the selectors of both factors:
+  //
+  //    (l0 r0 r1 l1 r2) = (r3 r0)(r3 l0)(r3 r0) * (r2 l1)(r2 r1)(r2 r0).
+  //
+  // The `*` is standard composition of permutations. The groupings correspond
+  // to different `TranspositionInfo` objects. For example, the permutation
+  // `(r3 r0)(r3 l0)(r3 r0) = (r0 l0)` has mixed transposition `(r3 l0)` with
+  // pre- and post-shuffle selectors determined by the `r0` bit.
+  // Processing of mixed transpositions is performed by determining the `head`
+  // and `tail` of an excision of bits in cycles of `pReg` and building lists
+  // of low bits acting as selector modifiers. In the noncommutative cases, we
+  // opt to restrict the number of post-shuffle modifiers to one.
+
+  auto permuteSelector = [nPack](uint16_t sel, int bitIdx) {
+    int lo = bitIdx + (2 - nPack);
+    uint16_t maskHi = 0x4444;
+    uint16_t maskLo = 0x1111 << lo;
+    uint16_t fixed = sel & ~maskHi & ~maskLo;
+    int shift = 2 - lo;
+    return fixed | ((maskHi & sel) >> shift) | ((maskLo & sel) << shift);
+  };
+  auto generateSelectors = [&](int head, int tail, auto &&lowBits) {
+    uint16_t topSel = 0x3210;
+    uint16_t botSel = 0x7654;
+    for (auto lowBit : lowBits) {
+      topSel = permuteSelector(topSel, lowBit);
+      botSel = permuteSelector(botSel, lowBit);
+      if (lowBit != head && lowBit != tail)
+        regBases[lowBit][0] = 1 << lowBit;
+    }
+    return std::pair{topSel, botSel};
+  };
+
+  llvm::SmallSet<int32_t, 6> pairedRegBits;
+  for (auto [rBit, lBit] : mixedTranspositions)
+    pairedRegBits.insert(rBit);
+
+  // A low bit in a mixed transposition must be replaced by a high bit. The
+  // choice of high bit can affect instruction count. If the first high bit
+  // found when walking along `pReg` is unpaired, then that bit is the best
+  // choice. We reorder the transpositions to guarantee this during processing.
+  auto next = [&](int b) { return llvm::Log2_32(regBases[b][0]); };
+  auto nextHighFree = [&](auto p) {
+    int curr = p.first;
+    do {
+      if (curr >= nPack)
+        return curr == p.first || !pairedRegBits.contains(curr);
+      curr = next(curr);
+    } while (curr != p.first);
+    return false;
+  };
+  std::stable_partition(mixedTranspositions.begin(), mixedTranspositions.end(),
+                        nextHighFree);
+  // If `P` has an isolated low-bit mixed transposition, and `pReg` maps a low
+  // bit to an open high bit, then the high bit should be used as the partner.
+  auto prev = [&](int b) {
+    int tail = b;
+    int curr = next(b);
+    while (curr != b) {
+      tail = curr;
+      curr = next(curr);
+    }
+    return tail;
+  };
+  auto findPartner = [&](int lowBit, auto &preShufLoBits) {
+    if (nPack == 2) {
+      int otherLow = 1 - lowBit;
+      int b = next(otherLow);
+      if (next(lowBit) == lowBit && b >= nPack && !pairedRegBits.contains(b) &&
+          !pairedRegBits.contains(otherLow)) {
+        preShufLoBits.push_back(otherLow);
+        regBases[prev(otherLow)][0] = 1 << b;
+        pairedRegBits.insert(b);
+        return b;
+      }
+    }
+    int potentialPartner = nPack;
+    while (pairedRegBits.contains(potentialPartner))
+      ++potentialPartner;
+    pairedRegBits.insert(potentialPartner);
+    return potentialPartner;
+  };
+
+  for (auto p : mixedTranspositions) {
+    int rBit = p.first;
+    int lBit = p.second;
+    SmallVector<int> cycle;
+    int currBit = rBit;
+    do {
+      cycle.push_back(currBit);
+      currBit = next(currBit);
+    } while (currBit != rBit);
+
+    // Find any low register bits adjacent to the excised lane bits which aren't
+    // used in other mixed transpositions.
+    auto isBoundary = [&](int bit) {
+      return bit >= nPack || (pairedRegBits.contains(bit) && bit != rBit);
+    };
+    auto forwardEnd = llvm::find_if(cycle, isBoundary);
+    auto backwardEnd = std::find_if(cycle.rbegin(), cycle.rend(), isBoundary);
+    SmallVector<int> postShufLoBits(cycle.begin(), forwardEnd);
+    SmallVector<int> preShufLoBits(cycle.rbegin(), backwardEnd);
+    int head;
+    int tail;
+    int partnerBit = -1;
+
+    // Case work to determine what to conjugate out.
+    if (forwardEnd != cycle.end()) {
+      if (*forwardEnd == rBit || !pairedRegBits.contains(*forwardEnd)) {
+        // End at original or unpaired high bit. E.g. (l0 r0 r2) or (l0 r2)
+        // No conjugation needed.
+        head = partnerBit = *forwardEnd;
+      } else {
+        // End at different paired bit. E.g. (l0 r0 r1 l1 r2)
+        // Non-leading factor in a noncommutative case.
+        // Conjugate by first low bit in forward walk.
+        head = postShufLoBits.front();
+        preShufLoBits.push_back(head);
+        postShufLoBits.resize(1);
+        pairedRegBits.erase(head);
+      }
+      tail = *backwardEnd;
+      if (tail < nPack && pairedRegBits.contains(tail)) {
+        // Non-terminal factor in a noncommutative case.
+        preShufLoBits.insert(preShufLoBits.begin(), tail);
+      }
+    } else {
+      if (next(rBit) != rBit && pairedRegBits.contains(next(rBit))) {
+        // Symmetric noncommutative case. E.g. (l0 r0 l1 r1)
+        preShufLoBits.erase(preShufLoBits.begin());
+        postShufLoBits.pop_back();
+        pairedRegBits.erase(postShufLoBits.front());
+        head = rBit;
+        tail = next(rBit);
+      } else {
+        // Isolated low bits with single mixed transposition. E.g. (l0 r0 r1)
+        if (postShufLoBits.size() == 2)
+          postShufLoBits.pop_back();
+        head = tail = preShufLoBits.front();
+      }
+    }
+
+    if (partnerBit < 0)
+      partnerBit = findPartner(head, preShufLoBits);
+    auto [topPostSel, botPostSel] =
+        generateSelectors(head, tail, llvm::reverse(postShufLoBits));
+    auto [topPreSel, botPreSel] = generateSelectors(head, tail, preShufLoBits);
+    regBases[tail][0] = 1 << head;
+
+    DecomposedWarpConversion::TranspositionInfo info;
+    info.transposition = {partnerBit, lBit};
+    info.topPreSel = topPreSel;
+    info.botPreSel = botPreSel;
+    info.topPostSel = topPostSel;
+    info.botPostSel = botPostSel;
+
+    // In noncommutative cases, post-shuffle selectors of non-leading terms come
+    // from a single low bit by design, so we can determine where to insert a
+    // non-terminal factor by examining processed selectors.
+    if (!preShufLoBits.empty()) {
+      uint16_t sel = (nPack - preShufLoBits.back()) == 2 ? 0x6240 : 0x5410;
+      auto it =
+          llvm::find_if(ret, [&](auto &t) { return t.topPostSel == sel; });
+      ret.insert(it, info);
+    } else {
+      ret.push_back(info);
+    }
+  }
+  if (nPack == 2 && regBases[0][0] == 2 && regBases[1][0] == 1 && ret.size()) {
+    // If (r0 r1) was originally in `P`, fold it into a mixed transposition.
+    auto &t = ret.back();
+    t.topPostSel = 0x3120;
+    t.botPostSel = 0x7564;
+  }
+  return ret;
+}
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
+
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
 getReshapeDecomposition(ArrayRef<int64_t> srcShape,
                         ArrayRef<int64_t> dstShape) {
@@ -1045,6 +1494,7 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
+#ifdef __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 // FlagTree adaptation for triton/pull/11646.
 // Backport the upstream permutation guard as a local helper.
 static bool hasPowerOfTwoBases(const LinearLayout &ll) {
@@ -1106,6 +1556,21 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   return canShuffle && getWarpLayoutConvertDecomposition(srcTy, dstTy, 32)
                                .mixedTranspositions.size() < 2;
 }
+
+#else  // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
+bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto layout = minimalCvtLayout(srcTy, dstTy);
+  MLIRContext *ctx = srcTy.getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  if (to_vector(layout.getOutDimNames()) ==
+      SmallVector<StringAttr, 2>{kRegister, kLane}) {
+    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, 32);
+    return (factors.mixedTranspositions.size() < 2);
+  }
+  return false;
+}
+#endif // __FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   return !cvtReordersRegisters(srcTy, dstTy) &&
