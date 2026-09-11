@@ -35,15 +35,14 @@ import triton.experimental.tle.language as tle
 def _all_gather_push_2d_kernel(
     local_ptr,
     ag_ptr,
-    ag_dev_mem,
-    dev_comm_dptr,  # DevComm handle, used to query the current rank within the kernel
+    dist_ctx: tl.constexpr,
     mesh: tl.constexpr,
     ELEM_PER_RANK: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
     peer = tl.program_id(0)
     block_id = tl.program_id(1)
-    local_rank = tle.shard_id(mesh, "device", comm_ptr=dev_comm_dptr)
+    local_rank = tle.shard_id(mesh, "device", device_dptr=dist_ctx)
     dst_base = local_rank * ELEM_PER_RANK
     offsets = block_id * BLOCK + tl.arange(0, BLOCK)
     mask = offsets < ELEM_PER_RANK
@@ -51,7 +50,7 @@ def _all_gather_push_2d_kernel(
 
     if peer != local_rank:
         dst_ptr = tle.remote(
-            ag_dev_mem,
+            dist_ctx,
             shard_id=peer,
             space="device",
             dtype=ag_ptr.dtype.element_ty,
@@ -62,68 +61,42 @@ def _all_gather_push_2d_kernel(
         tl.store(ag_ptr + dst_base + offsets, vals, mask=mask)
 
 
-@triton.jit(do_not_specialize=["signal_target"])
+@triton.jit
 def _all_gather_signal_kernel(
-    signal_ptr,
-    signal_dev_mem,
-    dev_comm_dptr,
+    dist_ctx: tl.constexpr,
     mesh: tl.constexpr,
-    signal_target,
 ):
     peer = tl.program_id(0)
-    local_rank = tle.shard_id(mesh, "device", comm_ptr=dev_comm_dptr)
+    local_rank = tle.shard_id(mesh, "device", device_dptr=dist_ctx)
 
     if peer != local_rank:
-        remote_signal_ptr = tle.remote(
-            signal_dev_mem,
-            shard_id=peer,
-            space="device",
-            dtype=tl.int32,
-            offset=local_rank,
-        )
-        # Publish completion with system-scope release semantics. The receiver
-        # uses an acquire atomic before consuming the corresponding shard.
-        tl.atomic_xchg(
-            remote_signal_ptr,
-            signal_target,
-            sem="release",
-            scope="sys",
-        )
-    else:
-        tl.atomic_xchg(
-            signal_ptr + local_rank,
-            signal_target,
-            sem="release",
-            scope="sys",
+        # Every remote rank contributes one completion to slot 0. The paired
+        # signal_wait below waits for all remote contributors.
+        tle.signal(
+            dist_ctx,
+            peer,
+            slot_id=0,
+            op="inc",
+            space="intra_node",
+            group_kind="block",
+            context_idx=0,
         )
 
 
 @triton.jit(do_not_specialize=["signal_target"])
 def _all_gather_wait_kernel(
-    signal_ptr,
-    local_rank,
+    dist_ctx: tl.constexpr,
     signal_target,
-    WORLD_SIZE: tl.constexpr,
 ):
     """Wait until every remote shard in this rank's output is ready."""
-    peer = tl.program_id(0)
-    if peer < WORLD_SIZE and peer != local_rank:
-        # atomic_add(0) is an acquire load expressed with Triton's public
-        # atomic API. GE is required because a faster peer may already have
-        # published a later epoch.
-        observed = tl.atomic_add(
-            signal_ptr + peer,
-            0,
-            sem="acquire",
-            scope="sys",
-        )
-        while observed < signal_target:
-            observed = tl.atomic_add(
-                signal_ptr + peer,
-                0,
-                sem="acquire",
-                scope="sys",
-            )
+    tle.signal_wait(
+        dist_ctx,
+        slot_id=0,
+        wait_kind="signal",
+        target=signal_target,
+        group_kind="block",
+        context_idx=0,
+    )
 
 
 def _rank_print(rank: int, *items):
@@ -158,19 +131,15 @@ def main():
 
     with torch.cuda.use_mem_pool(mem_pool):
         ag_buffer = torch.empty((M, N), dtype=dtype, device=device)
-        signal = torch.empty((world_size, ), dtype=torch.int32, device=device)
 
-    dev_comm_dptr, ag_dev_mem = tle.create_comm_tensor(ag_buffer)
-    _, signal_dev_mem = tle.create_comm_tensor(signal)
-    # ag_dev_mem is the device-side DevMem handle address created by FlagCX/TLE,
-    # signal_dev_mem is used to remotely write to the peer's signal[local_rank].
-    # dev_comm_dptr is used on the device side by tle.shard_id(..., comm_ptr=...) to query the current rank.
+    # dist_ctx owns the registered all-gather buffer plus the FlagCX DevComm
+    # handles used by tle.remote, tle.signal, and tle.signal_wait.
+    dist_ctx = tle.create_dist_tensor(ag_buffer)
 
     golden = torch.empty((M, N), dtype=dtype, device=device)
     dist.all_gather_into_tensor(golden, local_data)
 
     ag_buffer.fill_(-1)
-    signal.zero_()
 
     torch.cuda.synchronize()
     dist.barrier()
@@ -183,33 +152,28 @@ def main():
     # The signal is written by a second kernel so it is ordered after all copy chunks in this stream.
     copy_grid = (world_size, num_blocks)
     signal_grid = (world_size, )
+    wait_grid = (1, )
     mesh = tle.device_mesh(tle.MeshConfig(device=world_size))
-    signal_target = 1
+    signal_target = world_size - 1
 
     def launch_tle_all_gather():
         _all_gather_push_2d_kernel[copy_grid](
             local_data,
             ag_buffer,
-            ag_dev_mem,
-            dev_comm_dptr,
+            dist_ctx,
             mesh,
             ELEM_PER_RANK=elem_per_rank,
             BLOCK=block,
             num_warps=4,
         )
         _all_gather_signal_kernel[signal_grid](
-            signal,
-            signal_dev_mem,
-            dev_comm_dptr,
+            dist_ctx,
             mesh,
-            signal_target,
             num_warps=4,
         )
-        _all_gather_wait_kernel[signal_grid](
-            signal,
-            rank,
+        _all_gather_wait_kernel[wait_grid](
+            dist_ctx,
             signal_target,
-            WORLD_SIZE=world_size,
             num_warps=1,
         )
 
@@ -218,7 +182,6 @@ def main():
     dist.barrier()
 
     _rank_print(rank, f"Rank {rank} FlagTree Result:", ag_buffer)
-    _rank_print(rank, f"Rank {rank} FlagTree Signal:", signal)
     assert torch.allclose(golden, ag_buffer, atol=1e-5, rtol=1e-5)
     _rank_print(rank, f"Rank {rank} Pass!")
 
