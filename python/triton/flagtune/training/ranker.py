@@ -317,9 +317,7 @@ def _group_plan(
                     # partial models exposed their A/B/P identity separately.
                     record_model_dtypes = [*input_dtypes, *output_dtypes]
                 if not isinstance(record_model_dtypes, list):
-                    raise TrainingDataError(
-                        f"benchmark data line {line_number} model_dtypes must be a list"
-                    )
+                    raise TrainingDataError(f"benchmark data line {line_number} model_dtypes must be a list")
                 from triton.flagtune.contract.identity import make_dtype_key
 
                 if make_dtype_key(record_model_dtypes) != dtype_key:
@@ -420,10 +418,7 @@ def prepare_ranking_data(
         route_binding = getattr(variant, "route_binding", None)
         if route_binding:
             accepted_variants.add(str(route_binding))
-        if (
-            ranking_group.get("operator_id") != variant.op_id
-            or ranking_group.get("variant") not in accepted_variants
-        ):
+        if (ranking_group.get("operator_id") != variant.op_id or ranking_group.get("variant") not in accepted_variants):
             raise TrainingDataError(f"benchmark data line {selected[0][0]} ranking_group does not "
                                     f"match {variant.op_id}/{variant.name}")
         if ranking_group.get("dimensions") != first_inputs:

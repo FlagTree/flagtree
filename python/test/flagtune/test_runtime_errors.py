@@ -30,9 +30,11 @@ def test_boundary_does_not_swallow_process_control(exception):
 
 def test_decorator_normalizes_source_error():
     original = FileNotFoundError("package missing")
+
     @flagtune_errors(ModelValidationError)
     def fail():
         raise original
+
     with pytest.raises(ModelValidationError) as caught:
         fail()
     assert caught.value.__cause__ is original
@@ -48,8 +50,10 @@ def test_proposer_rejects_nonfinite_benchmark(samples):
 def test_proposer_does_not_swallow_benchmark_exception():
     from triton.flagtune.runtime.proposer import _benchmark_candidate
     original = RuntimeError("kernel compile error")
+
     def fail(*args):
         raise original
+
     with pytest.raises(BenchmarkError) as caught:
         _benchmark_candidate(fail, {"BLOCK": 1})
     assert caught.value.__cause__ is original

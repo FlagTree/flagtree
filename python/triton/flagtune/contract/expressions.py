@@ -116,12 +116,8 @@ def compile_expression(
     if isinstance(expr, Mapping):
         if set(expr) == {"literal"}:
             value = expr["literal"]
-            if not allow_literals or not (
-                value is None or isinstance(value, (str, int, float, bool))
-            ):
-                raise SafeExpressionError(
-                    f"{location}.literal must be a scalar string, number, boolean, or null"
-                )
+            if not allow_literals or not (value is None or isinstance(value, (str, int, float, bool))):
+                raise SafeExpressionError(f"{location}.literal must be a scalar string, number, boolean, or null")
             return Literal(value)
         if not allow_calls:
             raise SafeExpressionError(f"{location} does not allow operation expressions")

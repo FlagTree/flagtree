@@ -111,9 +111,7 @@ class GASearcher:
         if legal_configs is not None:
             normalized = [self._flatten_config(config) for config in legal_configs]
             self._legal_configs = [config for config in normalized if self.param_space.validate(config)]
-            self._legal_keys = {
-                self.param_space.config_key(config) for config in self._legal_configs
-            }
+            self._legal_keys = {self.param_space.config_key(config) for config in self._legal_configs}
 
     def generate(self, entries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Generate a bounded batch of unique candidate history entries.
@@ -164,11 +162,7 @@ class GASearcher:
             known_entries.extend(offspring)
             generated_history.extend(offspring)
         if self._legal_configs is not None and len(generated_history) < generated_limit:
-            unseen = [
-                config
-                for config in self._legal_configs
-                if self.param_space.config_key(config) not in known_keys
-            ]
+            unseen = [config for config in self._legal_configs if self.param_space.config_key(config) not in known_keys]
             self._rng.shuffle(unseen)
             for config in unseen[:generated_limit - len(generated_history)]:
                 entry = self._clone_entry(base_entry, config, self.ga_params.generations, "legal")

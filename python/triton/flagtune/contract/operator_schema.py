@@ -33,7 +33,7 @@ import json
 import math
 from dataclasses import dataclass, field as dataclass_field, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from triton.flagtune._dependencies import require_optional_dependency
 from triton.flagtune.core.interfaces import ParameterField, ParameterSpace
@@ -563,7 +563,9 @@ def parse_operator_config(config: Mapping[str, Any]) -> OperatorInfo:
         variant_name = validate_variant_name(raw_variant_name, "config.variants key")
         location = f"config.variants.{variant_name}"
         spec = _require_mapping(raw_variant, location)
-        unknown = set(spec) - {"inputs", "when", "params", "config_space", "features", "stage", "dtype_roles", "route_binding"}
+        unknown = set(spec) - {
+            "inputs", "when", "params", "config_space", "features", "stage", "dtype_roles", "route_binding"
+        }
         if unknown:
             raise FlagTuneConfigError(f"{location} has unknown keys: {sorted(unknown)}")
 

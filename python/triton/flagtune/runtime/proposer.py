@@ -52,8 +52,12 @@ from triton.flagtune.core.interfaces import BenchmarkFn, ConfigProposer
 from triton.flagtune.contract.identity import ModelIdentity
 from triton.flagtune.contract.operator_schema import VariantInfo
 from triton.flagtune.runtime.errors import (
-    BenchmarkError, ContractExecutionError, ModelValidationError, ProposerError,
-    flagtune_error_boundary, flagtune_errors,
+    BenchmarkError,
+    ContractExecutionError,
+    ModelValidationError,
+    ProposerError,
+    flagtune_error_boundary,
+    flagtune_errors,
 )
 
 np = require_optional_dependency(
@@ -240,7 +244,10 @@ def make_config_proposer(
             stripped = _strip_config(config, fields)
             if len(stripped) != len(fields) or _in_history(history, stripped, fields):
                 continue
-            latency = _benchmark_candidate(fn, stripped)
+            try:
+                latency = _benchmark_candidate(fn, stripped)
+            except BenchmarkError:
+                continue
             history.append({
                 "config": stripped,
                 "latency_ms": latency,
@@ -260,12 +267,18 @@ def make_config_proposer(
             stripped = _strip_config(entry.get("config", entry), fields)
             if len(stripped) != len(fields) or _in_history(history, stripped, fields):
                 continue
-            latency = _benchmark_candidate(fn, stripped)
+            try:
+                latency = _benchmark_candidate(fn, stripped)
+            except BenchmarkError:
+                continue
             entry["config"] = stripped
             entry["latency_ms"] = latency
             entry["ga_latency_ms"] = latency
             history.append(entry)
 
+        if not history:
+            raise BenchmarkError(f"all Cost Model candidates have invalid benchmark latency: "
+                                 f"count={len(predicted)}")
         return _best_from_history(history, fields, top_k)
 
     return propose
@@ -310,9 +323,7 @@ def _predict_config_dicts(
 ) -> List[Dict[str, Any]]:
     """Score the supplied runtime candidate domain and rank Top-K."""
     if candidates is None:
-        raise ValueError(
-            "runtime candidate domain is required; pass initial_configs explicitly"
-        )
+        raise ValueError("runtime candidate domain is required; pass initial_configs explicitly")
     configs = list(candidates)
     if not configs:
         return []

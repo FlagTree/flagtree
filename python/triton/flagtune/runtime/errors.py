@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """Stable exception categories for FlagTune integration boundaries."""
 
 from contextlib import contextmanager
@@ -80,12 +79,16 @@ def flagtune_error_boundary(error_type):
 
 def flagtune_errors(error_type):
     """Apply a stable error boundary to a synchronous runtime entry point."""
+
     def decorate(fn):
+
         @wraps(fn)
         def wrapped(*args, **kwargs):
             with flagtune_error_boundary(error_type):
                 return fn(*args, **kwargs)
+
         return wrapped
+
     return decorate
 
 

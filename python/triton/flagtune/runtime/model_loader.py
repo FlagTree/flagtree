@@ -82,7 +82,11 @@ from triton.flagtune.contract.archive import (
 )
 from triton.flagtune.contract.identity import ModelIdentity
 from triton.flagtune.runtime.errors import (
-    FlagTuneError, ModelSourceError, ModelUnavailableError, ModelValidationError, flagtune_errors,
+    FlagTuneError,
+    ModelSourceError,
+    ModelUnavailableError,
+    ModelValidationError,
+    flagtune_errors,
 )
 from triton.flagtune.contract.operator_schema import (
     VariantInfo,
@@ -433,7 +437,7 @@ class FlagTuneModelManager:
 
         suffix = f" at version {requested!r}" if requested is not None else ""
         raise ModelUnavailableError(f"FlagTune Manifest has no package for platform {identity.platform_key!r}{suffix}; "
-                                f"checked flat user packages and package cache {cache_root} first")
+                                    f"checked flat user packages and package cache {cache_root} first")
 
     def _validate_flagtune_version(self, config: Dict[str, Any], source: str) -> None:
         min_ver = config.get("flagtune_version_min")

@@ -297,9 +297,7 @@ class Flagtuner(Autotuner):
         if self.early_config_prune:
             legal_configs = self.early_config_prune(legal_configs, self.nargs, **kwargs)
         if not legal_configs:
-            raise RuntimeError(
-                f"FlagTune early_config_prune returned no configs for {identity.artifact_key}"
-            )
+            raise RuntimeError(f"FlagTune early_config_prune returned no configs for {identity.artifact_key}")
         initial = _configs_to_dicts(legal_configs, param_fields)
         meta = {
             "op_id": identity.op_id,
