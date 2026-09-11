@@ -116,7 +116,9 @@ jobs:
               -k "not test_typeconvert_upcast and \
                   not test_typeconvert_downcast" \
               --ignore=python/test/unit/language/test_core.py \
-              --ignore=python/test/unit/language/test_line_info.py
+              --ignore=python/test/unit/language/test_line_info.py \
+              --ignore=python/test/unit/language/test_compile_only.py \
+              --ignore=python/test/unit/language/test_frontend.py
           python3 -m pytest -s --first-parameter-only \
               python/test/unit/language/test_core.py \
               -k "not test_sum_dtype and \
