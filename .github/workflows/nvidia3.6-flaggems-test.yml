@@ -43,7 +43,7 @@ concurrency:
 
 jobs:
   flaggems-test:
-    uses: ./.github/workflows/reusable/flaggems-test-template.yml
+    uses: ./.github/workflows/reusable-flaggems-test-template.yml
     with:
       runner: nvidia3.6
       backend: nvidia
