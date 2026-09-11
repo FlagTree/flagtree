@@ -25,17 +25,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source ~/env.sh
 source "${SCRIPT_DIR}/disable_local_proxy.sh"
 
-export VLLM_PLUGINS=fl
-
-start=$(date +%s)
-
-python3 ${SCRIPT_DIR}/all_perf.py --input-len=128  --output-len=128 --concurrency=4
-# python3 ${SCRIPT_DIR}/all_perf.py --input-len=256  --output-len=256 --concurrency=4
-# python3 ${SCRIPT_DIR}/all_perf.py --input-len=512  --output-len=512 --concurrency=4
-python3 ${SCRIPT_DIR}/all_perf.py --input-len=1024  --output-len=1024 --concurrency=4
-
-end=$(date +%s)
-duration=$((end - start))
-minutes=$((duration / 60))
-seconds=$((duration % 60))
-echo "[INFO] Benchmark elapsed time: ${minutes}m${seconds}s."
+curl "http://localhost:${VLLM_QWEN3_PORT}/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen36",
+    "messages": [{"role": "user", "content": "请问 0.11 和 0.9 哪个大，为什么？"}]
+  }'
