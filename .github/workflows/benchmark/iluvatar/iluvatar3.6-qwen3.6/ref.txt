@@ -29,6 +29,3 @@ torch==2.10.0+corex.4.5.0
   Median TTFT (ms): 601.06
   Median TPOT (ms): 40.74
   Median ITL (ms): 39.90
-
-
-
