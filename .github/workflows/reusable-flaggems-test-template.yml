@@ -104,7 +104,7 @@ jobs:
         if: success()
         shell: bash
         run: |
-          ${{ inputs.build-command }}
+          ${{ inputs.flagtree-build-command }}
 
       - name: Clone FlagGems Repo
         if: success()
@@ -117,7 +117,7 @@ jobs:
       - name: Run FlagGems Test for Baseline
         id: run-flaggems-test
         if: success()
-        uses: ./.github/actions/run-flaggems-test
+        uses: flagos-ai/FlagTree/.github/actions/run-flaggems-test@main
         with:
           flaggems-path: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
           gpus: '${{ steps.setup.outputs.gpus }}'
@@ -221,7 +221,7 @@ jobs:
         if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
         shell: bash
         run: |
-          ${{ inputs.build-command }}
+          ${{ inputs.flagtree-build-command }}
 
       - name: Clone FlagGems Repo
         if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
@@ -242,7 +242,7 @@ jobs:
       - name: Run FlagGems Test
         id: run-flaggems-test
         if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
-        uses: ./.github/actions/run-flaggems-test
+        uses: flagos-ai/FlagTree/.github/actions/run-flaggems-test@main
         with:
           flaggems-path: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
           gpus: '${{ steps.setup.outputs.gpus }}'
