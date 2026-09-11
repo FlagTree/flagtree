@@ -53,4 +53,5 @@ jobs:
         set -x
         source ~/env-3.6.sh
         MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
-    secrets: inherit
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
