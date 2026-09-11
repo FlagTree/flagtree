@@ -199,7 +199,9 @@ jobs:
           echo "gpus=$GPU_DEVICES" >> $GITHUB_OUTPUT
 
           FLAGGEMS_REPO_DIR="${FLAGGEMS_CI_DIR}/FlagGems/test_${GITHUB_RUN_ID}"
+          BEST_DIR="${FLAGGEMS_CI_DIR}/Baseline/best_FlagGems_${{ inputs.flaggems-tag }}"
           echo "FLAGGEMS_REPO_DIR=$FLAGGEMS_REPO_DIR" >> $GITHUB_OUTPUT
+          echo "best_dir=$BEST_DIR" >> $GITHUB_OUTPUT
 
       - name: Smart Checkout
         uses: flagos-ai/FlagTree/.github/actions/smart-checkout@main
@@ -257,7 +259,7 @@ jobs:
         if: ${{ success() && steps.check_backend.outputs.should_skip != 'true' }}
         uses: flagos-ai/FlagTree/.github/actions/compare-flaggems-test@main
         with:
-          baseline-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline/${{ inputs.backend }}/best_FlagGems_${{ inputs.flaggems-tag }}'
+          baseline-dir: '${{ steps.setup.outputs.best_dir }}'
           candidate-dir: '${{ steps.run-flaggems-test.outputs.test-output-dir }}'
           compare-script: 'tools/ci/compare_test_result.py'
           working-directory: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'

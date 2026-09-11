@@ -42,7 +42,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  flaggems-test:
+  flaggems-ci:
     uses: ./.github/workflows/reusable-flaggems-test-template.yml
     with:
       runner: nvidia3.6
