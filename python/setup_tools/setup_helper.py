@@ -369,7 +369,8 @@ def write_flagtree_backend_file(triton_pkg_dir=None):
         triton_pkg_dir = Path(__file__).resolve().parents[1] / "triton"
     os.makedirs(triton_pkg_dir, exist_ok=True)
     dest_file = Path(triton_pkg_dir) / "FLAGTREE_BACKEND"
-    dest_file.write_text(flagtree_backend)
+    configs.set_flagtree_backend(configs.current_backend)
+    dest_file.write_text(configs.current_backend)
 
 
 def write_backend_file_to_build_lib(build_lib):
