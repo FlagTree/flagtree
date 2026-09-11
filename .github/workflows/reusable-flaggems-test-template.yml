@@ -121,7 +121,7 @@ jobs:
         with:
           flaggems-path: '${{ steps.setup.outputs.FLAGGEMS_REPO_DIR }}/FlagGems'
           gpus: '${{ steps.setup.outputs.gpus }}'
-          output-base-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline/${{ inputs.backend }}'
+          output-base-dir: '${{ env.FLAGGEMS_CI_DIR }}/Baseline'
           output-subdir: '${{ steps.setup.outputs.date }}_${{ steps.setup.outputs.commit_id }}'
           run-script: 'tools/ci/ci_run_tests.py'
           skip-file: 'tools/ci/skip_list.yaml'
