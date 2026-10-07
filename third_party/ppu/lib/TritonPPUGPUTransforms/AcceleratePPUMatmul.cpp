@@ -133,8 +133,13 @@ SmallVector<unsigned, 2> warpsPerTileMmaV1(DotOpInterface dotOp,
       }
       if (auto mmaEncoding =
               dyn_cast<PPUMmaEncodingAttr>(resTy.getEncoding())) {
-        // return getWarpsPerCTA(mmaEncoding);
-        return to_vector(mmaEncoding.getWarpsPerCTA());
+        // Share the chained dot's warp layout unless it would replicate this
+        // dot's work: more warps along M or N than 16-wide MMA tiles fit.
+        auto warps = mmaEncoding.getWarpsPerCTA();
+        if (warps.size() == rank && warps[0] * 16 <= shape[0] &&
+            warps[1] * 16 <= shape[1])
+          return to_vector(warps);
+        continue;
       }
       hasChainedDot = true;
     }
@@ -199,7 +204,13 @@ SmallVector<unsigned> warpsPerTileMmaV2(DotOpInterface dotOp,
       }
       if (auto mmaEncoding =
               dyn_cast<PPUMmaEncodingAttr>(resTy.getEncoding())) {
-        return to_vector(mmaEncoding.getWarpsPerCTA());
+        // Share the chained dot's warp layout unless it would replicate this
+        // dot's work: more warps along M or N than 16-wide MMA tiles fit.
+        auto warps = mmaEncoding.getWarpsPerCTA();
+        if (warps.size() == rank && warps[rank - 2] * 16 <= shape[rank - 2] &&
+            warps[rank - 1] * 16 <= shape[rank - 1])
+          return to_vector(warps);
+        continue;
       }
       hasChainedDot = true;
     }
