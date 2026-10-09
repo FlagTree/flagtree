@@ -191,10 +191,10 @@ index 000000000..1cbc3c18f
 +    spine_triton_opt_dst.chmod(0o755)
 +    print(f"[spacemit] Copied spine-triton-opt to {spine_triton_opt_dst}")
 diff --git a/setup.py b/setup.py
-index 3d60f95c4..376bb9b75 100644
+index d522fca7b..67f279145 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -33,6 +33,8 @@ import tarfile
+@@ -34,6 +34,8 @@ import tarfile
  import zipfile
  import urllib.request
  import json
@@ -203,10 +203,10 @@ index 3d60f95c4..376bb9b75 100644
  from io import BytesIO
  from distutils.command.clean import clean
  from pathlib import Path
-@@ -68,6 +70,23 @@ from python.setup_tools import setup_helper as helper
-
+@@ -90,6 +92,23 @@ helper.install_extension = _install_extension_with_stubs
+ 
  from python.build_helpers import get_base_dir, get_cmake_dir
-
+ 
 +
 +# --- spacemit: build as a true root-triton plugin ---
 +# spacemit is an external plugin on FlagTree's ROOT triton (root LLVM hash
@@ -226,9 +226,9 @@ index 3d60f95c4..376bb9b75 100644
 +
  # flagtree setup print config
  YELLOW, NC = helper.get_console_colors()
-
-@@ -97,22 +120,21 @@ class BackendInstaller:
-
+ 
+@@ -114,22 +133,21 @@ class BackendInstaller:
+ 
      @staticmethod
      def prepare(backend_name: str, backend_src_dir: str = None, is_external: bool = False):
 -        # Initialize submodule if there is one for in-tree backends.
@@ -261,13 +261,13 @@ index 3d60f95c4..376bb9b75 100644
 +                backend_src_dir = os.path.join(root_dir, backend_name)
 +            else:
 +                assert False, f"{backend_name} is requested for install but not present in {root_dir} and backend_src_dir not provided"
-
+ 
          backend_path = os.path.join(backend_src_dir, "backend")
          assert os.path.exists(backend_path), f"{backend_path} does not exist!"
-@@ -125,6 +147,96 @@ class BackendInstaller:
+@@ -142,6 +160,116 @@ class BackendInstaller:
          if not os.path.exists(tools_dir):
              tools_dir = None
-
+ 
 +        # --- spacemit: copy spine-mlir binaries (llc, spine-opt, etc.) ---
 +        bin_dir = os.path.join(backend_src_dir, "backend", "bin")
 +        if not os.path.exists(bin_dir):
@@ -358,29 +358,49 @@ index 3d60f95c4..376bb9b75 100644
 +                        shutil.copy(src, dst)
 +                        print(f"[spacemit] Vendored {header} from spine-runtime")
 +
++        # --- spacemit: vendor MLIR Python bindings (mlir_core) ---
++        # llvm_direct.py / mixed_bridge.py (spine_raw LLVM-direct emitter)
++        # import the MLIR Python bindings at module load; vendoring them next
++        # to bin/ lib/ makes the wheel self-contained — _mlir_loader.py
++        # resolves backend/mlir_core at runtime with no PYTHONPATH.
++        if backend_name == "spacemit":
++            llvm_syspath = os.environ.get("LLVM_SYSPATH", None)
++            if llvm_syspath:
++                mlir_bindings_src = os.path.join(llvm_syspath, "python_packages", "mlir_core")
++                if not os.path.isdir(os.path.join(mlir_bindings_src, "mlir")):
++                    raise RuntimeError(
++                        f"[spacemit] MLIR Python bindings (mlir_core) not found at "
++                        f"{mlir_bindings_src} — the LLVM asset must ship "
++                        f"python_packages/mlir_core (spine_raw llvm_direct needs them).")
++                mlir_bindings_dst = os.path.join(backend_src_dir, "backend", "mlir_core")
++                if os.path.isdir(mlir_bindings_dst):
++                    shutil.rmtree(mlir_bindings_dst)
++                shutil.copytree(mlir_bindings_src, mlir_bindings_dst)
++                print(f"[spacemit] Vendored MLIR Python bindings to backend/mlir_core/")
++
          for file in ["compiler.py", "driver.py"]:
              assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
-
-@@ -136,7 +248,8 @@ class BackendInstaller:
+ 
+@@ -153,7 +281,8 @@ class BackendInstaller:
      # Copy all in-tree backends under triton/third_party.
      @staticmethod
      def copy(active):
 -        return [BackendInstaller.prepare(backend) for backend in active]
 +        return [BackendInstaller.prepare(backend, is_external=(backend in helper.configs.plugin_backends))
 +                for backend in active]
-
+ 
      # Copy all external plugins provided by the `TRITON_PLUGIN_DIRS` env var.
      # TRITON_PLUGIN_DIRS is a semicolon-separated list of paths to the plugins.
-@@ -465,7 +578,7 @@ class CMakeBuild(build_ext):
-
+@@ -484,7 +613,7 @@ class CMakeBuild(build_ext):
+ 
      def initialize_options(self):
          build_ext.initialize_options(self)
 -        self.base_dir = get_base_dir()
 +        self.base_dir = get_triton_base_dir()
-
+ 
      def finalize_options(self):
          build_ext.finalize_options(self)
-@@ -477,7 +590,8 @@ class CMakeBuild(build_ext):
+@@ -496,7 +625,8 @@ class CMakeBuild(build_ext):
          # with an actionable message otherwise. Done here (build_ext) rather than at
          # import so non-build commands don't run the check.
          helper.check_pybind11_abi()
@@ -388,9 +408,9 @@ index 3d60f95c4..376bb9b75 100644
 +        # spacemit builds on a RISC-V-only prebuilt LLVM and needs no CUDA toolkit.
 +        if active_backend not in ("xpu", "spacemit"):
              download_and_copy_dependencies()
-
+ 
          try:
-@@ -529,15 +643,17 @@ class CMakeBuild(build_ext):
+@@ -548,15 +678,17 @@ class CMakeBuild(build_ext):
              os.makedirs(self.build_temp)
          # python directories
          python_include_dir = sysconfig.get_path("platinclude")
@@ -411,27 +431,30 @@ index 3d60f95c4..376bb9b75 100644
              "-DTRITON_WHEEL_DIR=" + wheeldir
          ]
          cmake_args += helper.get_backend_cmake_args(build_ext=self)  # flagtree
-@@ -568,7 +684,8 @@ class CMakeBuild(build_ext):
+@@ -614,8 +746,9 @@ class CMakeBuild(build_ext):
+ 
          cmake_args += helper.customize_gluon_cmake_args()
-
+ 
 -        if is_offline_build():
 -            # unit test builds fetch googletests from GitHub
 +        if is_offline_build() or _is_spacemit_build():
 +            # Unit tests fetch googletest from GitHub; the Spacemit build does
 +            # not need the root Triton unit-test targets.
              cmake_args += ["-DTRITON_BUILD_UT=OFF"]
-
+ 
          cmake_args_append = os.getenv("TRITON_APPEND_CMAKE_ARGS")
-@@ -604,7 +721,7 @@ class CMakeBuild(build_ext):
+@@ -623,7 +756,7 @@ class CMakeBuild(build_ext):
              cmake_args += shlex.split(cmake_args_append)
-
+ 
          env = os.environ.copy()
 -        cmake_dir = get_cmake_dir()
 +        cmake_dir = get_triton_cmake_dir()
          subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
          update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
          subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
-@@ -673,4 +797,19 @@ def download_and_copy_dependencies():
+@@ -718,7 +851,22 @@ def download_and_copy_dependencies():
+ 
+ 
  # backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
 -backends = helper.init_backends(BackendInstaller)  # flagtree
 +if _is_spacemit_build():
@@ -450,8 +473,9 @@ index 3d60f95c4..376bb9b75 100644
 +    ]
 +else:
 +    backends = helper.init_backends(BackendInstaller)  # flagtree
-
-
+ 
+ 
+ def get_package_dirs():
 diff --git a/third_party/proton/Dialect/include/Dialect/Proton/IR/ProtonDialect.td b/third_party/proton/Dialect/include/Dialect/Proton/IR/ProtonDialect.td
 index 8d35a5ec1..e476cad96 100644
 --- a/third_party/proton/Dialect/include/Dialect/Proton/IR/ProtonDialect.td

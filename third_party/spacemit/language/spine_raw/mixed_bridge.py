@@ -47,16 +47,18 @@ ABI notes (must match backend/driver.py `_launch` and llvm_direct.py):
 """
 from __future__ import annotations
 
+from ._mlir_loader import ensure_mlir_on_path
+
+ensure_mlir_on_path()
 try:
     from mlir import ir
     from mlir.dialects import llvm as dllvm
 except ImportError as _e:  # pragma: no cover - environment guard
-    raise ImportError(
-        "spine_raw mixed-mode bridge injector requires the MLIR Python bindings "
-        "(importable 'mlir' package). Build them with "
-        "-DMLIR_ENABLE_BINDINGS_PYTHON=ON and add "
-        "<build>/installed/python_packages/mlir_core to PYTHONPATH."
-    ) from _e
+    raise ImportError("spine_raw mixed-mode bridge injector requires the MLIR Python bindings "
+                      "(importable 'mlir' package). They are vendored into "
+                      "triton/backends/<backend>/mlir_core by setup.py at package time; if that "
+                      "copy is missing, rebuild the wheel (third_party/spacemit/scripts/install_flagtree_plugin.sh) from an "
+                      "LLVM install that has python_packages/mlir_core.") from _e
 
 # The new spert ABI injects a leading `%arg0: i64` context handle at the ll.mlir
 # layer (not present in the linalg func.func signature host_arg_is_memref is

@@ -233,12 +233,16 @@ def test_mv_fused_parallel_sv3_perf(N, K):
 
 
 if __name__ == "__main__":
+    import sys
+
+    failures = 0
     print("=== correctness: parallel sv3 (grid=(N//BLK,)) ===")
     for N, K in _SHAPES:
         try:
             md = _run_fused_par_sv3_correctness(N, K)
             print(f"  N={N:4d} K={K:4d}  max_diff={md:.4e}  PASS")
         except Exception as e:
+            failures += 1
             print(f"  N={N:4d} K={K:4d}  FAIL: {type(e).__name__}: {str(e)[:200]}")
     print("=== perf: parallel sv3 ===")
     for N, K in _SHAPES:
@@ -247,4 +251,7 @@ if __name__ == "__main__":
             gf = 2.0 * N * K / t / 1e9
             print(f"  N={N:4d} K={K:4d}  {t*1e6:8.1f}us ({gf:.2f}GF)")
         except Exception as e:
+            failures += 1
             print(f"  N={N:4d} K={K:4d}  FAIL: {type(e).__name__}: {str(e)[:200]}")
+    # 失败必须显式暴露: 非零退出, 否则 CI/脚本调用方会误判为通过
+    sys.exit(1 if failures else 0)

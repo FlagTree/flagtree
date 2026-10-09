@@ -10,7 +10,7 @@ def _to_handle(v, builder, ty):
     .handle; emit arith.constant instead, materialising the constant's MLIR
     type structurally via ``ty.build(builder)`` (no type text).
     """
-    from .types import ScalarTy, INDEX
+    from .types import ScalarTy
     if hasattr(v, "handle"):
         return v.handle
     # tl.constexpr case

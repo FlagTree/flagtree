@@ -32,18 +32,19 @@ import ast
 import inspect
 import textwrap
 
+from .codegen import _parse_signature
+from ._mlir_loader import ensure_mlir_on_path
+
+ensure_mlir_on_path()
 try:
     from mlir import ir
     from mlir.dialects import llvm as dllvm
 except ImportError as _e:  # pragma: no cover - environment guard
-    raise ImportError(
-        "spine_raw LLVM-direct emitter requires the MLIR Python bindings "
-        "(importable 'mlir' package). Build them with "
-        "-DMLIR_ENABLE_BINDINGS_PYTHON=ON and add "
-        "<build>/installed/python_packages/mlir_core to PYTHONPATH."
-    ) from _e
-
-from .codegen import _parse_signature
+    raise ImportError("spine_raw LLVM-direct emitter requires the MLIR Python bindings "
+                      "(importable 'mlir' package). They are vendored into "
+                      "triton/backends/<backend>/mlir_core by setup.py at package time; if that "
+                      "copy is missing, rebuild the wheel (third_party/spacemit/scripts/install_flagtree_plugin.sh) from an "
+                      "LLVM install that has python_packages/mlir_core.") from _e
 
 # Descriptor struct for a memref arg. The driver (backend/driver.py `_launch`)
 # passes each memref as (int64_t rank=0, void* &ptr_arg) where ptr_arg is a

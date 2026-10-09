@@ -419,6 +419,15 @@ cd /tmp                                          # avoid write-permission issues
 $PY -m pytest -p no:cacheprovider <test_file>.py -v --tb=short
 ```
 
+The MLIR Python bindings (needed by `llvm_direct.py` / `mixed_bridge.py`) are
+vendored into `triton/backends/spacemit/mlir_core` by setup.py
+(`BackendInstaller.prepare` copies `${LLVM_SYSPATH}/python_packages/mlir_core`)
+and resolved automatically at import time
+(`language/spine_raw/_mlir_loader.py`) — no `PYTHONPATH` for `mlir_core` is
+needed on a wheel/installed build. For a bare source-tree run, either export
+`PYTHONPATH=<llvm>/python_packages/mlir_core` or place a copy at
+`backend/mlir_core` (the source-tree layout the resolver checks).
+
 **After editing `codegen.py`/`builtins.py`/`call_registry.py`**: sync the two
 copies (source `language/spine_raw/` → `build-riscv64/.../spine_raw/` and
 `build-x86_64/...`). Only `triton_shared.cc` changes require rebuilding
