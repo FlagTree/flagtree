@@ -191,7 +191,7 @@ index 000000000..1cbc3c18f
 +    spine_triton_opt_dst.chmod(0o755)
 +    print(f"[spacemit] Copied spine-triton-opt to {spine_triton_opt_dst}")
 diff --git a/setup.py b/setup.py
-index d522fca7b..67f279145 100644
+index d522fca7b..38094f2cc3 100644
 --- a/setup.py
 +++ b/setup.py
 @@ -34,6 +34,8 @@ import tarfile
@@ -264,7 +264,7 @@ index d522fca7b..67f279145 100644
  
          backend_path = os.path.join(backend_src_dir, "backend")
          assert os.path.exists(backend_path), f"{backend_path} does not exist!"
-@@ -142,6 +160,116 @@ class BackendInstaller:
+@@ -142,6 +160,130 @@ class BackendInstaller:
          if not os.path.exists(tools_dir):
              tools_dir = None
  
@@ -363,25 +363,39 @@ index d522fca7b..67f279145 100644
 +        # import the MLIR Python bindings at module load; vendoring them next
 +        # to bin/ lib/ makes the wheel self-contained — _mlir_loader.py
 +        # resolves backend/mlir_core at runtime with no PYTHONPATH.
++        # Source resolution (mirrors spine-triton build scripts): an LLVM
++        # install with python_packages/mlir_core, a "-python" release package
++        # (a directory containing mlir_core/), or the mlir_core directory
++        # itself — via SPINE_MLIR_BINDINGS_DIR or $LLVM_SYSPATH.
 +        if backend_name == "spacemit":
 +            llvm_syspath = os.environ.get("LLVM_SYSPATH", None)
-+            if llvm_syspath:
-+                mlir_bindings_src = os.path.join(llvm_syspath, "python_packages", "mlir_core")
-+                if not os.path.isdir(os.path.join(mlir_bindings_src, "mlir")):
++            mlir_bindings_root = os.environ.get("SPINE_MLIR_BINDINGS_DIR", None) or llvm_syspath
++            if mlir_bindings_root:
++                mlir_bindings_src = None
++                for sub in (os.path.join("python_packages", "mlir_core"),
++                            os.path.join("mlir_core"), ""):
++                    cand = os.path.join(mlir_bindings_root, sub) if sub else mlir_bindings_root
++                    if os.path.isdir(os.path.join(cand, "mlir")):
++                        mlir_bindings_src = cand
++                        break
++                if mlir_bindings_src is None:
 +                    raise RuntimeError(
-+                        f"[spacemit] MLIR Python bindings (mlir_core) not found at "
-+                        f"{mlir_bindings_src} — the LLVM asset must ship "
-+                        f"python_packages/mlir_core (spine_raw llvm_direct needs them).")
++                        f"[spacemit] MLIR Python bindings (mlir_core) not found under "
++                        f"{mlir_bindings_root} — pass the -python release package or an "
++                        f"LLVM install with python_packages/mlir_core via "
++                        f"SPINE_MLIR_BINDINGS_DIR / LLVM_SYSPATH (spine_raw llvm_direct "
++                        f"needs them).")
 +                mlir_bindings_dst = os.path.join(backend_src_dir, "backend", "mlir_core")
 +                if os.path.isdir(mlir_bindings_dst):
 +                    shutil.rmtree(mlir_bindings_dst)
 +                shutil.copytree(mlir_bindings_src, mlir_bindings_dst)
-+                print(f"[spacemit] Vendored MLIR Python bindings to backend/mlir_core/")
++                print(f"[spacemit] Vendored MLIR Python bindings to backend/mlir_core/ "
++                      f"(from {mlir_bindings_src})")
 +
          for file in ["compiler.py", "driver.py"]:
              assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
  
-@@ -153,7 +281,8 @@ class BackendInstaller:
+@@ -153,7 +295,8 @@ class BackendInstaller:
      # Copy all in-tree backends under triton/third_party.
      @staticmethod
      def copy(active):
@@ -391,7 +405,7 @@ index d522fca7b..67f279145 100644
  
      # Copy all external plugins provided by the `TRITON_PLUGIN_DIRS` env var.
      # TRITON_PLUGIN_DIRS is a semicolon-separated list of paths to the plugins.
-@@ -484,7 +613,7 @@ class CMakeBuild(build_ext):
+@@ -484,7 +627,7 @@ class CMakeBuild(build_ext):
  
      def initialize_options(self):
          build_ext.initialize_options(self)
@@ -400,7 +414,7 @@ index d522fca7b..67f279145 100644
  
      def finalize_options(self):
          build_ext.finalize_options(self)
-@@ -496,7 +625,8 @@ class CMakeBuild(build_ext):
+@@ -496,7 +639,8 @@ class CMakeBuild(build_ext):
          # with an actionable message otherwise. Done here (build_ext) rather than at
          # import so non-build commands don't run the check.
          helper.check_pybind11_abi()
@@ -410,7 +424,7 @@ index d522fca7b..67f279145 100644
              download_and_copy_dependencies()
  
          try:
-@@ -548,15 +678,17 @@ class CMakeBuild(build_ext):
+@@ -548,15 +692,17 @@ class CMakeBuild(build_ext):
              os.makedirs(self.build_temp)
          # python directories
          python_include_dir = sysconfig.get_path("platinclude")
@@ -431,7 +445,7 @@ index d522fca7b..67f279145 100644
              "-DTRITON_WHEEL_DIR=" + wheeldir
          ]
          cmake_args += helper.get_backend_cmake_args(build_ext=self)  # flagtree
-@@ -614,8 +746,9 @@ class CMakeBuild(build_ext):
+@@ -614,8 +760,9 @@ class CMakeBuild(build_ext):
  
          cmake_args += helper.customize_gluon_cmake_args()
  
@@ -443,7 +457,7 @@ index d522fca7b..67f279145 100644
              cmake_args += ["-DTRITON_BUILD_UT=OFF"]
  
          cmake_args_append = os.getenv("TRITON_APPEND_CMAKE_ARGS")
-@@ -623,7 +756,7 @@ class CMakeBuild(build_ext):
+@@ -623,7 +770,7 @@ class CMakeBuild(build_ext):
              cmake_args += shlex.split(cmake_args_append)
  
          env = os.environ.copy()
@@ -452,7 +466,7 @@ index d522fca7b..67f279145 100644
          subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
          update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
          subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
-@@ -718,7 +851,22 @@ def download_and_copy_dependencies():
+@@ -718,7 +865,22 @@ def download_and_copy_dependencies():
  
  
  # backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
@@ -476,6 +490,7 @@ index d522fca7b..67f279145 100644
  
  
  def get_package_dirs():
+
 diff --git a/third_party/proton/Dialect/include/Dialect/Proton/IR/ProtonDialect.td b/third_party/proton/Dialect/include/Dialect/Proton/IR/ProtonDialect.td
 index 8d35a5ec1..e476cad96 100644
 --- a/third_party/proton/Dialect/include/Dialect/Proton/IR/ProtonDialect.td
