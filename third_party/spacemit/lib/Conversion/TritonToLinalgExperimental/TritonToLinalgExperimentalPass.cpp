@@ -60,9 +60,9 @@ namespace {
 // Generic pass: inline spine_ext.raw_region ops into the surrounding func.
 // Mirrors spine-mlir's SpineRawRegionInlinePass but works on unregistered ops
 // (spine_ext lives in spine-mlir; we match by op name string).
-struct InlineSpineRawRegion
-    : public PassWrapper<InlineSpineRawRegion, OperationPass<func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InlineSpineRawRegion)
+struct InlineSmtRvisaRegion
+    : public PassWrapper<InlineSmtRvisaRegion, OperationPass<func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InlineSmtRvisaRegion)
   StringRef getArgument() const override { return "inline-spine-raw-region"; }
   void runOnOperation() override {
     SmallVector<Operation *> toErase;
@@ -173,8 +173,8 @@ public:
     pm.addPass(createTLEToLinalgPass());
     // Inline spine_ext.raw_region bodies (produced by TLEToLinalgPass above)
     // here so spine-opt's e2e pipeline receives clean linalg/memref/vector IR.
-    pm.addNestedPass<func::FuncOp>(std::make_unique<InlineSpineRawRegion>());
-    // After inlining, proton.record ops (emitted by spine_raw codegen) are
+    pm.addNestedPass<func::FuncOp>(std::make_unique<InlineSmtRvisaRegion>());
+    // After inlining, proton.record ops (emitted by smt_rvisa codegen) are
     // now real ops in the host function — lower them via ProtonRecordOpPattern.
     pm.addPass(createXSMTToLinalgPass());
     pm.addPass(createReconcileUnrealizedCastsPass());

@@ -1,6 +1,6 @@
-# spine_raw — Writing Raw Operators (Agent Guide)
+# smt_rvisa — Writing Raw Operators (Agent Guide)
 
-A practical guide to writing custom operators with the `spine_raw` eDSL. Kernels
+A practical guide to writing custom operators with the `smt_rvisa` eDSL. Kernels
 are written in a restricted Python subset, lowered through the C++ builder API
 (no MLIR text), and run on SpacemiT RISC-V (K3) via scalable vectors.
 
@@ -10,11 +10,11 @@ are written in a restricted Python subset, lowered through the C++ builder API
 
 ---
 
-## 0. What is spine_raw — the semantic model
+## 0. What is smt_rvisa — the semantic model
 
-**spine_raw is a hand-written execution plan at the *vector* level.** Normal
+**smt_rvisa is a hand-written execution plan at the *vector* level.** Normal
 Triton describes *what* to compute over tensors and lets the compiler pick the
-vectorization; spine_raw lets you write the SEW/VL/tiling/instruction-selection
+vectorization; smt_rvisa lets you write the SEW/VL/tiling/instruction-selection
 *yourself*, one vector register at a time. You trade automation for control —
 useful when you want a specific RVV instruction sequence (vfwmadot, batched
 cube ops) or a specific memory-streaming schedule the autoscheduler won't pick.
@@ -100,8 +100,8 @@ import triton.language as tl
 from triton.backends.spine_triton.driver import CPUDriver
 triton.runtime.driver.set_active(CPUDriver())
 
-import triton.language.extra.spine_raw as tle           # MUST import from here
-from triton.language.extra.spine_raw import call as _sr_call
+import triton.language.extra.smt_rvisa as tle           # MUST import from here
+from triton.language.extra.smt_rvisa import call as _sr_call
 
 f16 = tle.f16
 f32 = tle.f32
@@ -128,7 +128,7 @@ my_host[(1,)](X, out, 256)                   # grid=(1,)
 ```
 
 **Rules:**
-- Import `tle` ONLY from `triton.language.extra.spine_raw` (never a standalone path).
+- Import `tle` ONLY from `triton.language.extra.smt_rvisa` (never a standalone path).
 - Kernel params are annotated: `tle.mem(dtype)` (read), `tle.mem(dtype, out=True)`
   (write), `tle.index` (scalar loop bound / offset).
 - The host is a normal `@triton.jit` function; it calls `_sr_call(kernel, outputs=[], inputs=[...])`.
@@ -423,13 +423,13 @@ The MLIR Python bindings (needed by `llvm_direct.py` / `mixed_bridge.py`) are
 vendored into `triton/backends/spacemit/mlir_core` by setup.py
 (`BackendInstaller.prepare` copies `${LLVM_SYSPATH}/python_packages/mlir_core`)
 and resolved automatically at import time
-(`language/spine_raw/_mlir_loader.py`) — no `PYTHONPATH` for `mlir_core` is
+(`language/smt_rvisa/_mlir_loader.py`) — no `PYTHONPATH` for `mlir_core` is
 needed on a wheel/installed build. For a bare source-tree run, either export
 `PYTHONPATH=<llvm>/python_packages/mlir_core` or place a copy at
 `backend/mlir_core` (the source-tree layout the resolver checks).
 
 **After editing `codegen.py`/`builtins.py`/`call_registry.py`**: sync the two
-copies (source `language/spine_raw/` → `build-riscv64/.../spine_raw/` and
+copies (source `language/smt_rvisa/` → `build-riscv64/.../smt_rvisa/` and
 `build-x86_64/...`). Only `triton_shared.cc` changes require rebuilding
 `libtriton.so`; pure-Python changes just need the file copy.
 
@@ -442,8 +442,8 @@ all 6 norms, softmax family — zero new primitives). Add a primitive only when
 you need a new MLIR op. Steps:
 
 1. **C++ binding** in `triton_shared.cc` (`create_xxx`), rebuild both arches.
-2. **Marker** in `builtins.py`: `xxx = _SpineRawBuiltin("xxx")`.
-3. **Codegen** in `codegen.py`: add name to `_SPINE_RAW_BUILTIN_NAMES`, add
+2. **Marker** in `builtins.py`: `xxx = _SmtRvisaBuiltin("xxx")`.
+3. **Codegen** in `codegen.py`: add name to `_SMT_RVISA_BUILTIN_NAMES`, add
    dispatch in `_gen_call_expr`, write `_gen_xxx` handler.
 4. **Export** in `__init__.py`.
 
@@ -490,8 +490,8 @@ The **LLVM-direct path** is a second compilation route for kernels that use *onl
 ### Example: MV with vle/vse
 
 ```python
-import triton.language.extra.spine_raw as tle
-from triton.language.extra.spine_raw import call as _sr_call
+import triton.language.extra.smt_rvisa as tle
+from triton.language.extra.smt_rvisa import call as _sr_call
 
 @tle.raw_kernel
 def llvm_direct_mv(A: tle.mem("f32"), B: tle.mem("f32"),

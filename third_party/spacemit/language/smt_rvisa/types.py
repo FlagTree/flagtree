@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 SpacemiT. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Type metadata for @spine_raw kernel parameters.
+"""Type metadata for @smt_rvisa kernel parameters.
 
 Parameter annotations are structured objects, not MLIR text: ``tle.mem(f16)`` /
 ``tle.mem(f32, out=True)`` / ``tle.index`` build ``Ty`` instances directly, and
@@ -28,7 +28,7 @@ from __future__ import annotations
 # text string: shape/element/layout queries are attribute reads (no regex, no
 # substring sniffing), and MLIR types are materialised only at the C++ builder
 # boundary via ``Ty.build(builder)`` (structured constructor bindings on
-# ir.builder, triton_shared.cc init_triton_spine_raw_ir). Nothing round-trips
+# ir.builder, triton_shared.cc init_triton_smt_rvisa_ir). Nothing round-trips
 # structured -> text -> structured.
 # ---------------------------------------------------------------------------
 
@@ -416,7 +416,7 @@ def mem(dtype: str, out: bool = False) -> _TypedAnnotation:
     it always matches the tt.ptr <-> memref bridge space of the
     spine-triton-opt pipeline; a mismatch would make DSLRegionOpPattern's
     operand trace fail to match the raw body's block-arg types and
-    InlineSpineRawRegion emit an illegal cross-space memref.cast.
+    InlineSmtRvisaRegion emit an illegal cross-space memref.cast.
     """
     if not isinstance(dtype, str) or dtype == "index" or not _is_scalar_name(dtype):
         raise ValueError(f"mem: dtype must be a scalar element type (iN/fN/bfN), got {dtype!r}")

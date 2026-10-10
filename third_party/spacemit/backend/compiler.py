@@ -97,13 +97,13 @@ def _inject_mixed_llvm_llmlir(llmlir: str, func_name: str, host_arg_is_memref: l
     """Graft LLVM-direct sibling llvm.func(s) + host→sibling bridges into the
     LOWERED ll.mlir (post spine-opt, pre mlir-translate).
 
-    Thin wrapper: the implementation lives in the spine_raw package
+    Thin wrapper: the implementation lives in the smt_rvisa package
     (mixed_bridge.py) and builds the injected IR entirely with the MLIR Python
     bindings — no text/regex splicing. Imported lazily so non-mixed kernels
     never require the bindings; mixed kernels already depend on them via the
     LLVM-direct sibling emitter (llvm_direct.py).
     """
-    from triton.language.extra.spine_raw.mixed_bridge import inject_mixed_llvm_llmlir
+    from triton.language.extra.smt_rvisa.mixed_bridge import inject_mixed_llvm_llmlir
     return inject_mixed_llvm_llmlir(llmlir, func_name, host_arg_is_memref, llvm_funcs, llvm_calls)
 
 
@@ -426,11 +426,11 @@ class CPUBackend(BaseBackend):
         mod.set_attr("tt.force_vector_interleave", builder.get_int32_attr(force_vector_interleave))
 
         # LLVM-direct: pick up a pending llvm.func module text stashed by
-        # spine_raw.call() during make_ir (process-global handoff — see
+        # smt_rvisa.call() during make_ir (process-global handoff — see
         # call_registry.take_pending_llvm_direct_module). None for non-llvm-direct kernels.
         _llvm_direct_text, _llvm_direct_name = None, None
         try:
-            from triton.language.extra.spine_raw.call_registry import take_pending_llvm_direct_module
+            from triton.language.extra.smt_rvisa.call_registry import take_pending_llvm_direct_module
             _llvm_direct_text, _llvm_direct_name = take_pending_llvm_direct_module()
             if _llvm_direct_text:
                 metadata["llvm_direct_module"] = _llvm_direct_text
@@ -438,7 +438,7 @@ class CPUBackend(BaseBackend):
             pass
 
         # Mixed-mode (coexistence): the host keeps its func.func body (tl +
-        # spine_raw dsl_region) AND calls one or more llvm-direct siblings. Unlike
+        # smt_rvisa dsl_region) AND calls one or more llvm-direct siblings. Unlike
         # the pure-LLVM path above (which REPLACES the module), here we stash the
         # sibling func text + per-call arg bridge. Injection happens at the LOWERED
         # ll.mlir layer (_inject_mixed_llvm_llmlir, post spine-opt) — the linalgdir
@@ -448,7 +448,7 @@ class CPUBackend(BaseBackend):
         # llvm dialect with memrefs already descriptors, so the llvm.call + sibling
         # splice is legal. Independent of llvm_direct_module (unset in mixed).
         try:
-            from triton.language.extra.spine_raw.call_registry import (take_pending_llvm_funcs, take_pending_llvm_calls,
+            from triton.language.extra.smt_rvisa.call_registry import (take_pending_llvm_funcs, take_pending_llvm_calls,
                                                                        take_pending_host_arg_kinds)
             _mixed_funcs = take_pending_llvm_funcs()
             _mixed_calls = take_pending_llvm_calls()

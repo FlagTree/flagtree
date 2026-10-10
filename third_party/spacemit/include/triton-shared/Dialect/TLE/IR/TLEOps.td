@@ -75,16 +75,16 @@ def TLE_InsertTileOp : TLE_Op<"insert_tile", [Pure,
 }
 
 // ============================================================================
-// DSLRegionOp: wraps a spine_raw raw-kernel body as a TTIR-level op.
+// DSLRegionOp: wraps a smt_rvisa raw-kernel body as a TTIR-level op.
 //   Operands: inputs (ptr/scalar Triton IR values, e.g. pid*stride_A)
 //   Region:   body contains raw fn ops (linalg/vector dialect)
 //   Attribute: fn_name — raw fn symbol for debugging / lowering
 // ============================================================================
 def TLE_DSLRegionOp : TLE_Op<"dsl_region",
     [MemoryEffects<[MemWrite<DefaultResource>]>]> {
-  let summary = "Raw kernel region — spine_raw.call() target";
+  let summary = "Raw kernel region — smt_rvisa.call() target";
   let description = [{
-    Wraps a spine_raw raw-kernel body as a TTIR-level op. The body lives in a
+    Wraps a smt_rvisa raw-kernel body as a TTIR-level op. The body lives in a
     real single-block region holding the raw fn ops (linalg / memref / vector /
     vector_ext …) — not a serialized string — so the TTIR stays readable. The
     region's block args correspond to the raw fn parameters; `inputs` are the

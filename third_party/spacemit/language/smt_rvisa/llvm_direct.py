@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 SpacemiT. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""LLVM-direct emitter: @spine_raw AST → top-level `llvm.func` module,
+"""LLVM-direct emitter: @smt_rvisa AST → top-level `llvm.func` module,
 built with the upstream MLIR Python bindings (`mlir.dialects.llvm`).
 
 All IR is constructed through bindings op builders — every op is verified by
@@ -15,7 +15,7 @@ attributes + signature + empty body, plus the `@spine_grid` declaration in
 sibling mode) is parsed once via `ir.Module.parse`. Only the shell is parsed;
 the entire body is built with bindings.
 
-Unlike SpineMLIRBuilderCodegen (which emits ops via the C++ builder API into a
+Unlike SmtMLIRBuilderCodegen (which emits ops via the C++ builder API into a
 `tle.dsl_region` that later inlines into a *func.func* — where LLVM ops trip
 BufferDeallocation's "unknown memory side effects"), this backend produces a
 standalone `llvm.func`. Pure llvm.func is a no-op for
@@ -40,7 +40,7 @@ try:
     from mlir import ir
     from mlir.dialects import llvm as dllvm
 except ImportError as _e:  # pragma: no cover - environment guard
-    raise ImportError("spine_raw LLVM-direct emitter requires the MLIR Python bindings "
+    raise ImportError("smt_rvisa LLVM-direct emitter requires the MLIR Python bindings "
                       "(importable 'mlir' package). They are vendored into "
                       "triton/backends/<backend>/mlir_core by setup.py at package time; if that "
                       "copy is missing, rebuild the wheel (third_party/spacemit/scripts/install_flagtree_plugin.sh) from an "
@@ -71,7 +71,7 @@ def _const_i64_v(n: int) -> ir.Value:
 
 
 class LLVMDirectCodegen:
-    """Walk a @spine_raw fn and build a top-level `llvm.func` via bindings."""
+    """Walk a @smt_rvisa fn and build a top-level `llvm.func` via bindings."""
 
     def __init__(self, sibling_abi: bool = False) -> None:
         self._env: dict[str, ir.Value] = {}  # py var -> SSA Value
@@ -140,7 +140,7 @@ class LLVMDirectCodegen:
         self._cur_blk = blk
 
     # ------------------------------------------------------------------
-    # Public entry: @spine_raw fn -> module text with a top-level llvm.func
+    # Public entry: @smt_rvisa fn -> module text with a top-level llvm.func
     # ------------------------------------------------------------------
     def emit_module(self, fn) -> str:
         params = _parse_signature(fn)

@@ -286,7 +286,7 @@ void init_triton_xsmt_ir(py::module &&m) {
                  .getResult();
            });
   // The tt.ptr <-> memref bridge memory-space attr is exposed structurally as
-  // ir.builder.get_bridge_memory_space() (init_triton_spine_raw_ir below): the
+  // ir.builder.get_bridge_memory_space() (init_triton_smt_rvisa_ir below): the
   // C++ header MemorySpaceUtils.h getDefaultBridgeMemorySpace stays the single
   // source of truth, and the attr crosses the boundary as an Attribute object
   // (no printed-text channel).
@@ -376,7 +376,7 @@ void init_triton_xtle_ir(py::module &&m) {
             }
           },
           py::arg("fn_name"), py::arg("raw_linalg"), py::arg("inputs"),
-          "Create tle.dsl_region — spine_raw.call() TTIR op")
+          "Create tle.dsl_region — smt_rvisa.call() TTIR op")
       .def(
           "create_tle_dsl_region_direct",
           [](TritonOpBuilder &self, const std::string &fn_name,
@@ -417,7 +417,7 @@ void init_triton_xtle_ir(py::module &&m) {
 
 // ============================================================================
 // Spine Raw IR Builder Bindings
-// 为 spine_raw codegen 提供标准的 MLIR builder API，替代字符串拼接
+// 为 smt_rvisa codegen 提供标准的 MLIR builder API，替代字符串拼接
 // ============================================================================
 
 // Helper: parse MLIR type string
@@ -426,7 +426,7 @@ static Type parseTypeString(OpBuilder &builder, const std::string &typeStr) {
   return mlir::parseType(typeStr, ctx);
 }
 
-void init_triton_spine_raw_ir(py::module &&m) {
+void init_triton_smt_rvisa_ir(py::module &&m) {
   auto *builder_cls = ir::getBuilderClass();
 
   // ========================================================================
@@ -462,7 +462,7 @@ void init_triton_spine_raw_ir(py::module &&m) {
           "Parse MLIR type string (e.g., 'vector<32xf32>', 'memref<?xf16>')")
 
       // ======================================================================
-      // Structured type constructors (official MLIR C++ APIs). The spine_raw
+      // Structured type constructors (official MLIR C++ APIs). The smt_rvisa
       // Python type layer (types.py Ty.build) passes objects across the
       // boundary instead of assembling type text, so these are the single
       // place where MLIR types get constructed for raw kernels.
@@ -1272,7 +1272,7 @@ void init_triton_spine_raw_ir(py::module &&m) {
       // Generic (unregistered) op builder — for ops in dialects that are never
       // registered/loaded (e.g. vector_ext.*), which parse only in generic form
       // under the context's allowUnregisteredDialects flag (see load_dialects).
-      // int_attrs covers the only attr shape spine_raw's generic ops need today
+      // int_attrs covers the only attr shape smt_rvisa's generic ops need today
       // (vector_ext.cross_batch_matmul's m/n/k, vector_ext.group_interleave's
       // groupLen — all i64 integer attrs).
       // ========================================================================
@@ -1361,5 +1361,5 @@ void init_triton_spacemit(py::module &&m) {
 
   init_triton_xsmt_ir(m.def_submodule("xsmt_ir"));
   init_triton_xtle_ir(m.def_submodule("tle_ir"));
-  init_triton_spine_raw_ir(m.def_submodule("spine_raw_ir"));
+  init_triton_smt_rvisa_ir(m.def_submodule("smt_rvisa_ir"));
 }

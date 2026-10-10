@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 SpacemiT. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""SpineMLIRBuilderCodegen — translates @spine_raw Python functions to MLIR ops.
+"""SmtMLIRBuilderCodegen — translates @smt_rvisa Python functions to MLIR ops.
 
-Phase 1: AST visitor for the spine_raw eDSL subset.
+Phase 1: AST visitor for the smt_rvisa eDSL subset.
 Builds vector/arith/memref/scf ops straight through the C++ builder API
 (create_tle_dsl_region_direct), with no MLIR text emission.
 """
@@ -44,7 +44,7 @@ def _parse_signature(fn: Callable) -> list[tuple[str, _TypedAnnotation]]:
     for pname, param in sig.parameters.items():
         ann = param.annotation
         if ann is inspect.Parameter.empty:
-            raise ValueError(f"Parameter '{pname}' of @spine_raw function '{fn.__name__}' "
+            raise ValueError(f"Parameter '{pname}' of @smt_rvisa function '{fn.__name__}' "
                              f"must have a tle.mem(...) or tle.index annotation.")
         if not isinstance(ann, _TypedAnnotation):
             raise ValueError(f"Parameter '{pname}' annotation must be tle.mem(...) or tle.index, got {ann!r}")
@@ -63,7 +63,7 @@ def _find_reassigned(body: list, outer_vars: set) -> set:
     return found
 
 
-_SPINE_RAW_BUILTIN_NAMES = {
+_SMT_RVISA_BUILTIN_NAMES = {
     "range",
     "proton_mark",
     "vconfig",
@@ -148,8 +148,8 @@ def _vlmax(lmul: int, sew_bits: int = _BASE_SEW_BITS) -> int:
     return lmul * _VLEN_BITS // sew_bits
 
 
-def _is_spine_raw_attr(node, attr: str, aliases: set | None = None) -> bool:
-    """Check if node is <alias>.<attr> where alias is a spine_raw module import."""
+def _is_smt_rvisa_attr(node, attr: str, aliases: set | None = None) -> bool:
+    """Check if node is <alias>.<attr> where alias is a smt_rvisa module import."""
     if not (isinstance(node, ast.Attribute) and node.attr == attr):
         return False
     if not isinstance(node.value, ast.Name):
@@ -188,8 +188,8 @@ def _is_vec2d_of(t: Ty, elems: tuple) -> bool:
 # ---------------------------------------------------------------------------
 
 
-class SpineMLIRBuilderCodegen:
-    """Translate @spine_raw fn → C++ builder API calls.
+class SmtMLIRBuilderCodegen:
+    """Translate @smt_rvisa fn → C++ builder API calls.
 
     generate_builder(fn) → (param_tys, body_builder)
     body_builder(b, block_args) is the callback for create_tle_dsl_region_direct.
@@ -254,7 +254,7 @@ class SpineMLIRBuilderCodegen:
 
     def _require_vl(self) -> int:
         if self._active_vl is None:
-            raise ValueError("spine_raw svector op used before vconfig() set VL")
+            raise ValueError("smt_rvisa svector op used before vconfig() set VL")
         return self._active_vl
 
     def _try_const_int(self, node) -> int | None:
@@ -339,12 +339,12 @@ class SpineMLIRBuilderCodegen:
         params = _parse_signature(fn)
         param_tys = [ann.ty for _, ann in params]
 
-        # Detect spine_raw module aliases
+        # Detect smt_rvisa module aliases
         try:
-            import spine_raw as _sr_mod
+            import smt_rvisa as _sr_mod
         except ModuleNotFoundError:
             try:
-                from triton.language.extra import spine_raw as _sr_mod
+                from triton.language.extra import smt_rvisa as _sr_mod
             except (ModuleNotFoundError, ImportError):
                 _sr_mod = None
         aliases: set[str] = set()
@@ -353,7 +353,7 @@ class SpineMLIRBuilderCodegen:
                 if v is _sr_mod:
                     aliases.add(k)
         if not aliases:
-            aliases = {"spine_raw", "sr"}
+            aliases = {"smt_rvisa", "sr"}
 
         # Closure / global constexprs
         freevars: dict[str, object] = {}
@@ -421,10 +421,10 @@ class SpineMLIRBuilderCodegen:
 
     def _gen_assign(self, node: ast.Assign):
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-            raise NotImplementedError(f"spine_raw: only single-name assignment supported, got {ast.dump(node)}")
+            raise NotImplementedError(f"smt_rvisa: only single-name assignment supported, got {ast.dump(node)}")
         target = node.targets[0].id
         if isinstance(node.value, ast.Call) and \
-                _is_spine_raw_attr(node.value.func, "vconfig", self._aliases):
+                _is_smt_rvisa_attr(node.value.func, "vconfig", self._aliases):
             self._gen_vconfig_assign(target, node.value)
             return
         val, typ = self._gen_expr(node.value)
@@ -433,7 +433,7 @@ class SpineMLIRBuilderCodegen:
     def _gen_for(self, node: ast.For):
         assert isinstance(node.target, ast.Name)
         loop_var = node.target.id
-        assert _is_spine_raw_attr(node.iter.func, "range", self._aliases)
+        assert _is_smt_rvisa_attr(node.iter.func, "range", self._aliases)
         rargs = node.iter.args
         assert len(rargs) in (1, 3)
         if len(rargs) == 1:
@@ -495,19 +495,19 @@ class SpineMLIRBuilderCodegen:
             self._env[v] = (rv, ts)
 
     def _gen_call_stmt(self, node: ast.Call):
-        if _is_spine_raw_attr(node.func, "proton_mark", self._aliases):
+        if _is_smt_rvisa_attr(node.func, "proton_mark", self._aliases):
             pass  # skip profiling marks in builder path
-        elif _is_spine_raw_attr(node.func, "vconfig", self._aliases):
+        elif _is_smt_rvisa_attr(node.func, "vconfig", self._aliases):
             # Bare `tle.vconfig(avl, lmul)` statement: set active VL/valid
             # without binding a name (same semantics as the assignment form).
             self._apply_vconfig(node)
-        elif _is_spine_raw_attr(node.func, "vstore", self._aliases):
+        elif _is_smt_rvisa_attr(node.func, "vstore", self._aliases):
             self._gen_vstore(node)
-        elif _is_spine_raw_attr(node.func, "sstore", self._aliases):
+        elif _is_smt_rvisa_attr(node.func, "sstore", self._aliases):
             self._gen_sstore(node)
-        elif _is_spine_raw_attr(node.func, "pack", self._aliases):
+        elif _is_smt_rvisa_attr(node.func, "pack", self._aliases):
             self._gen_pack(node)
-        elif _is_spine_raw_attr(node.func, "call_intrinsic", self._aliases):
+        elif _is_smt_rvisa_attr(node.func, "call_intrinsic", self._aliases):
             self._gen_call_intrinsic(node)  # void form (e.g. llvm.riscv.vse)
         else:
             raise NotImplementedError(f"Unsupported call stmt: {ast.dump(node.func)}")
@@ -620,41 +620,41 @@ class SpineMLIRBuilderCodegen:
 
     def _gen_call_expr(self, node: ast.Call) -> tuple:
         b = self._aliases
-        if _is_spine_raw_attr(node.func, "vzero", b): return self._gen_vzero(node)
-        if _is_spine_raw_attr(node.func, "vload", b): return self._gen_vload(node)
-        if _is_spine_raw_attr(node.func, "vmacc", b): return self._gen_vmacc(node)
-        if _is_spine_raw_attr(node.func, "vreduce_sum", b): return self._gen_vreduce_sum(node)
-        if _is_spine_raw_attr(node.func, "vreduce_max", b): return self._gen_vreduce_max(node)
-        if _is_spine_raw_attr(node.func, "vreduce_min", b): return self._gen_vreduce_min(node)
-        if _is_spine_raw_attr(node.func, "vreduce_mul", b): return self._gen_vreduce_mul(node)
-        if _is_spine_raw_attr(node.func, "vmadot", b): return self._gen_vmadot(node)
-        if _is_spine_raw_attr(node.func, "vpack", b): return self._gen_vpack(node)
-        if _is_spine_raw_attr(node.func, "vshape", b): return self._gen_vshape(node)
-        if _is_spine_raw_attr(node.func, "vbroadcast", b): return self._gen_vbroadcast(node)
-        if _is_spine_raw_attr(node.func, "alloc", b): return self._gen_alloc(node)
-        if _is_spine_raw_attr(node.func, "spread", b): return self._gen_spread(node)
-        if _is_spine_raw_attr(node.func, "imin", b):
+        if _is_smt_rvisa_attr(node.func, "vzero", b): return self._gen_vzero(node)
+        if _is_smt_rvisa_attr(node.func, "vload", b): return self._gen_vload(node)
+        if _is_smt_rvisa_attr(node.func, "vmacc", b): return self._gen_vmacc(node)
+        if _is_smt_rvisa_attr(node.func, "vreduce_sum", b): return self._gen_vreduce_sum(node)
+        if _is_smt_rvisa_attr(node.func, "vreduce_max", b): return self._gen_vreduce_max(node)
+        if _is_smt_rvisa_attr(node.func, "vreduce_min", b): return self._gen_vreduce_min(node)
+        if _is_smt_rvisa_attr(node.func, "vreduce_mul", b): return self._gen_vreduce_mul(node)
+        if _is_smt_rvisa_attr(node.func, "vmadot", b): return self._gen_vmadot(node)
+        if _is_smt_rvisa_attr(node.func, "vpack", b): return self._gen_vpack(node)
+        if _is_smt_rvisa_attr(node.func, "vshape", b): return self._gen_vshape(node)
+        if _is_smt_rvisa_attr(node.func, "vbroadcast", b): return self._gen_vbroadcast(node)
+        if _is_smt_rvisa_attr(node.func, "alloc", b): return self._gen_alloc(node)
+        if _is_smt_rvisa_attr(node.func, "spread", b): return self._gen_spread(node)
+        if _is_smt_rvisa_attr(node.func, "imin", b):
             av, _ = self._gen_expr(node.args[0])
             bv, _ = self._gen_expr(node.args[1])
             return self._b.create_arith_minsi(av, bv), INDEX
         for nm in ("vmin", "vmax"):
-            if _is_spine_raw_attr(node.func, nm, b):
+            if _is_smt_rvisa_attr(node.func, nm, b):
                 return self._gen_vminmax(node, nm)
-        if _is_spine_raw_attr(node.func, "sqrt", b): return self._gen_unary_math(node, "sqrt")
-        if _is_spine_raw_attr(node.func, "rsqrt", b): return self._gen_unary_math(node, "rsqrt")
-        if _is_spine_raw_attr(node.func, "vexp", b): return self._gen_unary_math(node, "exp")
-        if _is_spine_raw_attr(node.func, "vlog", b): return self._gen_unary_math(node, "log")
-        if _is_spine_raw_attr(node.func, "sload", b): return self._gen_sload(node)
-        if _is_spine_raw_attr(node.func, "call_intrinsic", b): return self._gen_call_intrinsic(node)
-        if _is_spine_raw_attr(node.func, "llvm_poison", b): return self._gen_llvm_poison(node)
-        if _is_spine_raw_attr(node.func, "llvm_const", b): return self._gen_llvm_const(node)
-        if _is_spine_raw_attr(node.func, "llvm_base_ptr", b): return self._gen_llvm_base_ptr(node)
-        if _is_spine_raw_attr(node.func, "llvm_gep", b): return self._gen_llvm_gep(node)
-        if _is_spine_raw_attr(node.func, "llvm_size", b): return self._gen_llvm_size(node)
-        if _is_spine_raw_attr(node.func, "viota", b): return self._gen_viota(node)
-        if _is_spine_raw_attr(node.func, "abs", b): return self._gen_abs(node)
-        if _is_spine_raw_attr(node.func, "cast", b): return self._gen_cast(node)
-        if _is_spine_raw_attr(node.func, "select", b): return self._gen_select(node)
+        if _is_smt_rvisa_attr(node.func, "sqrt", b): return self._gen_unary_math(node, "sqrt")
+        if _is_smt_rvisa_attr(node.func, "rsqrt", b): return self._gen_unary_math(node, "rsqrt")
+        if _is_smt_rvisa_attr(node.func, "vexp", b): return self._gen_unary_math(node, "exp")
+        if _is_smt_rvisa_attr(node.func, "vlog", b): return self._gen_unary_math(node, "log")
+        if _is_smt_rvisa_attr(node.func, "sload", b): return self._gen_sload(node)
+        if _is_smt_rvisa_attr(node.func, "call_intrinsic", b): return self._gen_call_intrinsic(node)
+        if _is_smt_rvisa_attr(node.func, "llvm_poison", b): return self._gen_llvm_poison(node)
+        if _is_smt_rvisa_attr(node.func, "llvm_const", b): return self._gen_llvm_const(node)
+        if _is_smt_rvisa_attr(node.func, "llvm_base_ptr", b): return self._gen_llvm_base_ptr(node)
+        if _is_smt_rvisa_attr(node.func, "llvm_gep", b): return self._gen_llvm_gep(node)
+        if _is_smt_rvisa_attr(node.func, "llvm_size", b): return self._gen_llvm_size(node)
+        if _is_smt_rvisa_attr(node.func, "viota", b): return self._gen_viota(node)
+        if _is_smt_rvisa_attr(node.func, "abs", b): return self._gen_abs(node)
+        if _is_smt_rvisa_attr(node.func, "cast", b): return self._gen_cast(node)
+        if _is_smt_rvisa_attr(node.func, "select", b): return self._gen_select(node)
         raise NotImplementedError(f"Unsupported call: {ast.dump(node.func)}")
 
     # ------------------------------------------------------------------

@@ -25,7 +25,7 @@ def _to_handle(v, builder, ty):
         else:
             ft = builder.get_f32_type()
         return builder.create_arith_constant_float(val, ft)
-    raise TypeError(f"spine_raw.call: cannot convert constexpr {val!r} "
+    raise TypeError(f"smt_rvisa.call: cannot convert constexpr {val!r} "
                     f"(param type {ty!r}) to IR handle")
 
 
@@ -114,7 +114,7 @@ def call(fn, outputs=None, inputs=None, _semantic=None):
         # Arity guard: inputs must match kernel signature
         n_params = len(_parse_signature(raw_fn))
         if len(inputs) != n_params:
-            raise ValueError(f"spine_raw.call: LLVM-direct kernel {raw_fn.__name__!r} declares "
+            raise ValueError(f"smt_rvisa.call: LLVM-direct kernel {raw_fn.__name__!r} declares "
                              f"{n_params} parameter(s) but got {len(inputs)} input(s).")
 
         # Emit the sibling llvm.func (no module wrapper). param_types is the
@@ -156,14 +156,14 @@ def call(fn, outputs=None, inputs=None, _semantic=None):
         arg_bridge = []  # per-input: {"pos": int, "kind": "ptr"|"scalar"}
         for (pname, ann), v in zip(params, inputs):
             if not hasattr(v, "handle"):
-                raise ValueError(f"spine_raw.call: LLVM-direct kernel {raw_fn.__name__!r} in "
+                raise ValueError(f"smt_rvisa.call: LLVM-direct kernel {raw_fn.__name__!r} in "
                                  f"mixed mode requires every input to be a host launch arg "
                                  f"(a tt.func parameter); got a computed/constexpr value for "
                                  f"{pname!r}. Compute derived values INSIDE the kernel from "
                                  f"tle.program_id(axis).")
             pos = argid_to_pos.get(v.handle.id())
             if pos is None:
-                raise ValueError(f"spine_raw.call: input for {pname!r} of {raw_fn.__name__!r} "
+                raise ValueError(f"smt_rvisa.call: input for {pname!r} of {raw_fn.__name__!r} "
                                  f"is not a host entry-block argument. In mixed mode inputs must "
                                  f"be the host's own launch parameters (bridged to the sibling "
                                  f"llvm.func by position at the linalgdir stage).")

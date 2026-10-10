@@ -359,7 +359,7 @@ index d522fca7b..38094f2cc3 100644
 +                        print(f"[spacemit] Vendored {header} from spine-runtime")
 +
 +        # --- spacemit: vendor MLIR Python bindings (mlir_core) ---
-+        # llvm_direct.py / mixed_bridge.py (spine_raw LLVM-direct emitter)
++        # llvm_direct.py / mixed_bridge.py (smt_rvisa LLVM-direct emitter)
 +        # import the MLIR Python bindings at module load; vendoring them next
 +        # to bin/ lib/ makes the wheel self-contained — _mlir_loader.py
 +        # resolves backend/mlir_core at runtime with no PYTHONPATH.
@@ -383,7 +383,7 @@ index d522fca7b..38094f2cc3 100644
 +                        f"[spacemit] MLIR Python bindings (mlir_core) not found under "
 +                        f"{mlir_bindings_root} — pass the -python release package or an "
 +                        f"LLVM install with python_packages/mlir_core via "
-+                        f"SPINE_MLIR_BINDINGS_DIR / LLVM_SYSPATH (spine_raw llvm_direct "
++                        f"SPINE_MLIR_BINDINGS_DIR / LLVM_SYSPATH (smt_rvisa llvm_direct "
 +                        f"needs them).")
 +                mlir_bindings_dst = os.path.join(backend_src_dir, "backend", "mlir_core")
 +                if os.path.isdir(mlir_bindings_dst):

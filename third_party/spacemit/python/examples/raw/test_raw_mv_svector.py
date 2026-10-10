@@ -1,4 +1,4 @@
-"""spine_raw svector-level mv (feishu 3.3 示例).
+"""smt_rvisa svector-level mv (feishu 3.3 示例).
 
 C = B @ A   with  B: [N, K] f16 row-major,  A: [K] f16,  C: [N] f32.
 
@@ -24,8 +24,8 @@ from triton.backends.spacemit.driver import CPUDriver
 
 triton.runtime.driver.set_active(CPUDriver())
 import pytest
-import triton.language.extra.spine_raw as tle
-from triton.language.extra.spine_raw import call as _sr_call
+import triton.language.extra.smt_rvisa as tle
+from triton.language.extra.smt_rvisa import call as _sr_call
 
 f16 = tle.f16
 f32 = tle.f32

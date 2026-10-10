@@ -4,9 +4,9 @@
 host→sibling call bridges into the LOWERED `ll.mlir`, built entirely with the
 upstream MLIR Python bindings (`mlir.dialects.llvm`).
 
-Background. A "mixed" kernel combines the builder path (SpineMLIRBuilderCodegen,
+Background. A "mixed" kernel combines the builder path (SmtMLIRBuilderCodegen,
 which emits `vector`/`linalg` ops inlined into a `func.func` host) with
-`spine_raw.call(...)` siblings emitted by the LLVM-direct backend as standalone
+`smt_rvisa.call(...)` siblings emitted by the LLVM-direct backend as standalone
 `llvm.func`s. spine-opt cannot lower raw `llvm.*` ops sitting inside the host
 `func.func` (they trip BufferDeallocation / ConvertToScalableVector), so the
 siblings are NOT inlined at the TTIR/linalg layer. Instead:
@@ -54,7 +54,7 @@ try:
     from mlir import ir
     from mlir.dialects import llvm as dllvm
 except ImportError as _e:  # pragma: no cover - environment guard
-    raise ImportError("spine_raw mixed-mode bridge injector requires the MLIR Python bindings "
+    raise ImportError("smt_rvisa mixed-mode bridge injector requires the MLIR Python bindings "
                       "(importable 'mlir' package). They are vendored into "
                       "triton/backends/<backend>/mlir_core by setup.py at package time; if that "
                       "copy is missing, rebuild the wheel (third_party/spacemit/scripts/install_flagtree_plugin.sh) from an "

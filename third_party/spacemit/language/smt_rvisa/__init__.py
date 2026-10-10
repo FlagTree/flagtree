@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 SpacemiT. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""spine_raw — Python eDSL for writing raw Linalg/memref/vector MLIR kernels.
+"""smt_rvisa — Python eDSL for writing raw Linalg/memref/vector MLIR kernels.
 
 Public API:
-    spine_raw   : decorator factory to mark a function as a raw MLIR kernel
-    raw_kernel  : convenience alias for spine_raw(name="linalg")
+    smt_rvisa   : decorator factory to mark a function as a raw MLIR kernel
+    raw_kernel  : convenience alias for smt_rvisa(name="linalg")
     mem, index  : parameter annotations (tle.mem(f16) / tle.mem(f32, out=True)
                   / tle.index)
     call        : inside @triton.jit, emit tle.dsl_region (C++ DSLRegionOpPattern
@@ -14,7 +14,7 @@ Public API:
 """
 
 from .types import mem, index
-from .runtime import spine_raw, SpineLinalgJITFunction
+from .runtime import smt_rvisa, SmtLinalgJITFunction
 from .call_registry import call
 from .builtins import proton_mark
 from .builtins import vconfig, vzero, vload, vmacc, vreduce_sum, vreduce_max, vreduce_min, vreduce_mul, vstore, alloc, pack, vpack, vmadot, vshape, vbroadcast, spread
@@ -24,14 +24,14 @@ from .builtins import f16, f32, bf16
 from .builtins import mma_cube
 from .builtins import range as range  # noqa: A001 (shadows builtin intentionally)
 
-# raw_kernel: bare decorator alias for @spine_raw(name="linalg") to match the
+# raw_kernel: bare decorator alias for @smt_rvisa(name="linalg") to match the
 # feishu 3.3 surface (`@tle.raw_kernel`).
-raw_kernel = spine_raw(name="linalg")
+raw_kernel = smt_rvisa(name="linalg")
 
 __all__ = [
-    "spine_raw",
+    "smt_rvisa",
     "raw_kernel",
-    "SpineLinalgJITFunction",
+    "SmtLinalgJITFunction",
     "mem",
     "index",
     "call",

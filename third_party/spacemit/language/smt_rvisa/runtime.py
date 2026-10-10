@@ -1,20 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 SpacemiT. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""@spine_raw decorator and SpineLinalgJITFunction.
+"""@smt_rvisa decorator and SmtLinalgJITFunction.
 
-SpineLinalgJITFunction wraps a Python function annotated with tle.mem/tle.index
-and, on first call to make_body_builder(), runs SpineMLIRBuilderCodegen to build
+SmtLinalgJITFunction wraps a Python function annotated with tle.mem/tle.index
+and, on first call to make_body_builder(), runs SmtMLIRBuilderCodegen to build
 the raw kernel body straight through the C++ builder API (no MLIR text).
 """
 from __future__ import annotations
 
 from typing import Callable
 
-from .codegen import SpineMLIRBuilderCodegen
+from .codegen import SmtMLIRBuilderCodegen
 
 
-class SpineLinalgJITFunction:
-    """Wrapper around a @spine_raw function that emits its body via builder API.
+class SmtLinalgJITFunction:
+    """Wrapper around a @smt_rvisa function that emits its body via builder API.
 
     Attributes:
         _fn                  : original Python function
@@ -36,12 +36,12 @@ class SpineLinalgJITFunction:
         (vload/vzero/vmacc/vreduce_*/sstore/vconfig/...). `range` is path-agnostic
         control-flow and used by both, so it doesn't count as a svector marker.
         A mixed kernel (svector helpers + call_intrinsic) goes to
-        SpineMLIRBuilderCodegen, whose _gen_call_intrinsic handles
+        SmtMLIRBuilderCodegen, whose _gen_call_intrinsic handles
         tle.call_intrinsic inline.
         """
         import ast
         import inspect
-        from .codegen import _SPINE_RAW_BUILTIN_NAMES
+        from .codegen import _SMT_RVISA_BUILTIN_NAMES
         # path-agnostic control-flow primitives used by BOTH codegens
         _PATH_AGNOSTIC = {"range", "proton_mark"}
         try:
@@ -56,10 +56,10 @@ class SpineLinalgJITFunction:
                         has_llvm_direct = True
                     elif name in _PATH_AGNOSTIC:
                         pass  # control-flow, not a svector marker
-                    elif name in _SPINE_RAW_BUILTIN_NAMES and not name.startswith("llvm_"):
+                    elif name in _SMT_RVISA_BUILTIN_NAMES and not name.startswith("llvm_"):
                         has_svector = True
             # Pure llvm-direct kernel → LLVMDirectCodegen.
-            # Mixed or pure-svector → SpineMLIRBuilderCodegen (svector path).
+            # Mixed or pure-svector → SmtMLIRBuilderCodegen (svector path).
             return has_llvm_direct and not has_svector
         except Exception:
             return False
@@ -71,32 +71,32 @@ class SpineLinalgJITFunction:
     def make_body_builder(self):
         """Return (param_tys, body_builder) for create_tle_dsl_region_direct."""
         if self._body_builder_cache is None:
-            gen = SpineMLIRBuilderCodegen()
+            gen = SmtMLIRBuilderCodegen()
             self._body_builder_cache = gen.generate_builder(self._fn)
         return self._body_builder_cache
 
     def __repr__(self) -> str:
-        return f"SpineLinalgJITFunction({self._fn.__name__!r})"
+        return f"SmtLinalgJITFunction({self._fn.__name__!r})"
 
 
 _REGISTRY: dict[str, type] = {
-    "linalg": SpineLinalgJITFunction,
+    "linalg": SmtLinalgJITFunction,
 }
 
 
-def spine_raw(*, name: str = "linalg") -> Callable:
+def smt_rvisa(*, name: str = "linalg") -> Callable:
     """Decorator: mark a Python function as a raw Linalg MLIR kernel.
 
     Usage:
-        @spine_raw(name="linalg")
+        @smt_rvisa(name="linalg")
         def mv_acc_raw_inner(A: tle.mem(f16), K: tle.index, C: tle.mem(f32, out=True)):
             ...
     """
     if name not in _REGISTRY:
-        raise ValueError(f"spine_raw: unknown backend {name!r}. Available: {list(_REGISTRY)}")
+        raise ValueError(f"smt_rvisa: unknown backend {name!r}. Available: {list(_REGISTRY)}")
     cls = _REGISTRY[name]
 
-    def decorator(fn: Callable) -> SpineLinalgJITFunction:
+    def decorator(fn: Callable) -> SmtLinalgJITFunction:
         return cls(fn)
 
     return decorator
