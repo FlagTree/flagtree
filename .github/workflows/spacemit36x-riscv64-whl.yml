@@ -1,0 +1,328 @@
+# Copyright 2025-     FlagOS Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# SpaceMiT riscv64 per-Python-version wheel 构建 CI。
+#
+# 在 GitHub-hosted ubuntu runner 上交叉编译 linux_riscv64 FlagTree wheel
+# (spacemit backend plugin)，每个 CPython 版本 (3.12/3.13/3.14) 一个 matrix
+# job，产物为 wheel artifact（不经 QEMU 测试 —— 数值验证走真板，
+# 见 spacemit3.6-build-and-test.yml 的 self-hosted 测试流）。
+#
+# 依赖资产（md5 在 third_party/spacemit/spacemit-ci.env 定义）:
+#   RISCV_TOOLCHAIN / SPEIR / SPINE_RUNTIME / LLVM_CROSS    共享，无 python 后缀
+#   MLIR_BINDINGS_{URL,MD5}_<312|313|314>                   MLIR Python bindings
+#   PYENV_{URL,MD5}_<312|313|314>                           riscv64 CPython (headers + libpython)
+#   PYTHON_VERSIONS                                         matrix 版本表
+# 构建入口: third_party/spacemit/scripts/build_wheel_riscv64.sh
+
+name: Spacemit3.6-Riscv64-Wheel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      python-versions: ${{ steps.read-versions.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read Python versions from spacemit-ci.env
+        id: read-versions
+        run: |
+          source third_party/spacemit/spacemit-ci.env
+          echo "versions=$PYTHON_VERSIONS" >> $GITHUB_OUTPUT
+
+  build-wheels:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJson(needs.setup.outputs.python-versions) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          cat third_party/spacemit/spacemit-ci.env >> $GITHUB_ENV
+
+      # The MLIR Python bindings and the cross-build Python (py-riscv64) are
+      # per-CPython-version assets: spacemit-ci.env defines
+      # MLIR_BINDINGS_{URL,MD5}_<312|313|314> and PYENV_{URL,MD5}_<312|313|314>;
+      # select the pair matching this matrix job into plain
+      # MLIR_BINDINGS_{URL,MD5} / PYENV_{URL,MD5} for the steps below.
+      - name: Select per-python-version asset URLs
+        run: |
+          V="$(echo '${{ matrix.python-version }}' | tr -d '.')"
+          MB_URL="MLIR_BINDINGS_URL_${V}"
+          MB_MD5="MLIR_BINDINGS_MD5_${V}"
+          PE_URL="PYENV_URL_${V}"
+          PE_MD5="PYENV_MD5_${V}"
+          for var in "$MB_URL" "$MB_MD5" "$PE_URL" "$PE_MD5"; do
+            if [ -z "${!var:-}" ]; then
+              echo "ERROR: $var is not defined in third_party/spacemit/spacemit-ci.env" >&2
+              exit 1
+            fi
+          done
+          # env file values may carry surrounding double quotes (GITHUB_ENV does
+          # not strip them); strip so cache keys and md5sum checks see bare values.
+          strip_q() { local s="${!1}"; s="${s%\"}"; s="${s#\"}"; echo "$s"; }
+          echo "MLIR_BINDINGS_URL=$(strip_q "$MB_URL")" >> "$GITHUB_ENV"
+          echo "MLIR_BINDINGS_MD5=$(strip_q "$MB_MD5")" >> "$GITHUB_ENV"
+          echo "PYENV_URL=$(strip_q "$PE_URL")" >> "$GITHUB_ENV"
+          echo "PYENV_MD5=$(strip_q "$PE_MD5")" >> "$GITHUB_ENV"
+
+      - name: Setup System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang lld
+
+      - name: Free Disk Space & Setup Swap
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ninja cmake wheel pybind11 setuptools
+
+      - name: Cache RV toolchain
+        id: cache-rv-toolchain
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: rv-toolchain-${{ env.RISCV_TOOLCHAIN_MD5 }}-zlib-1.3.1
+
+      - name: Download and extract RV toolchain
+        if: steps.cache-rv-toolchain.outputs.cache-hit != 'true'
+        run: |
+          curl -k -L -o spacemit-toolchain.tar.xz ${{ env.RISCV_TOOLCHAIN_URL }}
+          mkdir -p toolchain
+          tar -xf spacemit-toolchain.tar.xz -C toolchain --strip-components=1
+          rm spacemit-toolchain.tar.xz
+          rm -rf toolchain/sysroot/lib64/cmake/*
+
+      - name: Set RV toolchain environment variables
+        run: |
+          echo "RISCV_ROOT_PATH=$(pwd)/toolchain" >> $GITHUB_ENV
+
+      - name: Add zlib(rv) to RV toolchain
+        if: steps.cache-rv-toolchain.outputs.cache-hit != 'true'
+        run: |
+          chmod +x .github/scripts/build_rv_zlib.sh
+          ./.github/scripts/build_rv_zlib.sh
+
+      - name: Cache SPEIR
+        id: cache-speir
+        uses: actions/cache@v4
+        with:
+          path: speir_installed
+          key: speir-${{ env.SPEIR_MD5 }}
+
+      - name: Download and extract SPEIR
+        if: steps.cache-speir.outputs.cache-hit != 'true'
+        run: |
+          curl -k -L -o speir.tar.gz ${{ env.SPEIR_URL }}
+          mkdir -p /tmp/speir_tmp
+          tar -xf speir.tar.gz -C /tmp/speir_tmp
+          REAL_SPEIR_ROOT=$(dirname $(find /tmp/speir_tmp -type d -name "bin" | head -n 1))
+          echo "Found actual SPEIR root at: $REAL_SPEIR_ROOT"
+          mkdir -p speir_installed
+          cp -a "$REAL_SPEIR_ROOT"/* speir_installed/
+          rm -rf /tmp/speir_tmp speir.tar.gz
+          ls -la speir_installed/bin/
+
+      - name: Cache spine-runtime
+        id: cache-spine-runtime
+        uses: actions/cache@v4
+        with:
+          path: spine_runtime_installed
+          key: spine-runtime-${{ env.SPINE_RUNTIME_MD5 }}
+
+      - name: Download and extract spine-runtime
+        if: steps.cache-spine-runtime.outputs.cache-hit != 'true'
+        run: |
+          curl -k -L -o spine-runtime.tar.gz ${{ env.SPINE_RUNTIME_URL }}
+          mkdir -p /tmp/spine_runtime_tmp
+          tar -xf spine-runtime.tar.gz -C /tmp/spine_runtime_tmp
+          REAL_ROOT=$(dirname $(find /tmp/spine_runtime_tmp -type d -name "include" | head -n 1))
+          echo "Found actual spine-runtime root at: $REAL_ROOT"
+          mkdir -p spine_runtime_installed
+          cp -a "$REAL_ROOT"/* spine_runtime_installed/
+          rm -rf /tmp/spine_runtime_tmp spine-runtime.tar.gz
+          ls -la spine_runtime_installed/lib/ spine_runtime_installed/include/
+
+      # Cross LLVM (f6ded0be == LLVM22) — distinct from the build-and-test
+      # workflow's x86 LLVM asset: the riscv64 wheel must be compiled with the
+      # cross toolchain.
+      - name: Cache LLVM cross
+        id: cache-llvm
+        uses: actions/cache@v4
+        with:
+          path: llvm_installed
+          key: llvm-cross-${{ env.LLVM_CROSS_MD5 }}
+
+      - name: Download and extract LLVM cross
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: |
+          curl -k -L -o llvm.tar.gz ${{ env.LLVM_CROSS_URL }}
+          echo "expecting md5 ${{ env.LLVM_CROSS_MD5 }}"
+          echo "${{ env.LLVM_CROSS_MD5 }}  llvm.tar.gz" | md5sum -c -
+          mkdir -p llvm_installed
+          tar -xf llvm.tar.gz -C llvm_installed --strip-components=1
+          rm llvm.tar.gz
+          ls llvm_installed/bin/ | head
+
+      # The MLIR Python bindings are per-CPython-version assets (each package
+      # only ships cpython-3XX-tagged .so). The cache key must therefore include
+      # the python version: with an md5-only key a 3.12 cache-hit on a shared
+      # runner would poison the 3.13/3.14 jobs with wrong-tag bindings (import
+      # error only at runtime on the board). The 312 tag suffix does not
+      # disambiguate the 3.13/3.14 caches, so -py<version> is appended.
+      - name: Cache MLIR Python bindings
+        id: cache-mlir-bindings
+        uses: actions/cache@v4
+        with:
+          path: mlir_bindings
+          key: mlir-bindings-${{ env.MLIR_BINDINGS_MD5 }}-py${{ matrix.python-version }}
+
+      - name: Download and extract MLIR Python bindings
+        if: steps.cache-mlir-bindings.outputs.cache-hit != 'true'
+        run: |
+          curl -k -L -o mlir-bindings.tar.gz ${{ env.MLIR_BINDINGS_URL }}
+          echo "expecting md5 ${{ env.MLIR_BINDINGS_MD5 }}"
+          echo "${{ env.MLIR_BINDINGS_MD5 }}  mlir-bindings.tar.gz" | md5sum -c -
+          # Single top-level dir (<llvm-tag>-...-python3XX/); strip it so the
+          # extracted root is mlir_bindings/mlir/ directly.
+          mkdir -p mlir_bindings
+          tar -xf mlir-bindings.tar.gz -C mlir_bindings --strip-components=1
+          rm mlir-bindings.tar.gz
+          ls mlir_bindings/mlir/ | head
+
+      # riscv64 CPython (py-riscv64-3XX): supplies the target Python headers
+      # (Python3_INCLUDE_DIR) and libpython for the cross compile. The host
+      # actions/setup-python headers are x86 and must not leak into the build.
+      - name: Cache riscv64 Python
+        id: cache-py-riscv64
+        uses: actions/cache@v4
+        with:
+          path: py_riscv64
+          key: py-riscv64-${{ env.PYENV_MD5 }}
+
+      - name: Download and extract riscv64 Python
+        if: steps.cache-py-riscv64.outputs.cache-hit != 'true'
+        run: |
+          curl -k -L -o py-riscv64.tar.gz ${{ env.PYENV_URL }}
+          echo "expecting md5 ${{ env.PYENV_MD5 }}"
+          echo "${{ env.PYENV_MD5 }}  py-riscv64.tar.gz" | md5sum -c -
+          # Single top-level dir (py-riscv64-3XX/); strip it so the extracted
+          # root has include/python3.X and lib/libpython3.X.so directly.
+          mkdir -p py_riscv64
+          tar -xf py-riscv64.tar.gz -C py_riscv64 --strip-components=1
+          rm py-riscv64.tar.gz
+          ls py_riscv64/include/
+          ls py_riscv64/include/ | grep -qx "python${{ matrix.python-version }}" \
+            || { echo "ERROR: py_riscv64/include has no python${{ matrix.python-version }}"; exit 1; }
+          ls py_riscv64/lib/libpython*.so*
+
+      # Build the riscv64 wheel. The script applies flagtree.patch, vendors
+      # spert headers + per-version MLIR bindings, cross-compiles via
+      # TRITON_APPEND_CMAKE_ARGS (toolchain file + py headers + zlib), and
+      # retags the wheel to linux_riscv64.
+      - name: Build riscv64 wheel
+        env:
+          MAX_JOBS: 2
+          TRITON_PARALLEL_LINK_JOBS: 1
+        run: |
+          chmod +x third_party/spacemit/scripts/build_wheel_riscv64.sh
+          ./third_party/spacemit/scripts/build_wheel_riscv64.sh \
+            "$PWD/llvm_installed" "$PWD/speir_installed" "$PWD/spine_runtime_installed" \
+            "$PWD/mlir_bindings" "$PWD/py_riscv64"
+
+      - name: Upload wheel package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flagtree-riscv64-whl-py${{ matrix.python-version }}
+          path: dist-riscv64/*.whl
+          retention-days: 30
+
+      - name: Verify Wheel Architecture (RISC-V)
+        run: |
+          WHEEL_FILE=$(find . -name "*.whl" -type f | head -n 1)
+
+          if [ -z "$WHEEL_FILE" ]; then
+            echo "Error: no .whl file found"
+            ls -la dist-riscv64/ 2>/dev/null || echo "dist-riscv64 does not exist"
+            exit 1
+          fi
+
+          echo "Found wheel: $WHEEL_FILE"
+          mkdir -p /tmp/wheel_check
+          unzip -q "$WHEEL_FILE" -d /tmp/wheel_check
+
+          SO_FILES=$(find /tmp/wheel_check -name "*.so" -type f)
+
+          if [ -z "$SO_FILES" ]; then
+            echo "Warning: no .so files found in wheel (pure Python package?)"
+            exit 0
+          fi
+
+          echo "Found $(echo "$SO_FILES" | wc -l) .so file(s)"
+
+          FAILED=0
+          for file in $SO_FILES; do
+            arch_info=$(file "$file")
+            echo "$file"
+            echo "  $arch_info"
+
+            # Must not be x86-64
+            if echo "$arch_info" | grep -qi "x86-64"; then
+              echo "  Error: x86-64 binary detected"
+              FAILED=1
+            fi
+
+            # Must be RISC-V
+            if ! echo "$arch_info" | grep -qi "RISC-V"; then
+              echo "  Error: not a RISC-V binary"
+              FAILED=1
+            fi
+          done
+
+          if [ $FAILED -eq 1 ]; then
+            echo "Architecture check failed"
+            exit 1
+          fi
+
+          echo "Architecture check passed: all shared libraries are RISC-V"
