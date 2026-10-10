@@ -8,10 +8,6 @@
 #   PATH=/usr/local/Ascend/cann-9.0.0-beta.2/bin:$PATH \
 #   ASCEND_RT_VISIBLE_DEVICES=7 \
 #   python -u python/tutorials/tle/dsa/11-reduce-sum-strength.py
-#
-# Note: the option value is not part of the triton cache key, so each variant
-# gets its own cache dir (knobs.cache.dir) to avoid reusing the other
-# variant's compiled kernel.
 
 import tempfile
 
