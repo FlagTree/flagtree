@@ -53,21 +53,13 @@ class SubmoduleRegistrar:
 
 
 global submodule_registrar
-# FlagPrism: a clean checkout must be able to use the maintained fork, while
-# CI/offline users can override both repository and revision explicitly.
-_flagprism_url = os.environ.get(
-    "FLAGPRISM_REPOSITORY_URL",
-    "https://github.com/Jacob-yen/FlagPrism.git",
-)
-_flagprism_ref = os.environ.get("FLAGPRISM_REPOSITORY_REF") or None
 submodule_registrar = SubmoduleRegistrar(submodules=(
     {
         "name": "triton_shared", "url": "https://github.com/microsoft/triton-shared.git", "commit_id":
         "5842469a16b261e45a2c67fbfc308057622b03ee"
     },
     {"name": "flir", "url": "https://github.com/flagos-ai/flir.git"},
-    # FlagPrism: register the external component without vendoring its sources.
-    {"name": "FlagPrism", "url": _flagprism_url, "commit_id": _flagprism_ref},
+    {"name": "FlagPrism", "url": "https://github.com/flagos-ai/FlagPrism.git"},
     {
         "name": "flagcx", "url": "https://github.com/flagos-ai/FlagCX.git", "relative_path": "tle/third_party/flagcx",
         "commit_id": "c93438decaba8d935e7aa6ae8377e56fd3910b32"
