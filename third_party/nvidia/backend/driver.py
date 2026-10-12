@@ -830,27 +830,9 @@ class CudaLauncher(object):
                 return alloc_fn(alloc_size, align, stream)
             return None
 
-        # FlagPrism: the original scratch allocation and stock CUDA call are
-        # kept commented for reference. Allocation moved into ``launch`` so a
-        # debugger prepare/launch cycle has exactly one allocation per launch,
-        # with debugger-owned hidden arguments appended after user arguments.
-        # global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
-        # # begin flagtree tle
-        # # Grid distributed_barrier lowering follows CUDA cooperative_groups
-        # # sync counter protocol, which assumes a well-defined initial counter
-        # # state. Runtime scratch allocators may return uninitialized storage;
-        # # for cooperative launches, clear scratch before kernel launch.
-        # if self.launch_cooperative_grid and global_scratch is not None:
-        #     zero_ = getattr(global_scratch, "zero_", None)
-        #     if callable(zero_):
-        #         zero_()
-        #     else:
-        #         fill_ = getattr(global_scratch, "fill_", None)
-        #         if callable(fill_):
-        #             fill_(0)
-        # # end flagtree tle
-        # profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
-        #                                    _allocation._profile_allocator)
+        # FlagPrism: move scratch allocation and the stock CUDA call into
+        # ``launch`` so each debugger prepare/launch cycle allocates exactly
+        # once and appends hidden arguments after user arguments.
         def launch(hidden_args=()):
             global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align,
                                               _allocation._allocator)
