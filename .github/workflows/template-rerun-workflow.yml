@@ -30,12 +30,12 @@ on:
       run_attempt:
         description: "Current run attempt; used as the retry budget."
         required: true
-        type: number
+        type: string
       max_attempts:
         description: "Stop auto-rerun once run_attempt reaches this value."
         required: false
-        type: number
-        default: 5
+        type: string
+        default: "5"
 
 permissions:
   actions: write      # Required to call the rerun API
@@ -44,7 +44,7 @@ permissions:
 jobs:
   rerun:
     # Retry budget: shared by both manual and automatic reruns.
-    if: inputs.run_attempt < inputs.max_attempts
+    if: fromJSON(inputs.run_attempt) < fromJSON(inputs.max_attempts)
     runs-on: ubuntu-latest
     steps:
       - name: Rerun the entire run if a known failure signature is found

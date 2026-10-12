@@ -59,9 +59,9 @@ jobs:
     if: always()
     uses: ./.github/workflows/template-rerun-workflow.yml
     with:
-      run_id: run_id: ${{ format('{0}', github.run_id) }}
-      run_attempt: ${{ github.run_attempt }}
-      max_attempts: 5
+      run_id: ${{ format('{0}', github.run_id) }}
+      run_attempt: ${{ format('{0}', github.run_attempt) }}
+      max_attempts: "5"
     permissions:
       actions: write
       contents: read
