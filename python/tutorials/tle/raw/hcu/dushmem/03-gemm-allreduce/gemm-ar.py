@@ -313,7 +313,15 @@ def _run_shape(host, nccl_group, device, rank, world_size, m, n, k_per_rank, per
 
     if perf:
         epoch_box = [epoch + 1]
-        torch_ms = _max_ms(_elapsed_ms(lambda: _torch_serial(a, b, torch_out, nccl_group), ITERS), device, nccl_group)
+        # Bind the tensors as defaults. A later `del` makes a bare closure look undefined to ruff.
+        torch_ms = _max_ms(
+            _elapsed_ms(
+                lambda a=a, b=b, torch_out=torch_out: _torch_serial(a, b, torch_out, nccl_group),
+                ITERS,
+            ),
+            device,
+            nccl_group,
+        )
         k_total = k_per_rank * world_size
         flops = 2.0 * m * n * k_total
         overlap_ms = _overlap_ms(
