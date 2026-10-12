@@ -1,4 +1,9 @@
 from triton.errors import TritonError
+from triton.runtime.errors import BackendCompilerError
+
+
+class TileirasError(BackendCompilerError):
+    pass
 
 
 class HitFallback(TritonError):
