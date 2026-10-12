@@ -90,6 +90,11 @@ class BaseBackend(metaclass=ABCMeta):
         return src.make_ir(self.target, options, codegen_fns, module_map, context)
 
     @staticmethod
+    def get_tensor_descriptor_specialization(arg):
+        """Return backend-specific TensorDescriptor cache-key attributes."""
+        return None
+
+    @staticmethod
     @abstractmethod
     def supports_target(target: GPUTarget):
         raise NotImplementedError
