@@ -5,7 +5,6 @@
 #   --master_addr=127.0.0.1 --master_port=29502 gemm-ar.py
 # torchrun --nproc_per_node=2 --nnodes=1 --node_rank=0 \
 #   --master_addr=127.0.0.1 --master_port=29502 gemm-ar.py perf
-
 """K-split GEMM overlapped with a tile allreduce.
 
 tl.dot on gfx936 tops out near 135 TFLOPS for this shape; hipBLAS is about 300.
@@ -166,7 +165,13 @@ def _launch_overlap(host, epoch, a, b, workspace, ready, peer_workspace, peer_re
             tile_begin = (m0 // BLOCK_M) * num_pid_n
             tile_count = ((m1 - m0) // BLOCK_M) * num_pid_n
             status = host.gemm_ar_mark_tiles(
-                ctypes.c_void_p(ready.data_ptr()), rank, num_tiles, tile_begin, tile_count, epoch, stream_ptr,
+                ctypes.c_void_p(ready.data_ptr()),
+                rank,
+                num_tiles,
+                tile_begin,
+                tile_count,
+                epoch,
+                stream_ptr,
             )
             if status != 0:
                 raise RuntimeError(f"mark tiles failed: {status}")
@@ -216,10 +221,24 @@ def _max_ms(ms, device, nccl_group):
 
 def _overlap_ms(host, epoch_box, a, b, workspace, ready, peer_workspace, peer_ready, ar_out, compute_stream,
                 comm_stream, num_comm, world_size, rank, chunk_m, device, nccl_group):
+
     def overlap_once():
         _launch_overlap(
-            host, epoch_box[0], a, b, workspace, ready, peer_workspace, peer_ready, ar_out, compute_stream,
-            comm_stream, num_comm, world_size, rank, chunk_m,
+            host,
+            epoch_box[0],
+            a,
+            b,
+            workspace,
+            ready,
+            peer_workspace,
+            peer_ready,
+            ar_out,
+            compute_stream,
+            comm_stream,
+            num_comm,
+            world_size,
+            rank,
+            chunk_m,
         )
         epoch_box[0] += 1
 
@@ -266,8 +285,21 @@ def _run_shape(host, nccl_group, device, rank, world_size, m, n, k_per_rank, per
     comm_stream = torch.cuda.Stream(device=device, priority=-1)
     epoch = 1
     _launch_overlap(
-        host, epoch, a, b, workspace, ready, peer_workspace, peer_ready, ar_out, compute_stream, comm_stream,
-        num_comm_sms, world_size, rank, chunk_m,
+        host,
+        epoch,
+        a,
+        b,
+        workspace,
+        ready,
+        peer_workspace,
+        peer_ready,
+        ar_out,
+        compute_stream,
+        comm_stream,
+        num_comm_sms,
+        world_size,
+        rank,
+        chunk_m,
     )
     torch.cuda.synchronize()
 
@@ -285,8 +317,23 @@ def _run_shape(host, nccl_group, device, rank, world_size, m, n, k_per_rank, per
         k_total = k_per_rank * world_size
         flops = 2.0 * m * n * k_total
         overlap_ms = _overlap_ms(
-            host, epoch_box, a, b, workspace, ready, peer_workspace, peer_ready, ar_out, compute_stream, comm_stream,
-            num_comm_sms, world_size, rank, chunk_m, device, nccl_group,
+            host,
+            epoch_box,
+            a,
+            b,
+            workspace,
+            ready,
+            peer_workspace,
+            peer_ready,
+            ar_out,
+            compute_stream,
+            comm_stream,
+            num_comm_sms,
+            world_size,
+            rank,
+            chunk_m,
+            device,
+            nccl_group,
         )
         if rank == 0:
             print(
@@ -317,7 +364,7 @@ def main() -> None:
     nccl_group = torch.distributed.new_group(backend="nccl")
     host = _load_host()
     device = torch.device("cuda", local_rank)
-    shapes = PERF_SHAPES if perf else ((M, N, K_PER_RANK),)
+    shapes = PERF_SHAPES if perf else ((M, N, K_PER_RANK), )
     for m, n, k_per_rank in shapes:
         _run_shape(host, nccl_group, device, rank, world_size, m, n, k_per_rank, perf)
     torch.distributed.destroy_process_group()

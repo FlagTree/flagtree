@@ -3,7 +3,6 @@
 # unset DUSHMEM_BOOTSTRAP
 # torchrun --nproc_per_node=2 --nnodes=1 --node_rank=0 \
 #   --master_addr=127.0.0.1 --master_port=29501 ag-gemm.py
-
 """Allgather A on the copy engine, GEMM in Triton.
 
 Local rows are marked ready with a raw store. Remote rows are pulled with
