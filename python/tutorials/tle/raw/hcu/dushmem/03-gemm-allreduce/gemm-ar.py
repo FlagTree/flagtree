@@ -12,6 +12,13 @@ The producer is therefore hipBLAS, cut into row chunks. After each chunk a raw
 release marks those tiles. A Triton kernel on a second stream waits on every
 rank's flag and sums the tile, so finished rows reduce while later rows are
 still in the GEMM.
+
+The consumer kernel loads every peer in one launch, so those dushmem_ptr
+results are passed in as a device array. That array is not a SHMEM API.
+Intra-node only, no proxy fallback. _peer_table asserts both of these:
+
+- gemm_ar_intra_node: dushmem_team_n_pes(DUSHMEMX_TEAM_NODE) == dushmem_n_pes()
+- dushmem_ptr(peer) is non-null for every PE
 """
 
 import ctypes
@@ -85,6 +92,8 @@ def _load_host():
     host.gemm_ar_workspace_create.restype = ctypes.c_int
     host.gemm_ar_peer_ptr.argtypes = [ctypes.c_void_p, ctypes.c_int]
     host.gemm_ar_peer_ptr.restype = ctypes.c_void_p
+    host.gemm_ar_intra_node.argtypes = []
+    host.gemm_ar_intra_node.restype = ctypes.c_int
     host.gemm_ar_workspace_destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     host.gemm_ar_workspace_destroy.restype = ctypes.c_int
     host.gemm_ar_mark_tiles.argtypes = [
@@ -101,11 +110,13 @@ def _load_host():
 
 
 def _peer_table(host, base_ptr, world_size, device):
+    """Local mappings of every PE's symmetric heap. Intra-node P2P only."""
+    assert host.gemm_ar_intra_node() == 1, ("tile allreduce is intra-node only: "
+                                            "DUSHMEMX_TEAM_NODE must include every PE")
     addresses = []
     for peer in range(world_size):
         peer_ptr = host.gemm_ar_peer_ptr(base_ptr, peer)
-        if not peer_ptr:
-            raise RuntimeError(f"dushmem_ptr failed for peer {peer}")
+        assert peer_ptr, f"dushmem_ptr(peer={peer}) is null; that PE is not P2P-mapped"
         addresses.append(peer_ptr)
     return torch.tensor(addresses, dtype=torch.uint64, device=device)
 

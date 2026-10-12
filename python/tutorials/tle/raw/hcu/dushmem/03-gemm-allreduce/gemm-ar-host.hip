@@ -31,6 +31,12 @@ extern "C" int gemm_ar_workspace_create(int elements, int element_size, void **w
 
 extern "C" void *gemm_ar_peer_ptr(void *ptr, int peer) { return dushmem_ptr(ptr, peer); }
 
+// dushmem_ptr is only non-null when the peer is P2P-mapped. That mapping exists
+// for DUSHMEMX_TEAM_NODE, not across nodes (those puts go through the proxy).
+extern "C" int gemm_ar_intra_node(void) {
+  return dushmem_team_n_pes(DUSHMEMX_TEAM_NODE) == dushmem_n_pes();
+}
+
 __global__ void ar_mark_row_tiles(uint64_t *ready, int rank, int num_tiles, int tile_begin, int tile_count,
                                   uint64_t epoch) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
