@@ -32,6 +32,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  actions: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -53,101 +54,14 @@ jobs:
         with:
           checkout_version: 'v6'
 
-      - name: Check if backend-relevant files changed
-        id: check_backend
-        if: ${{ github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
-        uses: flagos-ai/FlagTree/.github/actions/check-backend-changed@main
-        with:
-          backend: metax
-
-      - name: Cleanup FlagTree Environment
-        if: steps.check_backend.outputs.should_skip != 'true'
-        uses: flagos-ai/FlagTree/.github/actions/cleanup-flagtree-env@main
-
-      - name: Build FlagTree
-        if: steps.check_backend.outputs.should_skip != 'true'
-        shell: bash
-        run: |
-          set -x
-          export FLAGTREE_BACKEND=metax
-          MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
-
-      - name: Clear cache if ClearCache label present
-        if: steps.check_backend.outputs.should_skip != 'true'
-        id: clear_cache
-        uses: flagos-ai/FlagTree/.github/actions/clear-cache-if-labeled@main
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          backend: metax
-
-      - name: Unit Test
-        if: steps.check_backend.outputs.should_skip != 'true'
-        shell: bash
-        run: |
-          set -x
-          source ~/env.sh
-          cd third_party/metax/python/test/unit
-          python3 -m pytest -s . \
-            --ignore=runtime/test_specialize.py \
-            --ignore=tools/test_aot.py \
-            --ignore=language/test_matmul.py \
-            --ignore=language/test_frontend.py \
-            --ignore=test_debug.py \
-            --ignore=language/test_tensor_descriptor.py \
-            -k "not test_fp8_support and \
-                not test_compile_only_sm100 and \
-                not test_compile_only_dot and \
-                not test_compile_only_k_loop and \
-                not test_typeconvert_upcast and \
-                not test_typeconvert_downcast and \
-                not test_tensor_atomic_add_access_patterns and \
-                not test_tensor_atomic_cas and \
-                not test_tensor_atomic_use_result and \
-                not test_load_store_same_ptr and \
-                not test_sum_dtype and \
-                not test_scan2d and \
-                not test_trans_4d and \
-                not test_dot and \
-                not test_scaled_dot and \
-                not test_poison_return and \
-                not test_globaltimer and \
-                not test_smid and \
-                not test_tl_range_num_stages and \
-                not test_tl_range_fuse and \
-                not test_disable_licm and \
-                not test_gather and \
-                not test_bessel and \
-                not test_triton_reproducer_path and \
-                not test_print and \
-                not test_indirect_matmul and \
-                not test_kwargs and \
-                not test_no_do_bench and \
-                not test_restore and \
-                not test_hooks and \
-                not test_prune_configs and \
-                not test_exceed_threads and \
-                not test_launch_with_options and \
-                not test_triton_debuginfo_on and \
-                not test_filecheck_positive and \
-                not test_filecheck_negative and \
-                not test_nvidia_tool and \
-                not test_link_extern_libs and \
-                not test_mma_remark and \
-                not test_remark_vectorization and \
-                not test_passing_tuple_to_make_tensor_descriptor"
-
-      - name: FlagTree TLE Tile Unit Test on Metax
-        if: steps.check_backend.outputs.should_skip != 'true'
-        shell: bash
-        run: |
-          set -x
-          source ~/env.sh
-          cd python/test/tle/unit
-          python3 -m pytest -s \
-            test_extract_tile_dynamic_index.py \
-            test_extract_tile_static_index.py \
-            test_insert_tile_dynamic_index.py \
-            test_insert_tile_static_index.py \
-            test_tle_gpu_local_ptr.py \
-            -k "not test_local_pointer_tiled_matmul_matches_torch and \
-                not test_local_pointer_full_view_dot_avoids_pointer_convert_layout"
+  auto-rerun:
+    needs: metax36x-unit-test
+    if: always()
+    uses: ./.github/workflows/template-rerun-workflow.yml
+    with:
+      run_id: ${{ format('{0}', github.run_id) }}
+      run_attempt: ${{ format('{0}', github.run_attempt) }}
+      max_attempts: "5"
+    permissions:
+      actions: write
+      contents: read
