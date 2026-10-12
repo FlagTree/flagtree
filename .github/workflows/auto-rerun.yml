@@ -23,6 +23,7 @@ name: Auto-Rerun
 on:
   workflow_run:
     workflows:
+      - "Amd3.6-Build-And-Test"
       - "Enflame3.6-GCU300-Build-And-Test"
       - "Enflame3.6-GCU400-Build-And-Test"
       - "FlagCICD-NV3.6-Build-And-Test"
