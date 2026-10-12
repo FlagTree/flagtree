@@ -32,6 +32,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  actions: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -53,50 +54,14 @@ jobs:
         with:
           checkout_version: 'v6'
 
-      - name: Check if backend-relevant files changed
-        id: check_backend
-        if: ${{ github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
-        uses: flagos-ai/FlagTree/.github/actions/check-backend-changed@main
-        with:
-          backend: hcu
-
-      - name: Cleanup FlagTree Environment
-        if: steps.check_backend.outputs.should_skip != 'true'
-        uses: flagos-ai/FlagTree/.github/actions/cleanup-flagtree-env@main
-
-      - name: Build FlagTree
-        if: steps.check_backend.outputs.should_skip != 'true'
-        shell: bash
-        run: |
-          set -x
-          export FLAGTREE_BACKEND=hcu
-          MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
-
-      - name: Clear cache if ClearCache label present
-        if: steps.check_backend.outputs.should_skip != 'true'
-        id: clear_cache
-        uses: flagos-ai/FlagTree/.github/actions/clear-cache-if-labeled@main
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          backend: hcu
-
-      - name: Unit Test
-        if: steps.check_backend.outputs.should_skip != 'true'
-        shell: bash
-        run: |
-          set -x
-          source ~/env.sh
-          python3 -m pytest -s third_party/hcu/python/test/unit
-          python3 -m pytest -s python/test/tle/integration/test_tle_local_store.py
-          python3 -m pytest -s python/test/tle/integration/test_tle_gemm.py
-          python3 -m pytest -s python/test/tle/integration/test_tle_pipeline_e2e.py
-          python3 -m pytest -s python/test/tle/integration/test_tle_topk_smem_fallback.py
-          python3 -m pytest -s python/test/tle/unit/test_tle_gpu_local_ptr.py
-          python3 -m pytest -s python/test/tle/unit/test_tle_gpu_slot.py
-          python3 -m pytest -s python/test/tle/unit/test_tle_cumsum.py
-          python3 -m pytest -s python/test/tle/unit/test_extract_tile_dynamic_index.py
-          python3 -m pytest -s python/test/tle/unit/test_extract_tile_static_index.py
-          python3 -m pytest -s python/test/tle/unit/test_insert_tile_dynamic_index.py
-          python3 -m pytest -s python/test/tle/unit/test_insert_tile_static_index.py
-          python3 python/tutorials/tle/01-fft.py
-          python3 python/tutorials/tle/03-topk.py
+  auto-rerun:
+    needs: hcu36x-unit-test
+    if: failure()
+    uses: ./.github/workflows/template-rerun-workflow.yml
+    with:
+      run_id: ${{ github.run_id }}
+      run_attempt: ${{ github.run_attempt }}
+      max_attempts: 5
+    permissions:
+      actions: write
+      contents: read

@@ -1,0 +1,129 @@
+# Copyright 2025-     FlagOS Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+name: Rerun-Workflow
+
+on:
+  workflow_call:
+    inputs:
+      run_id:
+        description: "The workflow run id to inspect and possibly rerun."
+        required: true
+        type: string
+      run_attempt:
+        description: "Current run attempt; used as the retry budget."
+        required: true
+        type: number
+      max_attempts:
+        description: "Stop auto-rerun once run_attempt reaches this value."
+        required: false
+        type: number
+        default: 5
+
+permissions:
+  actions: write      # Required to call the rerun API
+  contents: read
+
+jobs:
+  rerun:
+    # Retry budget: shared by both manual and automatic reruns.
+    if: inputs.run_attempt < inputs.max_attempts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rerun the entire run if a known failure signature is found
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+          RUN_ATTEMPT: ${{ inputs.run_attempt }}
+          MAX_ATTEMPTS: ${{ inputs.max_attempts }}
+        run: |
+          set -euo pipefail
+
+          echo "Checking run $RUN_ID (run_attempt=$RUN_ATTEMPT, max=$MAX_ATTEMPTS) ..."
+
+          # ---------------------------------------------------------------
+          # Known failure signatures that should trigger a full-run rerun.
+          #
+          # Each line is an extended regex (grep -E). Empty lines are ignored.
+          # Add new signatures here as you discover them. Keep them as
+          # specific as possible to avoid rerunning genuine code failures.
+          #
+          # Currently known:
+          #   - Set up job: action download exhausted retries / timed out
+          # ---------------------------------------------------------------
+          read -r -d '' SIGNATURES <<'EOF' || true
+          Failed to download archive .* after [0-9]+ (attempts|retries)
+          Action .* download has timed out
+          EOF
+
+          # ---- 1. Fetch failed job ids, with retries for transient API errors ----
+          failed_job_ids=""
+          for i in 1 2 3; do
+            failed_job_ids=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
+              --jq '.jobs[] | select(.conclusion=="failure") | .id' 2>/dev/null || true)
+            if [ -n "$failed_job_ids" ]; then
+              break
+            fi
+            echo "gh api .../jobs returned empty (attempt $i), retrying in 5s..."
+            sleep 5
+          done
+
+          if [ -z "$failed_job_ids" ]; then
+            echo "No failed jobs found (or API unavailable). Skip rerun."
+            exit 0
+          fi
+
+          echo "Failed job ids:"
+          echo "$failed_job_ids"
+
+          # ---- 2. Inspect each failed job log for any known signature ----
+          should_rerun=false
+          for job_id in $failed_job_ids; do
+            echo "----- Fetching log for job $job_id -----"
+            log=$(gh api "repos/$REPO/actions/jobs/$job_id/logs" 2>/dev/null || true)
+            echo "----- Log size: $(printf '%s' "$log" | wc -c) bytes -----"
+
+            matched_signature=""
+            while IFS= read -r sig; do
+              [ -z "$sig" ] && continue
+              if printf '%s' "$log" | grep -qE -- "$sig"; then
+                matched_signature="$sig"
+                break
+              fi
+            done <<< "$SIGNATURES"
+
+            if [ -n "$matched_signature" ]; then
+              echo "MATCH in job $job_id: signature => $matched_signature"
+              should_rerun=true
+              break
+            else
+              echo "NO MATCH for job $job_id"
+            fi
+          done
+
+          # ---- 3. Rerun the ENTIRE run only if a signature matched ----
+          if [ "$should_rerun" = "true" ]; then
+            echo "Known failure signature detected. Rerunning ENTIRE run $RUN_ID ..."
+            gh api -X POST "repos/$REPO/actions/runs/$RUN_ID/rerun"
+            echo "Full-run rerun triggered."
+          else
+            echo "No known failure signature found. No rerun."
+          fi
