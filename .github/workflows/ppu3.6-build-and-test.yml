@@ -65,4 +65,3 @@ jobs:
     permissions:
       actions: write
       contents: read
-
