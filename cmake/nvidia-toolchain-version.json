@@ -5,5 +5,8 @@
   "nvdisasm": "12.8.55",
   "cudacrt": "12.8.61",
   "cudart": "12.8.57",
-  "cupti": "12.8.90"
+  "cupti": "12.8.90",
+  "tileiras": "13.4.59",
+  "tileir-ptxas": "13.4.59",
+  "tileir-libnvvm": "13.4.59"
 }
