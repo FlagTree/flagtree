@@ -149,30 +149,6 @@ def post_install():
 
 
 def install_extension(*args, **kargs):
-    """Copy spine-triton-opt from the CMake build directory."""
-    import shutil
-    import sys
-
-    python_dir = Path(__file__).resolve().parents[2]
-    if str(python_dir) not in sys.path:
-        sys.path.insert(0, str(python_dir))
-    from build_helpers import get_cmake_dir
-
-    build_temp = Path(get_cmake_dir())
-    spine_triton_opt_src = (build_temp / "third_party" / "spacemit" / "tools" / "spine-triton-opt" / "spine-triton-opt")
-    if not spine_triton_opt_src.exists():
-        print(f"[spacemit] Warning: spine-triton-opt not found at {spine_triton_opt_src}")
-        return
-
-    backend_bin = Path(_get_backend_root()) / "backend" / "bin"
-    backend_bin.mkdir(parents=True, exist_ok=True)
-    spine_triton_opt_dst = backend_bin / "spine-triton-opt"
-    shutil.copy(spine_triton_opt_src, spine_triton_opt_dst)
-    spine_triton_opt_dst.chmod(0o755)
-    print(f"[spacemit] Copied spine-triton-opt to {spine_triton_opt_dst}")
-
-
-def _prepare_backend_runtime_files():
     import glob
     import shutil
     from collections import defaultdict
@@ -247,6 +223,3 @@ def _prepare_backend_runtime_files():
             if os.path.exists(src):
                 shutil.copy(src, os.path.join(include_dir, header))
                 print(f"[spacemit] Vendored {header} from spine-runtime")
-
-
-_prepare_backend_runtime_files()
