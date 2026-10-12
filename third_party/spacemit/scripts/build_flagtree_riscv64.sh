@@ -6,7 +6,7 @@
 #   0. 前置检查：所有依赖路径必须存在
 #   1. 固化 riscv spine-mlir 工具进 .riscv-assets/（防 ci-builds 轮转清理）
 #   2. 组装 riscv spine-runtime 0.6.3（libspert + include）
-#   3. 幂等应用 flagtree.patch + 备份并清理 x86 构建缓存/backend 二进制
+#   3. 备份并清理 x86 构建缓存/backend 二进制（硬校验 riscv64 CMakeLists 分支在位）
 #   4. pip wheel 交叉编译（约 30-60 分钟）
 #   5. 校验 CMAKE_CXX_COMPILER 确为 riscv 交叉编译器
 #   6. wheel 平台标签重打为 linux_riscv64 + 内容验证
@@ -50,7 +50,6 @@ TMPDIR="${TMPDIR:-$HOME/tmp}"
 SML="$FT/.riscv-assets/spine_mlir_installed"
 RT="$FT/.riscv-assets/spine_runtime_installed"
 TC="$SPACEMIT_DIR/cmake/linux_riscv64.toolchain.cmake"
-PATCH_FILE="$SPACEMIT_DIR/patch/flagtree.patch"
 
 echo "[spacemit] FlagTree root  : $FT"
 echo "[spacemit] CI workspace   : $W"
@@ -61,7 +60,6 @@ echo "[spacemit] toolchain      : $TOOLCHAIN_ROOT"
 echo "[spacemit] == [0/7] 前置检查：所有依赖路径必须存在 =="
 for p in "$LLVM_CROSS/bin/mlir-tblgen" "$SML_SRC/bin/spine-opt" "$SML_SRC/bin/llc" \
          "$SML_SRC/bin/mlir-translate" "$SML_SRC/bin/opt" "$TC" \
-         "$PATCH_FILE" \
          "$W/rpc_runtime_installed/lib/libspert.so.0.6.3" \
          "$SPINE_RUNTIME_SRC/include/spert.hpp" \
          "$TOOLCHAIN_ROOT/bin/riscv64-unknown-linux-gnu-g++" "$PYINC/Python.h" \
@@ -80,32 +78,13 @@ mkdir -p "$RT/lib"
 cp -a "$W/rpc_runtime_installed/lib/libspert.so"* "$RT/lib/"
 [ -d "$RT/include" ] || cp -a "$SPINE_RUNTIME_SRC/include" "$RT/"
 
-echo "[spacemit] == [3/7] 应用 flagtree.patch（幂等）+ 备份并清理 x86 构建缓存/backend 二进制 =="
+echo "[spacemit] == [3/7] 备份并清理 x86 构建缓存/backend 二进制 =="
 cd "$FT"
-
-# 幂等应用 flagtree.patch，三段逻辑对齐同目录 install_flagtree_plugin.sh。
-# 本树的已知漂移：setup.py / third_party/tle/CMakeLists.txt 是历史 --3way 合并产物，
-# 内容 ≠ patch 字面 post-image，严格正反检查都会失败；--3way 重放实测为无害 no-op
-#（逐文件 md5 一致、无冲突标记）。因此容忍 3way 的 rc，最终以硬校验为准（失败显式暴露）。
-PATCH_EXCLUDES=(--exclude=python/setup_tools/utils/spacemit.py)
-if git apply "${PATCH_EXCLUDES[@]}" -R --check "$PATCH_FILE" >/dev/null 2>&1; then
-  echo "[spacemit] flagtree.patch 已应用（严格反向检查通过），跳过"
-elif git apply "${PATCH_EXCLUDES[@]}" --check "$PATCH_FILE" >/dev/null 2>&1; then
-  echo "[spacemit] 应用 flagtree.patch ..."
-  git apply "${PATCH_EXCLUDES[@]}" "$PATCH_FILE"
-else
-  echo "[spacemit] 严格检查未通过（树内历史 3way 产物/上下文漂移），尝试 --3way ..."
-  git apply "${PATCH_EXCLUDES[@]}" --3way "$PATCH_FILE" 2>&1 | sed 's/^/  [3way] /' || true
-  if grep -Ern '^(<<<<<<< .+|=======|>>>>>>> .+)$' --include='*.py' --include='*.txt' \
-       --include='*.td' --include='*.cc' --include='*.cmake' \
-       CMakeLists.txt setup.py python/ include/ third_party/proton/ third_party/tle/ 2>/dev/null; then
-    echo "FATAL: --3way 残留冲突标记，处理方式见 third_party/spacemit/patch/README.md" >&2; exit 1
-  fi
-fi
 # 硬校验：riscv cross 构建关键依赖的 CMakeLists arch 表 riscv64 分支必须在位
+#（旧 flagtree.patch 时代的 hunk 现已直接提交进根 CMakeLists.txt）
 grep -q 'CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64"' CMakeLists.txt || {
-  echo "FATAL: CMakeLists.txt 缺 riscv64 分支，flagtree.patch 未生效" >&2; exit 1; }
-echo "[spacemit] flagtree.patch 状态 OK（riscv64 分支在位）"
+  echo "FATAL: CMakeLists.txt 缺 riscv64 分支" >&2; exit 1; }
+echo "[spacemit] riscv64 CMakeLists 分支在位"
 
 mkdir -p .riscv-assets/backup-backend
 [ -d .riscv-assets/backup-backend/bin ] || cp -a third_party/spacemit/backend/bin .riscv-assets/backup-backend/bin

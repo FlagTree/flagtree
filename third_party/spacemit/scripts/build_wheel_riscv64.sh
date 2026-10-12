@@ -20,7 +20,6 @@
 #   SPINE_MLIR_BINDINGS_DIR  等价于参数 4（参数优先）
 #   DIST_DIR          wheel 输出目录（默认 dist-riscv64）
 #   ZLIB_LIBDIR       交叉 libz 所在目录（默认 $RISCV_ROOT_PATH/sysroot/usr/lib）
-#   SKIP_PATCH        已自行应用 flagtree.patch 时设为 1（幂等逻辑会自动检测）
 #
 set -euo pipefail
 
@@ -43,7 +42,6 @@ PY_RISCV_ROOT=${PY_RISCV_ROOT:-$(cd "${5}" && pwd)}
 MAX_JOBS=${MAX_JOBS:-2}
 DIST_DIR=${DIST_DIR:-${FT}/dist-riscv64}
 TC="${SPACEMIT_DIR}/cmake/linux_riscv64.toolchain.cmake"
-PATCH_FILE="${SPACEMIT_DIR}/patch/flagtree.patch"
 
 : "${RISCV_ROOT_PATH:?RISCV_ROOT_PATH must be set (SpacemiT toolchain root)}"
 
@@ -64,7 +62,7 @@ for p in "${LLVM_CROSS}/bin/mlir-tblgen" \
          "${MLIR_BINDINGS_DIR}/mlir" \
          "${PY_RISCV_ROOT}/include" \
          "${RISCV_ROOT_PATH}/bin/riscv64-unknown-linux-gnu-g++" \
-         "${TC}" "${PATCH_FILE}"; do
+         "${TC}"; do
     [ -e "$p" ] || { echo "FATAL: 缺少 $p" >&2; exit 1; }
 done
 echo "[spacemit] 前置检查 OK"
@@ -87,40 +85,20 @@ if [ ! -e "${ZLIB_LIBDIR}/libz.a" ] && [ ! -e "${ZLIB_LIBDIR}/libz.so" ]; then
     exit 1
 fi
 
-# --- 幂等应用 flagtree.patch（对齐 install_flagtree_plugin.sh 三段逻辑） ---
+# --- 硬校验：CMakeLists arch 表 riscv64 分支必须在位（旧 flagtree.patch 时代的
+#     hunk 现已直接提交进根 CMakeLists.txt；不在位说明基树缺这个分支） ---
 cd "${FT}"
-PATCH_EXCLUDES=(--exclude=python/setup_tools/utils/spacemit.py)
-if git apply "${PATCH_EXCLUDES[@]}" -R --check "${PATCH_FILE}" >/dev/null 2>&1; then
-    echo "[spacemit] flagtree.patch already applied — skipping."
-elif git apply "${PATCH_EXCLUDES[@]}" --check "${PATCH_FILE}" >/dev/null 2>&1; then
-    echo "[spacemit] applying flagtree.patch ..."
-    git apply "${PATCH_EXCLUDES[@]}" "${PATCH_FILE}"
-elif git apply "${PATCH_EXCLUDES[@]}" --3way "${PATCH_FILE}" 2>/tmp/spacemit_3way.log; then
-    echo "[spacemit] flagtree.patch applied via 3-way merge (context had drifted)."
-    if grep -Ern '^(<<<<<<< .+|=======|>>>>>>> .+)$' --include='*.py' --include='*.txt' \
-         --include='*.td' --include='*.cc' --include='*.cmake' \
-         CMakeLists.txt setup.py python/ include/ third_party/proton/ third_party/tle/ 2>/dev/null; then
-        echo "[spacemit] ERROR: 3-way merge left conflict markers." >&2
-        sed 's/^/             /' /tmp/spacemit_3way.log >&2
-        exit 1
-    fi
-else
-    echo "[spacemit] ERROR: flagtree.patch does not apply cleanly." >&2
-    sed 's/^/             /' /tmp/spacemit_3way.log >&2
-    exit 1
-fi
-# 硬校验：CMakeLists arch 表 riscv64 分支必须在位
 grep -q 'CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64"' CMakeLists.txt || {
-    echo "FATAL: CMakeLists.txt 缺 riscv64 分支，flagtree.patch 未生效" >&2; exit 1; }
+    echo "FATAL: CMakeLists.txt 缺 riscv64 分支" >&2; exit 1; }
 
 # --- 清理上一轮 x86 build 缓存（cross 与 x86 共享 build 目录，混配必错） ---
 rm -rf build/cmake.linux-x86_64-cpython-* build/lib.linux-x86_64-cpython-* build/temp.linux-x86_64-cpython-*
 
-# --- 交叉编译（pip wheel 走 FlagTree 根 setup.py 的 spacemit 插件路径） ---
+# --- 交叉编译（pip wheel 走 FlagTree 根的 spacemit in-tree 构建路径） ---
 export RISCV_ROOT_PATH
 export SPINE_MLIR_INSTALL_DIR
 export SPINE_RUNTIME_INSTALL_DIR
-# setup.py 的 bindings 探测接受「顶层含 mlir/」的单层布局（-python release 包）
+# spacemit.py install_extension 的 bindings 探测接受「顶层含 mlir/」的单层布局（-python release 包）
 export SPINE_MLIR_BINDINGS_DIR="${MLIR_BINDINGS_DIR}"
 export TRITON_APPEND_CMAKE_ARGS="-DCMAKE_TOOLCHAIN_FILE=${TC} \
 -DPython3_INCLUDE_DIR:PATH=${PY_RISCV_ROOT}/include/${PY_VER} \

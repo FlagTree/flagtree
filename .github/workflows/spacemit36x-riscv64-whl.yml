@@ -256,8 +256,8 @@ jobs:
             || { echo "ERROR: py_riscv64/include has no python${{ matrix.python-version }}"; exit 1; }
           ls py_riscv64/lib/libpython*.so*
 
-      # Build the riscv64 wheel. The script applies flagtree.patch, vendors
-      # spert headers + per-version MLIR bindings, cross-compiles via
+      # Build the riscv64 wheel. The script vendors spert headers +
+      # per-version MLIR bindings, cross-compiles via
       # TRITON_APPEND_CMAKE_ARGS (toolchain file + py headers + zlib), and
       # retags the wheel to linux_riscv64.
       - name: Build riscv64 wheel

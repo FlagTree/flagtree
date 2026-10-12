@@ -1,6 +1,5 @@
 ```bash
 cd /.../FlagTree
-git apply third_party/spacemit/patch/flagtree.patch
 
 # Build and install with spine-mlir and spine-runtime dependencies
 FLAGTREE_BACKEND=spacemit \
