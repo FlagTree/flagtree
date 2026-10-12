@@ -185,6 +185,7 @@ def _prepare_backend_runtime_files():
 
     backend_dir = os.path.join(backend_src_dir, "backend")
     bin_dir = os.path.join(backend_dir, "bin")
+    print(f"[spacemit] Preparing bin_dir: {bin_dir}")
     if os.path.isdir(bin_dir):
         spine_mlir_install_dir = os.environ.get("SPINE_MLIR_INSTALL_DIR")
         if spine_mlir_install_dir:
