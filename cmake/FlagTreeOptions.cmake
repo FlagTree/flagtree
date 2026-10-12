@@ -58,6 +58,7 @@ macro(flagtree_configure_options)
     add_definitions(-D__AMD__)
     add_definitions(-D__FLAGTREE_REORDER_LOOP_LOADS__)
     add_definitions(-D__FLAGTREE_RLC_ENHANCE__)
+    list(APPEND LLVM_TABLEGEN_FLAGS -D__FLAGTREE_RLC_ENHANCE__)
     add_definitions(-D__FLAGTREE_SAME_WARP_LAYOUT_SHUFFLE__)
     add_definitions(-D__FLAGTREE_CONCAT_DOT_OPERAND__)
     list(APPEND LLVM_TABLEGEN_FLAGS -D__FLAGTREE_CONCAT_DOT_OPERAND__)
@@ -234,7 +235,7 @@ macro(flagtree_configure_core_source)
   # the specialized NVIDIA package build so the documented wheel path can
   # configure from a clean CMake directory.
   if(FLAGTREE_BACKEND MATCHES
-     "^(nvidia|xpu|cambricon|aipu|tsingmicro|enflame|rpu|thrive|tileir|ppu|spacemit)$")
+     "^(nvidia|xpu|cambricon|aipu|tsingmicro|enflame|rpu|thrive|metax|tileir|ppu|spacemit|sunrise)$")
     include_directories(${PROJECT_SOURCE_DIR}/include)
     include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
     if(FLAGTREE_BACKEND STREQUAL "xpu")
@@ -679,6 +680,8 @@ function(flagtree_spec_td_set output_td td_filename)
   file(RELATIVE_PATH relative_path "${PROJECT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
   get_filename_component(BACKEND_SPEC_ROOT "${BACKEND_SPEC_INCLUDE_DIR}" DIRECTORY)
   set(BACKEND_SPEC_TD ${BACKEND_SPEC_ROOT}/${relative_path}/${td_filename})
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+               "${BACKEND_SPEC_TD}")
   if(EXISTS ${BACKEND_SPEC_TD})
     set(ret ${BACKEND_SPEC_TD})
   endif()
