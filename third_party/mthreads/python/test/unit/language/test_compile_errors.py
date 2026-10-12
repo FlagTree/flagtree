@@ -471,7 +471,7 @@ def test_dot_acc_type_mismatch():
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=dot_kernel, signature={}, constexprs={}))
     try:
-        assert "incompatible with the dot result type" in str(e.value.__cause__)
+        assert "expected accumulator dtype int32, got fp32" in str(e.value.__cause__)
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -616,8 +616,7 @@ def test_dot_scaled_shape_verification(fresh_triton_cache):
 
 def test_dot_scaled_acc_type_mismatch(fresh_triton_cache):
     # dot_scaled shares the tl.dot accumulator rule: an explicit acc must match the
-    # result element type (out_dtype) and a mismatch is a front-end error, not a
-    # bare AssertionError
+    # result element type (out_dtype) and a mismatch names both dtypes
 
     @triton.jit
     def kernel():
@@ -630,7 +629,7 @@ def test_dot_scaled_acc_type_mismatch(fresh_triton_cache):
     with pytest.raises(CompilationError) as e:
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
     try:
-        assert "incompatible with the dot_scaled result type" in str(e.value.__cause__)
+        assert "expected accumulator dtype fp32, got fp16" in str(e.value.__cause__)
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
