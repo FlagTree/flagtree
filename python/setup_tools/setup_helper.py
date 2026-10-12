@@ -25,8 +25,6 @@ import shutil
 import sys
 import sysconfig
 import functools
-import glob
-from collections import defaultdict
 from pathlib import Path
 import hashlib
 from distutils.sysconfig import get_python_lib
