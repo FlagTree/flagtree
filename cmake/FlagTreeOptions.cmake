@@ -274,7 +274,7 @@ macro(flagtree_configure_core_source)
     add_subdirectory(
       ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
     add_subdirectory(
-      ${TRITON_CORE_SOURCE_DIR}/lib ${TRITON_CORE_BINARY_DIR}/lib)
+      ${PROJECT_SOURCE_DIR}/lib ${PROJECT_BINARY_DIR}/lib)
   endif()
 endmacro()
 
