@@ -21,6 +21,8 @@
 name: Ppu3.6-Core-Build-And-Test
 
 on:
+  schedule:
+    - cron: '10 19 * * *'
   push:
     branches: [ "main", "triton_v3.6.x" ]
   pull_request:
@@ -37,7 +39,7 @@ concurrency:
 
 jobs:
   ppu36x-core-test:
-    runs-on: ppu3.6-core
+    runs-on: ppu3.6
     if: ${{ github.repository == 'flagos-ai/flagtree' && github.event.pull_request.draft == false }}
     steps:
       - name: Setup environment
@@ -53,6 +55,7 @@ jobs:
 
       - name: Check if backend-relevant files changed
         id: check_backend
+        if: ${{ github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
         uses: flagos-ai/FlagTree/.github/actions/check-backend-changed@main
         with:
           backend: ppu

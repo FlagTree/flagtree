@@ -46,12 +46,14 @@ from .distributed import (
     MeshConfig,
     BarrierKind,
     MemoryOrder,
+    MemoryScope,
     GroupKind,
     signal,
     signal_wait,
     distributed_barrier,
     distributed_dot,
     _infer_submesh_barrier_group,
+    _is_cluster_submesh,
     _mesh_to_cluster_dims,
     make_sharded_tensor,
     _normalize_remote_shard_id,
@@ -59,6 +61,7 @@ from .distributed import (
     reshard,
     _resolve_launch_axis,
     shard_id,
+    n_pes,
     sharding,
 )
 from . import communication
@@ -131,6 +134,7 @@ __all__ = [
     "cleanup_communicator",
     "BarrierKind",
     "MemoryOrder",
+    "MemoryScope",
     "GroupKind",
 ]
 

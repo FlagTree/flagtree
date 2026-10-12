@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-
+CURRENT_DIR="$(pwd -P)"
 source ~/env.sh
 source "${SCRIPT_DIR}/disable_local_proxy.sh"
 
@@ -37,8 +37,13 @@ if [[ -f "$PID_FILE" ]]; then
     pid=$(head -n 1 "$PID_FILE" | tr -d '[:space:]')
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
         if kill -0 "$pid" 2>/dev/null; then
-            echo "[WARNING] Service already running: pid = $pid."
-            bash ${SCRIPT_DIR}/stop.sh
+            process_dir=$(pwdx "$pid" 2>/dev/null); process_dir=${process_dir#*: }
+            if [[ "$process_dir" == "$CURRENT_DIR" ]]; then
+                echo "[WARNING] Service already running: pid = $pid."
+                bash ${SCRIPT_DIR}/stop.sh
+            else
+                echo "[WARNING] pid = $pid belongs to '${process_dir:-unknown}', skip."
+            fi
         fi
     fi
 fi
@@ -50,10 +55,11 @@ export VLLM_PLUGINS=fl
 export VLLM_CONFIGURE_LOGGING=1
 
 nohup vllm serve ./Qwen3.6-27B/  \
-    --tensor-parallel-size 4 \
-    --port 8000  \
+    --tensor-parallel-size 2 \
+    --port "${VLLM_QWEN3_PORT}" \
     --served-model-name qwen36 \
-    --gpu-memory-utilization 0.7 \
+    --gpu-memory-utilization 0.8 \
+    --disable-custom-all-reduce \
     --trust-remote-code \
     --dtype bfloat16 2>&1 >vllm.log &
 echo "$!" >pid.txt
@@ -87,8 +93,8 @@ for ((i=1; i<=max_retry; i++)); do
     minutes=$((duration / 60))
     seconds=$((duration % 60))
     echo "[INFO] Service startup elapsed time: ${minutes}m${seconds}s"
-    if (( i > max_retry )); then
-        echo "[FATAL] Detection failed! maximum retry count reached: ${max_retry}"
-        exit 1
-    fi
 done
+if (( i > max_retry )); then
+    echo "[FATAL] Detection failed! maximum retry count reached: ${max_retry}"
+    exit 1
+fi
