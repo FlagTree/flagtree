@@ -1,22 +1,19 @@
 #include <hip/hip_runtime.h>
-#include <du_mma.h>
+#include <stdint.h>
 
-// One 16x16 tile of C = A @ B. A is the allgathered matrix.
-// Launch with a 256-thread block and grid (ceil(N/16), ceil(M/16)).
-extern "C" __device__ __attribute__((used, always_inline)) void
-ag_gemm(float *__restrict__ c, const float *__restrict__ a, const float *__restrict__ b, int m, int n,
-        int k) {
-  constexpr int TILE = 16;
-  int lane = static_cast<int>(threadIdx.x);
-  int row = static_cast<int>(blockIdx.y) * TILE + lane / TILE;
-  int col = static_cast<int>(blockIdx.x) * TILE + lane % TILE;
-  float acc = 0.f;
-  if (row < m && col < n) {
-    for (int kk = 0; kk < k; ++kk)
-      acc = fmaf(a[row * k + kk], b[kk * n + col], acc);
+// Ready flags only. Triton performs the GEMM and calls these between tiles
+// so local rows can be consumed while the copy engine is still pulling remote rows.
+
+extern "C" __device__ __attribute__((used, always_inline)) void ag_mark_local_ready(uint64_t *ready, int rank) {
+  __syncthreads();
+  if (threadIdx.x == 0)
+    __hip_atomic_store(ready + rank, (uint64_t)1, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
+}
+
+extern "C" __device__ __attribute__((used, always_inline)) void ag_wait_ready(uint64_t *ready, int signal_index) {
+  if (threadIdx.x == 0) {
+    while (__hip_atomic_load(ready + signal_index, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM) < 1) {
+    }
   }
-  float tf32_zero = du::dumma::__du_float_to_tf32(0.f);
-  asm volatile("s_waitcnt vmcnt(0)\n\t" : : "v"(tf32_zero) : "memory");
-  if (row < m && col < n)
-    c[row * n + col] = acc;
+  __syncthreads();
 }

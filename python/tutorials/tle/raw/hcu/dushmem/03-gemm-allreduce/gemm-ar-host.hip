@@ -1,10 +1,7 @@
-#include <stdio.h>
 #include <hip/hip_runtime.h>
 #include <dushmem.h>
 #include <dushmemx.h>
-
-// Host side of gemm-allreduce. The partial GEMM is the deferred device call.
-// dushmemx_float_sum_reduce_on_stream is the DCU stream allreduce.
+#include <stdint.h>
 
 #define HIP_CHECK(stmt)                                                                            \
   do {                                                                                             \
@@ -15,47 +12,53 @@
     }                                                                                              \
   } while (0)
 
-extern "C" int gemm_ar_prepare(int m, int k_local, int n, int *mype, int *npes, int *mype_node,
-                               hipStream_t *stream, float **a, float **b, float **partial,
-                               float **reduced) {
-  if (m <= 0 || k_local <= 0 || n <= 0)
+extern "C" int gemm_ar_workspace_create(int elements, int element_size, void **workspace,
+                                        uint64_t **ready, int num_tiles, int *mype, int *npes) {
+  if (elements <= 0 || element_size <= 0 || num_tiles <= 0 || workspace == nullptr || ready == nullptr)
     return -1;
   *mype = dushmem_my_pe();
   *npes = dushmem_n_pes();
-  *mype_node = dushmem_team_my_pe(DUSHMEMX_TEAM_NODE);
-  HIP_CHECK(hipSetDevice(*mype_node));
-  HIP_CHECK(hipStreamCreate(stream));
+  HIP_CHECK(hipSetDevice(dushmem_team_my_pe(DUSHMEMX_TEAM_NODE)));
 
-  size_t c_elems = (size_t)m * n;
-  HIP_CHECK(hipMalloc(a, (size_t)m * k_local * sizeof(float)));
-  HIP_CHECK(hipMalloc(b, (size_t)k_local * n * sizeof(float)));
-  *partial = (float *)dushmem_malloc(c_elems * sizeof(float));
-  *reduced = (float *)dushmem_malloc(c_elems * sizeof(float));
-  if (*a == nullptr || *b == nullptr || *partial == nullptr || *reduced == nullptr)
+  *workspace = dushmem_malloc((size_t)elements * (size_t)element_size);
+  *ready = (uint64_t *)dushmem_malloc((size_t)(*npes) * (size_t)num_tiles * sizeof(uint64_t));
+  if (*workspace == nullptr || *ready == nullptr)
     return -2;
+  HIP_CHECK(hipMemset(*ready, 0, (size_t)(*npes) * (size_t)num_tiles * sizeof(uint64_t)));
+  dushmem_barrier_all();
   return 0;
 }
 
-extern "C" int gemm_ar_copy_on_stream(hipStream_t stream, float *a, float *b, const float *a_src,
-                                      const float *b_src, int a_elems, int b_elems) {
-  HIP_CHECK(hipMemcpyAsync(a, a_src, (size_t)a_elems * sizeof(float), hipMemcpyDeviceToDevice, stream));
-  HIP_CHECK(hipMemcpyAsync(b, b_src, (size_t)b_elems * sizeof(float), hipMemcpyDeviceToDevice, stream));
+extern "C" void *gemm_ar_peer_ptr(void *ptr, int peer) { return dushmem_ptr(ptr, peer); }
+
+__global__ void ar_mark_row_tiles(uint64_t *ready, int rank, int num_tiles, int tile_begin, int tile_count,
+                                  uint64_t epoch) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= tile_count)
+    return;
+  uint64_t *slot = ready + static_cast<long long>(rank) * num_tiles + tile_begin + i;
+  __hip_atomic_store(slot, epoch, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
+}
+
+extern "C" int gemm_ar_mark_tiles(uint64_t *ready, int rank, int num_tiles, int tile_begin, int tile_count,
+                                  uint64_t epoch, hipStream_t stream) {
+  if (tile_count <= 0)
+    return 0;
+  constexpr int threads = 256;
+  int blocks = (tile_count + threads - 1) / threads;
+  ar_mark_row_tiles<<<blocks, threads, 0, stream>>>(ready, rank, num_tiles, tile_begin, tile_count, epoch);
+  hipError_t err = hipGetLastError();
+  if (err != hipSuccess) {
+    fprintf(stderr, "HIP %s\n", hipGetErrorString(err));
+    return -1;
+  }
   return 0;
 }
 
-extern "C" int gemm_ar_sum_reduce_on_stream(hipStream_t stream, float *reduced, float *partial, int nelems) {
-  int rc = dushmemx_float_sum_reduce_on_stream(DUSHMEM_TEAM_WORLD, reduced, partial, (size_t)nelems, stream);
-  if (rc != 0)
-    return rc;
-  dushmemx_barrier_all_on_stream(stream);
-  return 0;
-}
-
-extern "C" int gemm_ar_finish(hipStream_t stream, float *a, float *b, float *partial, float *reduced) {
-  HIP_CHECK(hipStreamSynchronize(stream));
-  HIP_CHECK(hipFree(a));
-  HIP_CHECK(hipFree(b));
-  dushmem_free(partial);
-  dushmem_free(reduced);
+extern "C" int gemm_ar_workspace_destroy(void *workspace, void *ready) {
+  HIP_CHECK(hipDeviceSynchronize());
+  dushmem_barrier_all();
+  dushmem_free(workspace);
+  dushmem_free(ready);
   return 0;
 }

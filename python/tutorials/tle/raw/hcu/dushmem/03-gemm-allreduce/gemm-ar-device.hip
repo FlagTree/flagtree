@@ -1,22 +1,28 @@
 #include <hip/hip_runtime.h>
-#include <du_mma.h>
+#include <stdint.h>
 
-// One 16x16 tile of a K-split partial product. The host sums these on a stream.
-// Launch with a 256-thread block and grid (ceil(N/16), ceil(M/16)).
+// Tile-ready flags only. The GEMM and the sum live in the Triton kernels.
+// A system-scope release store lets the other rank's consumer observe the tile.
+
 extern "C" __device__ __attribute__((used, always_inline)) void
-gemm_partial(float *__restrict__ c, const float *__restrict__ a, const float *__restrict__ b, int m,
-             int n, int k) {
-  constexpr int TILE = 16;
-  int lane = static_cast<int>(threadIdx.x);
-  int row = static_cast<int>(blockIdx.y) * TILE + lane / TILE;
-  int col = static_cast<int>(blockIdx.x) * TILE + lane % TILE;
-  float acc = 0.f;
-  if (row < m && col < n) {
-    for (int kk = 0; kk < k; ++kk)
-      acc = fmaf(a[row * k + kk], b[kk * n + col], acc);
+ar_mark_tile_ready(uint64_t *ready, int tile_id, int rank, int num_tiles, uint64_t epoch) {
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    uint64_t *slot = ready + static_cast<long long>(rank) * num_tiles + tile_id;
+    __hip_atomic_store(slot, epoch, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
   }
-  float tf32_zero = du::dumma::__du_float_to_tf32(0.f);
-  asm volatile("s_waitcnt vmcnt(0)\n\t" : : "v"(tf32_zero) : "memory");
-  if (row < m && col < n)
-    c[row * n + col] = acc;
+}
+
+extern "C" __device__ __attribute__((used, always_inline)) void
+ar_wait_tile_ready(const uint64_t *peer_ready_ptrs, int world_size, int tile_id, int num_tiles,
+                   uint64_t epoch) {
+  if (threadIdx.x < world_size) {
+    const uint64_t *peer_ready =
+        reinterpret_cast<const uint64_t *>(static_cast<uintptr_t>(peer_ready_ptrs[threadIdx.x]));
+    const uint64_t *slot = peer_ready + static_cast<long long>(threadIdx.x) * num_tiles + tile_id;
+    while (__hip_atomic_load(const_cast<uint64_t *>(slot), __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM) <
+           epoch) {
+    }
+  }
+  __syncthreads();
 }
