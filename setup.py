@@ -396,7 +396,7 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     if is_offline_build():
         return
     triton_cache_path = get_triton_cache_path()
-    if variable is not None and variable in os.environ:
+    if variable in os.environ:
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
@@ -706,40 +706,6 @@ def download_and_copy_dependencies():
         url_func=lambda system, arch, version:
         f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
     )
-
-    if os.environ.get("FLAGTREE_BACKEND") == "tileir":
-        tileir_root = "tileir_cuda"
-        download_and_copy(
-            name="tileiras",
-            src_func=lambda system, arch, version:
-            f"cuda_tileiras-{system}-{arch}-{version}-archive/bin/tileiras{exe_extension}",
-            dst_path=f"{tileir_root}/bin/tileiras",
-            variable="TRITON_TILEIRAS_PATH",
-            version=NVIDIA_TOOLCHAIN_VERSION["tileiras"],
-            url_func=lambda system, arch, version:
-            f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_tileiras/{system}-{arch}/cuda_tileiras-{system}-{arch}-{version}-archive.tar.xz",
-        )
-        download_and_copy(
-            name="tileir-ptxas",
-            src_func=lambda system, arch, version:
-            f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-            dst_path=f"{tileir_root}/bin/ptxas",
-            variable=None,
-            version=NVIDIA_TOOLCHAIN_VERSION["tileir-ptxas"],
-            url_func=lambda system, arch, version:
-            f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-        )
-        for component, destination in (("lib64", "nvvm/lib64"), ("libdevice", "nvvm/libdevice")):
-            download_and_copy(
-                name="tileir-libnvvm",
-                src_func=lambda system, arch, version, component=component:
-                f"libnvvm-{system}-{arch}-{version}-archive/nvvm/{component}",
-                dst_path=f"{tileir_root}/{destination}",
-                variable=None,
-                version=NVIDIA_TOOLCHAIN_VERSION["tileir-libnvvm"],
-                url_func=lambda system, arch, version:
-                f"https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/{system}-{arch}/libnvvm-{system}-{arch}-{version}-archive.tar.xz",
-            )
     download_and_copy(
         name="cupti",
         src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",

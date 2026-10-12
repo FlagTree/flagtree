@@ -22,7 +22,7 @@ When `FLAGTREE_BACKEND` is not set, FlagTree builds its default NVIDIA and AMD
 backends. Setting `FLAGTREE_BACKEND=tileir` adds TileIR while retaining both
 default backends for per-kernel routing and fallback.
 
-The TileIR build downloads a private, matching compiler toolchain:
+The TileIR build downloads and packages a matching compiler toolchain:
 
 - `tileiras`, `ptxas`, `libnvvm`, and `libdevice` version `13.4.59`
 - GCC or Clang 13 or newer
