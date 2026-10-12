@@ -56,7 +56,7 @@ jobs:
 
   auto-rerun:
     needs: hcu36x-unit-test
-    if: failure()
+    if: always()
     uses: ./.github/workflows/template-rerun-workflow.yml
     with:
       run_id: ${{ github.run_id }}
