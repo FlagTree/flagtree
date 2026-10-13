@@ -240,16 +240,14 @@ def install_extension(*args, **kargs):
                 mlir_bindings_src = cand
                 break
         if mlir_bindings_src is None:
-            raise RuntimeError(
-                "[spacemit] MLIR Python bindings (mlir_core) not found under "
-                f"{mlir_bindings_root} — pass the -python release package or an "
-                "LLVM install with python_packages/mlir_core via "
-                "SPINE_MLIR_BINDINGS_DIR / LLVM_SYSPATH (smt_rvisa llvm_direct "
-                "needs them).")
+            raise RuntimeError("[spacemit] MLIR Python bindings (mlir_core) not found under "
+                               f"{mlir_bindings_root} — pass the -python release package or an "
+                               "LLVM install with python_packages/mlir_core via "
+                               "SPINE_MLIR_BINDINGS_DIR / LLVM_SYSPATH (smt_rvisa llvm_direct "
+                               "needs them).")
         mlir_bindings_dst = os.path.join(backend_dir, "mlir_core")
         if os.path.isdir(mlir_bindings_dst):
             shutil.rmtree(mlir_bindings_dst)
         shutil.copytree(mlir_bindings_src, mlir_bindings_dst)
         print(f"[spacemit] Vendored MLIR Python bindings to backend/mlir_core/ "
               f"(from {mlir_bindings_src})")
-

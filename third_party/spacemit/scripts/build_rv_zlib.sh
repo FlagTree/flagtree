@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Build zlib for riscv64 and install it into the toolchain sysroot, so the
 # cross-compiled triton can link -lz. Run this once per toolchain with
 # RISCV_ROOT_PATH set (see README_build.md, "Cross-compile a riscv64 wheel").

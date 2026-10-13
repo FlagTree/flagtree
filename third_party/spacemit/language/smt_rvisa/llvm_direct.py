@@ -40,11 +40,12 @@ try:
     from mlir import ir
     from mlir.dialects import llvm as dllvm
 except ImportError as _e:  # pragma: no cover - environment guard
-    raise ImportError("smt_rvisa LLVM-direct emitter requires the MLIR Python bindings "
-                      "(importable 'mlir' package). They are vendored into "
-                      "triton/backends/<backend>/mlir_core by setup.py at package time; if that "
-                      "copy is missing, rebuild the wheel (third_party/spacemit/scripts/install_flagtree_plugin.sh) from an "
-                      "LLVM install that has python_packages/mlir_core.") from _e
+    raise ImportError(
+        "smt_rvisa LLVM-direct emitter requires the MLIR Python bindings "
+        "(importable 'mlir' package). They are vendored into "
+        "triton/backends/<backend>/mlir_core by setup.py at package time; if that "
+        "copy is missing, rebuild the wheel (third_party/spacemit/scripts/install_flagtree_plugin.sh) from an "
+        "LLVM install that has python_packages/mlir_core.") from _e
 
 # Descriptor struct for a memref arg. The driver (backend/driver.py `_launch`)
 # passes each memref as (int64_t rank=0, void* &ptr_arg) where ptr_arg is a
@@ -87,8 +88,8 @@ class LLVMDirectCodegen:
         self._ptr_i64: dict[str, ir.Value] = {}  # pyname -> i64 arg (data ptr)
         self._ctx_arg: ir.Value | None = None
         # build state (set up by _build_body)
-        self._func = None       # the llvm.func Operation being filled
-        self._cur_blk = None    # block that ops are appended to
+        self._func = None  # the llvm.func Operation being filled
+        self._cur_blk = None  # block that ops are appended to
         self._entry_args = None  # entry block arguments
 
     # --- emit helpers ---------------------------------------------------
@@ -402,8 +403,7 @@ class LLVMDirectCodegen:
         elem_s = node.args[2].value if len(node.args) > 2 else "f16"
         ptrT = _parse_type("!llvm.ptr")
         with self._ip():
-            return dllvm.GEPOp(ptrT, base, [off], [_GEP_DYNAMIC],
-                               _parse_type(elem_s), 0).result
+            return dllvm.GEPOp(ptrT, base, [off], [_GEP_DYNAMIC], _parse_type(elem_s), 0).result
 
     def _p_llvm_size(self, node):
         """llvm_size(mem[, dim]) — UNSUPPORTED in the llvm-direct driver ABI.
@@ -440,12 +440,10 @@ class LLVMDirectCodegen:
                     raise RuntimeError("program_id in sibling mode requires a ctx arg; "
                                        "emit_func_for_inline must set codegen._ctx_arg.")
                 ax = _const_i64_v(axis)
-                return dllvm.CallOp(i64, [self._ctx_arg, ax], [], [],
-                                    callee="spine_grid").result
+                return dllvm.CallOp(i64, [self._ctx_arg, ax], [], [], callee="spine_grid").result
 
             # Standalone module ABI: memref=2 args, scalar=1 arg; grid i32 trails.
-            n_user_args = sum(2 if p[1].kind == "mem" else 1
-                              for p in self._params)
+            n_user_args = sum(2 if p[1].kind == "mem" else 1 for p in self._params)
             prog_v = self._entry_args[n_user_args + axis]
             return dllvm.sext(i64, prog_v)
 

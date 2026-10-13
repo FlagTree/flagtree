@@ -54,11 +54,12 @@ try:
     from mlir import ir
     from mlir.dialects import llvm as dllvm
 except ImportError as _e:  # pragma: no cover - environment guard
-    raise ImportError("smt_rvisa mixed-mode bridge injector requires the MLIR Python bindings "
-                      "(importable 'mlir' package). They are vendored into "
-                      "triton/backends/<backend>/mlir_core by setup.py at package time; if that "
-                      "copy is missing, rebuild the wheel (third_party/spacemit/scripts/install_flagtree_plugin.sh) from an "
-                      "LLVM install that has python_packages/mlir_core.") from _e
+    raise ImportError(
+        "smt_rvisa mixed-mode bridge injector requires the MLIR Python bindings "
+        "(importable 'mlir' package). They are vendored into "
+        "triton/backends/<backend>/mlir_core by setup.py at package time; if that "
+        "copy is missing, rebuild the wheel (third_party/spacemit/scripts/install_flagtree_plugin.sh) from an "
+        "LLVM install that has python_packages/mlir_core.") from _e
 
 # The new spert ABI injects a leading `%arg0: i64` context handle at the ll.mlir
 # layer (not present in the linalg func.func signature host_arg_is_memref is
@@ -179,8 +180,8 @@ def _append_siblings(mod, ctx, llvm_funcs):
         mod.body.append(sop.operation)
 
 
-def inject_mixed_llvm_llmlir(llmlir: str, func_name: str, host_arg_is_memref: list[bool],
-                             llvm_funcs, llvm_calls) -> str:
+def inject_mixed_llvm_llmlir(llmlir: str, func_name: str, host_arg_is_memref: list[bool], llvm_funcs,
+                             llvm_calls) -> str:
     """Graft llvm.func siblings + host→sibling bridges into the LOWERED ll.mlir.
 
     Returns the injected module as MLIR text (get_asm). Structured replacement

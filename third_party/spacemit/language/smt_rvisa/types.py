@@ -20,7 +20,6 @@ Usage:
 """
 from __future__ import annotations
 
-
 # ---------------------------------------------------------------------------
 # Structured MLIR type metadata (Ty hierarchy).
 #
@@ -106,7 +105,7 @@ class ScalableDim:
     MLIR parser (LLVM-channel user literals); codegen constructs static dims.
     """
 
-    __slots__ = ("n",)
+    __slots__ = ("n", )
 
     def __init__(self, n: int):
         if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
@@ -205,8 +204,8 @@ class StridedLayout:
         self.has_offset = has_offset
 
     def __eq__(self, other) -> bool:
-        return (isinstance(other, StridedLayout)
-                and other.strides == self.strides and other.has_offset == self.has_offset)
+        return (isinstance(other, StridedLayout) and other.strides == self.strides
+                and other.has_offset == self.has_offset)
 
     def __hash__(self) -> int:
         return hash(("StridedLayout", self.strides, self.has_offset))
@@ -248,8 +247,7 @@ class MemTy(Ty):
 
     __slots__ = ("dims", "elem", "layout", "space")
 
-    def __init__(self, dims, elem: Ty, layout: StridedLayout | None = None,
-                 space=None):
+    def __init__(self, dims, elem: Ty, layout: StridedLayout | None = None, space=None):
         self.dims = None if dims is None else tuple(dims)
         self.elem = elem
         self.layout = layout
@@ -278,27 +276,26 @@ class MemTy(Ty):
             strides = [None if s is None else int(s) for s in self.layout.strides]
             ho = self.layout.has_offset
             if isinstance(ho, int) and not isinstance(ho, bool):
-                offset = ho   # static offset
+                offset = ho  # static offset
             elif ho is True:
                 offset = None  # C++ contract: None -> ShapedType::kDynamic ("offset: ?")
             else:
-                offset = 0    # has_offset False == no offset clause == offset 0
+                offset = 0  # has_offset False == no offset clause == offset 0
         return b.get_memref_type(dims, elem, strides, offset, space)
 
     def as_dynamic_ranked(self) -> "MemTy":
         """The _ranked_cast transform: memref<*xT, ...> -> memref<?xT, ...>."""
         if not self.unranked:
             raise ValueError(f"as_dynamic_ranked on a ranked type {self!r}")
-        return MemTy((None,), self.elem, self.layout, self.space)
+        return MemTy((None, ), self.elem, self.layout, self.space)
 
     def __repr__(self) -> str:
         return (f"MemTy({self.dims!r}, {self.elem!r}, "
                 f"layout={self.layout!r}, space={self.space!r})")
 
     def __eq__(self, other) -> bool:
-        return (isinstance(other, MemTy) and other.dims == self.dims
-                and other.elem == self.elem and other.layout == self.layout
-                and other.space is self.space)
+        return (isinstance(other, MemTy) and other.dims == self.dims and other.elem == self.elem
+                and other.layout == self.layout and other.space is self.space)
 
     def __hash__(self) -> int:
         return hash(("MemTy", self.dims, self.elem, self.layout, id(self.space)))
@@ -313,7 +310,7 @@ class OpaqueTy(Ty):
     never parses it. Never constructed by codegen.
     """
 
-    __slots__ = ("text",)
+    __slots__ = ("text", )
 
     def __init__(self, text: str):
         self.text = text
@@ -349,7 +346,6 @@ LLVM_PTR = OpaqueTy("!llvm.ptr")
 LLVM_DESC = OpaqueTy("!llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>")
 VOID = OpaqueTy("()")  # compared/returned only; never built (no MLIR parse for "()")
 
-
 # ---------------------------------------------------------------------------
 # classify_type — re-derive the Ty hierarchy from an MLIR Type that the
 # official C++ parser produced (builder.parse_type of an LLVM-channel user
@@ -357,13 +353,12 @@ VOID = OpaqueTy("()")  # compared/returned only; never built (no MLIR parse for 
 # keeps the official MLIR printer text for passthrough types ("!llvm.*").
 # ---------------------------------------------------------------------------
 
+
 def classify_type(b, T) -> Ty:
     """Structured Ty for a parsed MLIR Type (b = builder, T = pybind Type)."""
     if b.type_is_vector(T):
         dims = tuple(
-            ScalableDim(d) if sc else d
-            for d, sc in zip(b.type_vector_dims(T), b.type_vector_scalable_dims(T))
-        )
+            ScalableDim(d) if sc else d for d, sc in zip(b.type_vector_dims(T), b.type_vector_scalable_dims(T)))
         return VecTy(dims, classify_type(b, b.type_vector_elem(T)))
     if b.type_is_index(T):
         return INDEX
@@ -381,6 +376,7 @@ def classify_type(b, T) -> Ty:
 # Parameter annotations (document-facing sugar, feishu 3.3):
 # tle.mem(f16) / tle.mem(f32, out=True) / tle.index.
 # ---------------------------------------------------------------------------
+
 
 class _TypedAnnotation:
     """Parameter annotation carrying a structured Ty.

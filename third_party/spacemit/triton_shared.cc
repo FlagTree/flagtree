@@ -467,11 +467,12 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
       // boundary instead of assembling type text, so these are the single
       // place where MLIR types get constructed for raw kernels.
       // ======================================================================
-      .def("get_integer_type",
-           [](TritonOpBuilder &self, unsigned bits) -> Type {
-             return IntegerType::get(self.getBuilder().getContext(), bits);
-           },
-           py::arg("bits"))
+      .def(
+          "get_integer_type",
+          [](TritonOpBuilder &self, unsigned bits) -> Type {
+            return IntegerType::get(self.getBuilder().getContext(), bits);
+          },
+          py::arg("bits"))
       .def(
           "get_float_type",
           [](TritonOpBuilder &self, unsigned bits, bool is_bf) -> Type {
@@ -531,11 +532,12 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
                   offset.value_or(ShapedType::kDynamic), stridesVec);
               return MemRefType::get(shape, elemType, layout, ms);
             }
-            return MemRefType::get(shape, elemType,
-                                   MemRefLayoutAttrInterface{}, ms);
+            return MemRefType::get(shape, elemType, MemRefLayoutAttrInterface{},
+                                   ms);
           },
-          py::arg("dims"), py::arg("elem_type"), py::arg("strides") = py::none(),
-          py::arg("offset") = py::none(), py::arg("memory_space") = py::none())
+          py::arg("dims"), py::arg("elem_type"),
+          py::arg("strides") = py::none(), py::arg("offset") = py::none(),
+          py::arg("memory_space") = py::none())
       .def(
           "get_unranked_memref_type",
           [](TritonOpBuilder &self, Type elemType,
@@ -556,26 +558,26 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
             return RankedTensorType::get(shape, elemType);
           },
           py::arg("dims"), py::arg("elem_type"))
-      .def(
-          "get_bridge_memory_space",
-          [](TritonOpBuilder &self) -> Attribute {
-            // tt.ptr <-> memref bridge memory space (MemorySpaceUtils.h);
-            // returned as an Attribute in the builder's context so Python
-            // never handles attr text.
-            return mlir::triton::getDefaultBridgeMemorySpace(
-                self.getBuilder().getContext());
-          })
+      .def("get_bridge_memory_space",
+           [](TritonOpBuilder &self) -> Attribute {
+             // tt.ptr <-> memref bridge memory space (MemorySpaceUtils.h);
+             // returned as an Attribute in the builder's context so Python
+             // never handles attr text.
+             return mlir::triton::getDefaultBridgeMemorySpace(
+                 self.getBuilder().getContext());
+           })
 
       // ======================================================================
       // Structured type introspection (types.py classify_type). Lets Python
       // re-derive its Ty hierarchy from a Type parsed via the official MLIR
       // parser (builder.parse_type) without regex on printed text.
       // ======================================================================
-      .def("type_is_vector",
-           [](TritonOpBuilder &self, Type t) -> bool {
-             return mlir::isa<VectorType>(t);
-           },
-           py::arg("type"))
+      .def(
+          "type_is_vector",
+          [](TritonOpBuilder &self, Type t) -> bool {
+            return mlir::isa<VectorType>(t);
+          },
+          py::arg("type"))
       .def(
           "type_vector_dims",
           [](TritonOpBuilder &self, Type t) -> std::vector<int64_t> {
@@ -609,11 +611,12 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
             return vt.getElementType();
           },
           py::arg("type"))
-      .def("type_is_index",
-           [](TritonOpBuilder &self, Type t) -> bool {
-             return mlir::isa<IndexType>(t);
-           },
-           py::arg("type"))
+      .def(
+          "type_is_index",
+          [](TritonOpBuilder &self, Type t) -> bool {
+            return mlir::isa<IndexType>(t);
+          },
+          py::arg("type"))
       .def(
           "type_int_width",
           [](TritonOpBuilder &self, Type t) -> unsigned {
@@ -625,8 +628,8 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
           py::arg("type"))
       .def(
           "type_float_info",
-          [](TritonOpBuilder &self, Type t)
-              -> std::optional<std::pair<unsigned, bool>> {
+          [](TritonOpBuilder &self,
+             Type t) -> std::optional<std::pair<unsigned, bool>> {
             if (auto ft = mlir::dyn_cast<FloatType>(t)) {
               return std::make_pair(ft.getWidth(), mlir::isa<BFloat16Type>(ft));
             }

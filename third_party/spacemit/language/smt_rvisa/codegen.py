@@ -178,8 +178,7 @@ def _resolve_dtype(node, default: str = "f16") -> str:
 
 def _is_vec2d_of(t: Ty, elems: tuple) -> bool:
     """Rank-2 static-shape vector with a scalar element in `elems` (vmadot guard)."""
-    return (isinstance(t, VecTy) and len(t.dims) == 2
-            and all(isinstance(d, int) for d in t.dims)
+    return (isinstance(t, VecTy) and len(t.dims) == 2 and all(isinstance(d, int) for d in t.dims)
             and isinstance(t.elem, ScalarTy) and t.elem.name in elems)
 
 
@@ -625,7 +624,7 @@ class SmtMLIRBuilderCodegen:
         if pred_pair is None:
             raise NotImplementedError(f"Compare {op.__name__}")
         elem = vt.elem
-        i1_vt = VecTy((vt.first_dim,), I1)
+        i1_vt = VecTy((vt.first_dim, ), I1)
         if elem.is_float:
             pred = pred_pair[0]
             return self._b.create_arith_cmpf(pred, lv, rv), i1_vt
@@ -705,7 +704,7 @@ class SmtMLIRBuilderCodegen:
         dt = ScalarTy(_resolve_dtype(node.args[0] if node.args else None, "f32"))
         vl = self._require_vl()
         group = self._try_const_int(kwargs["group"]) if "group" in kwargs else None
-        vt = VecTy((group, vl), dt) if group else VecTy((vl,), dt)
+        vt = VecTy((group, vl), dt) if group else VecTy((vl, ), dt)
         zero = self._const_float(0.0, dt)
         return self._b.create_vector_broadcast(zero, self._tt(vt)), vt
 
@@ -762,8 +761,9 @@ class SmtMLIRBuilderCodegen:
         acc_v, acc_t = self._gen_expr(node.args[0])
         x_v, x_t = self._gen_expr(node.args[1])
         y_v, y_t = self._gen_expr(node.args[2])
-        if not (_is_vec2d_of(x_t, ("f16", "bf16")) and _is_vec2d_of(y_t, ("f16", "bf16"))
-                and _is_vec2d_of(acc_t, ("f32",))):
+        if not (_is_vec2d_of(x_t, ("f16", "bf16")) and _is_vec2d_of(y_t,
+                                                                    ("f16", "bf16")) and _is_vec2d_of(acc_t,
+                                                                                                      ("f32", ))):
             raise ValueError(f"vmadot type error: x={x_t} y={y_t} acc={acc_t}")
         b1, b2, B = x_t.dims[0], y_t.dims[0], acc_t.dims[0]
         if B != b1 * b2:
@@ -914,7 +914,7 @@ class SmtMLIRBuilderCodegen:
         idx_node = node.args[1]
         dtype = ScalarTy(_resolve_dtype(kwargs.get("dtype"), "f16"))
         vl = self._require_vl()
-        vt = VecTy((vl,), dtype)
+        vt = VecTy((vl, ), dtype)
         # fill= kwarg: value for padding of tail tiles (default 0.0).
         # Softmax exp-accumulation needs fill=-1e38 so exp(fill-xmax)≈0.
         fill_node = kwargs.get("fill")
@@ -936,7 +936,7 @@ class SmtMLIRBuilderCodegen:
             elem = ptr_t.elem
             idx_vs = [self._gen_expr(e)[0] for e in idx_node.elts]
             c0 = self._const_int(0)
-            flat_t = VecTy((group * vl,), elem)
+            flat_t = VecTy((group * vl, ), elem)
             flat_v = self._b.create_vector_transfer_read(self._tt(flat_t), ptr_v, idx_vs + [c0], pad, [True])
             out_t = VecTy((group, vl), elem)
             return self._b.create_vector_shape_cast(flat_v, self._tt(out_t)), out_t
@@ -955,12 +955,12 @@ class SmtMLIRBuilderCodegen:
         if valid_v is not None:
             assert "group" not in kwargs
             off_v, _ = self._gen_expr(idx_node)
-            src_mr_t = MemTy((None,), dtype, StridedLayout((None,), True), BRIDGE)
+            src_mr_t = MemTy((None, ), dtype, StridedLayout((None, ), True), BRIDGE)
             rsrc = self._b.create_memref_reinterpret_cast(self._tt(src_mr_t), ptr_v, [off_v], [valid_v],
                                                           [self._const_int(1)])
-            tens_t = TensorTy((None,), dtype)
+            tens_t = TensorTy((None, ), dtype)
             tsrc = self._b.create_bufferization_to_tensor(rsrc, self._tt(tens_t))
-            fill_tens_t = TensorTy((vl,), dtype)
+            fill_tens_t = TensorTy((vl, ), dtype)
             escr = self._b.create_tensor_empty(self._tt(fill_tens_t))
             fscr = self._b.create_linalg_fill(pad, escr)
             c0 = self._const_int(0)
@@ -971,7 +971,7 @@ class SmtMLIRBuilderCodegen:
         off_v, _ = self._gen_expr(idx_node)
         group = self._try_const_int(group_kw) if group_kw is not None else None
         if group:
-            flat_t = VecTy((group * vl,), dtype)
+            flat_t = VecTy((group * vl, ), dtype)
             flat_v = self._b.create_vector_transfer_read(self._tt(flat_t), ranked_v, [off_v], pad, [True])
             out_t = VecTy((group, vl), dtype)
             return self._b.create_vector_shape_cast(flat_v, self._tt(out_t)), out_t
@@ -1095,8 +1095,7 @@ class SmtMLIRBuilderCodegen:
         descriptor; extractvalue[1] is the aligned pointer field.
         """
         ptr_v, ptr_t = self._gen_expr(node.args[0])
-        desc = self._b.create_op_textattr("builtin.unrealized_conversion_cast", [ptr_v], {},
-                                          [self._tt(LLVM_DESC)])
+        desc = self._b.create_op_textattr("builtin.unrealized_conversion_cast", [ptr_v], {}, [self._tt(LLVM_DESC)])
         res = self._b.create_op_textattr("llvm.extractvalue", [desc[0]], {"position": "array<i64: 1>"},
                                          [self._tt(LLVM_PTR)])
         return res[0], LLVM_PTR
@@ -1111,10 +1110,10 @@ class SmtMLIRBuilderCodegen:
         if off_t == INDEX:
             off_v = self._b.create_arith_index_cast(off_v, self._tt(I64))
         elem = _resolve_dtype(kwargs.get("elem"), "f16")
-        res = self._b.create_op_textattr("llvm.getelementptr", [base_v, off_v],
-                                         {"rawConstantIndices": "array<i32: -2147483648>",
-                                         "elem_type": str(ScalarTy(elem).build(self._b))},
-                                         [self._tt(LLVM_PTR)])
+        res = self._b.create_op_textattr(
+            "llvm.getelementptr", [base_v, off_v],
+            {"rawConstantIndices": "array<i32: -2147483648>", "elem_type": str(ScalarTy(elem).build(self._b))},
+            [self._tt(LLVM_PTR)])
         return res[0], LLVM_PTR
 
     def _gen_llvm_size(self, node: ast.Call) -> tuple:
@@ -1122,8 +1121,7 @@ class SmtMLIRBuilderCodegen:
         kwargs = {kw.arg: kw.value for kw in node.keywords}
         ptr_v, ptr_t = self._gen_expr(node.args[0])
         dim = self._try_const_int(kwargs.get("dim")) if "dim" in kwargs else 0
-        desc = self._b.create_op_textattr("builtin.unrealized_conversion_cast", [ptr_v], {},
-                                          [self._tt(LLVM_DESC)])
+        desc = self._b.create_op_textattr("builtin.unrealized_conversion_cast", [ptr_v], {}, [self._tt(LLVM_DESC)])
         res = self._b.create_op_textattr("llvm.extractvalue", [desc[0]], {"position": f"array<i64: 3, {dim}>"},
                                          [self._tt(I64)])
         return res[0], I64
@@ -1140,8 +1138,8 @@ class SmtMLIRBuilderCodegen:
         memref.store / scf.for / transfer_read (the _gen_spread path, K3-proven).
         """
         vl = self._require_vl()
-        vt = VecTy((vl,), F32)
-        scr = self._b.create_memref_alloc(self._tt(MemTy((vl,), F32)), None, 64)
+        vt = VecTy((vl, ), F32)
+        scr = self._b.create_memref_alloc(self._tt(MemTy((vl, ), F32)), None, 64)
         c0, c1, cvl = self._const_int(0), self._const_int(1), self._const_int(vl)
 
         def fill_body(b, iv, _):
@@ -1191,7 +1189,7 @@ class SmtMLIRBuilderCodegen:
             # Full-tile path: static memref<VLxT, strided<[1], offset:?>>.
             # Dynamic memref<?xT> causes VL to be clamped by descriptor size
             # → only lane0 written. Static size bypasses clamping.
-            m1t = MemTy((vn,), elem, StridedLayout((1,), True), BRIDGE)
+            m1t = MemTy((vn, ), elem, StridedLayout((1, ), True), BRIDGE)
             r1 = self._b.create_memref_reinterpret_cast_mixed(self._tt(m1t), ptr_v, [idx_v], [vn], [1])
             self._b.create_vector_transfer_write(val_v, r1, [c0], [True])
         else:
@@ -1199,7 +1197,7 @@ class SmtMLIRBuilderCodegen:
             # Use dynamic memref<?xT> with size=valid + in_bounds=[false]
             # so transfer_write generates a masked store respecting the bound.
             valid_v = self._active_valid
-            m1t = MemTy((None,), elem, StridedLayout((None,), True), BRIDGE)
+            m1t = MemTy((None, ), elem, StridedLayout((None, ), True), BRIDGE)
             r1 = self._b.create_memref_reinterpret_cast(self._tt(m1t), ptr_v, [idx_v], [valid_v], [self._const_int(1)])
             self._b.create_vector_transfer_write(val_v, r1, [c0], [False])
 
@@ -1318,7 +1316,7 @@ class SmtMLIRBuilderCodegen:
         # src → 1D <k_real>
         # src → 1D <k_real>:dim0 静态 k_real(mixed 传 int),但 stride 是 strided<[?]>
         # 动态(earlier strided fix 为满足 to_tensor),故 stride 仍传 Value;offset 静态 0。
-        src1d_t = MemTy((k_real,), et, StridedLayout((None,), False), BRIDGE)
+        src1d_t = MemTy((k_real, ), et, StridedLayout((None, ), False), BRIDGE)
         rsrc = self._b.create_memref_reinterpret_cast_mixed(self._tt(src1d_t), src_v, [0], [k_real],
                                                             [self._const_int(1)])
         scr_t = MemTy((kc, n, k), et)
@@ -1372,7 +1370,7 @@ class SmtMLIRBuilderCodegen:
         if not isinstance(dst_t, MemTy):
             raise ValueError(f"pack expects a memref destination, got {dst_t}")
         dtype = dst_t.elem
-        vt = VecTy((vl,), dtype)
+        vt = VecTy((vl, ), dtype)
         src_v, src_t = self._gen_expr(src_node)
         ranked_v, ranked_t = self._ranked_cast(src_v, src_t)
         row0_v, _ = self._gen_expr(src_idx.elts[0])
@@ -1380,9 +1378,9 @@ class SmtMLIRBuilderCodegen:
         pad = self._const_float(0.0, dtype)
         c0 = self._const_int(0)
         cvl = self._const_int(vl)
-        src_mr_t = MemTy((None,), dtype, StridedLayout((None,), True), BRIDGE)
-        tens_dyn = TensorTy((None,), dtype)
-        tens_vl = TensorTy((vl,), dtype)
+        src_mr_t = MemTy((None, ), dtype, StridedLayout((None, ), True), BRIDGE)
+        tens_dyn = TensorTy((None, ), dtype)
+        tens_vl = TensorTy((vl, ), dtype)
 
         def loop_body(b, loop_v, _):
             kb = b.create_arith_divui(loop_v, cvl)
