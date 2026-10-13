@@ -77,11 +77,11 @@ PYLIB="${PY_RISCV_ROOT}/lib/lib${PY_VER}.so"
 [ -e "${PYLIB}" ] || [ -e "${PYLIB}.1.0" ] || { echo "FATAL: 缺少 ${PYLIB}" >&2; exit 1; }
 echo "[spacemit] target python    : ${PY_VER}"
 
-# --- zlib（工具链 sysroot 默认; CI 由 .github/scripts/build_rv_zlib.sh 预装） ---
+# --- zlib（工具链 sysroot 默认; CI 由 third_party/spacemit/scripts/build_rv_zlib.sh 预装） ---
 ZLIB_LIBDIR=${ZLIB_LIBDIR:-${RISCV_ROOT_PATH}/sysroot/usr/lib}
 if [ ! -e "${ZLIB_LIBDIR}/libz.a" ] && [ ! -e "${ZLIB_LIBDIR}/libz.so" ]; then
     echo "ERROR: no libz under ${ZLIB_LIBDIR}" >&2
-    echo "Build zlib for riscv64 into the toolchain sysroot (.github/scripts/build_rv_zlib.sh) or set ZLIB_LIBDIR" >&2
+    echo "Build zlib for riscv64 into the toolchain sysroot (third_party/spacemit/scripts/build_rv_zlib.sh) or set ZLIB_LIBDIR" >&2
     exit 1
 fi
 

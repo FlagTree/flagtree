@@ -1,7 +1,6 @@
 # Build zlib for riscv64 and install it into the toolchain sysroot, so the
-# cross-compiled triton can link -lz. Sourced/executed from the
-# Spacemit3.6-Riscv64-Wheel workflow with RISCV_ROOT_PATH set.
-# No set -e here on purpose: it is a plain scriptlet under the workflow step.
+# cross-compiled triton can link -lz. Run this once per toolchain with
+# RISCV_ROOT_PATH set (see README_build.md, "Cross-compile a riscv64 wheel").
 set -e
 wget https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
 tar -zxvf zlib-1.3.1.tar.gz
