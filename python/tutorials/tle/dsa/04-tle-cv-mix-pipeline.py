@@ -238,15 +238,22 @@ def cv_mix_matmul_add_pipe_kernel(
         dtype=tl.float32,
     )
 
-    # 公共 tle.pipe 签名与后端无关（与 GPU 侧逐字一致）：默认即 cube->vector 的 CV-mix 握手。
-    # 需要显式控制同步方向或 event id 布局时，把调度器传给编排入口）：
-    #   scheduler = tle.dsa.ascend.pipe_scheduler(
-    #       ready_sync=tle.dsa.ascend.SyncSpec(...),
-    #       free_sync=tle.dsa.ascend.SyncSpec(...),
-    #       event_base=0,  # 缺省自动分配
-    #   )
-    #   tle.dsa.ascend.run_pipeline([...], scheduler=scheduler)
-    #   # 多条 pipe 各自配置时传 (pipe_name, scheduler) 对的 tuple
+    scheduler = tle.dsa.ascend.pipe_scheduler(
+        ready_sync=tle.dsa.ascend.SyncSpec(
+            sender="cube",
+            receiver="vector",
+            sender_pipe=pipe.PIPE_FIX,
+            receiver_pipe=pipe.PIPE_MTE2,
+        ),
+        free_sync=tle.dsa.ascend.SyncSpec(
+            sender="vector",
+            receiver="cube",
+            sender_pipe=pipe.PIPE_MTE2,
+            receiver_pipe=pipe.PIPE_FIX,
+        ),
+        event_base=0,
+    )
+
     c_pipe = tle.pipe(
         capacity=2,
         scope="cta",
@@ -258,6 +265,10 @@ def cv_mix_matmul_add_pipe_kernel(
 
     for block_idx in range(num_blocks):
         # run_pipeline 把 producer/consumer 两个函数按序 inline 展开
+        # scheduler 调度器在这里显式写出，与上面手写 sync_block 的版本一一对应
+        # 事实上对于这种默认方向和默认 event_id，可以直接省略 scheduler，即：
+        # tle.dsa.ascend.run_pipe([(_cv_mix_cube_producer, ...), (_cv_mix_vector_consumer, ...)
+        # 这里显式写出是为了测试 scheduler 的使用
         tle.dsa.ascend.run_pipeline([
             (
                 _cv_mix_cube_producer,
@@ -286,7 +297,7 @@ def cv_mix_matmul_add_pipe_kernel(
                     BLOCK_SIZE_N,
                 ),
             ),
-        ])
+        ], scheduler=scheduler)
 
 
 def cv_mix_matmul_add(a: torch.Tensor, b: torch.Tensor):

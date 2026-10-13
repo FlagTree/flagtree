@@ -6,7 +6,7 @@ from typing import Any, Dict
 import triton.language.core as tl
 from triton.language.core import _unwrap_if_constexpr
 
-from ..core import TRITON_BUILTIN, TLE_BUILTIN, Workspace, builtin
+from ..core import Workspace, builtin
 from .core import PIPE, SyncSpec, sync_block_set, sync_block_wait
 
 _pipe_event_ranges = []
@@ -97,7 +97,8 @@ class PipeScheduler:
         self.event_base = event_base
 
 
-def pipe_scheduler(ready_sync=None, free_sync=None, event_base=None):
+@builtin
+def pipe_scheduler(ready_sync=None, free_sync=None, event_base=None, _semantic=None):
     """Build an Ascend pipe scheduler.
 
     ready_sync/free_sync describe the ready (producer->consumer) and free
@@ -119,12 +120,6 @@ def pipe_scheduler(ready_sync=None, free_sync=None, event_base=None):
     if event_base is not None:
         event_base = _as_int(event_base, "event_base")
     return PipeScheduler(ready_sync, free_sync, event_base)
-
-
-# Pure descriptor constructor: callable from kernels as well as host code, so it
-# only needs the builtin marker to satisfy JIT reference checks (like workspace).
-setattr(pipe_scheduler, TRITON_BUILTIN, True)
-setattr(pipe_scheduler, TLE_BUILTIN, True)
 
 
 def _validate_reader_fields(pipe, fields):
@@ -302,7 +297,7 @@ class pipe_value:
         self.readers = _validate_readers(readers)
         scheduler = _unwrap_constexpr(scheduler)
         if scheduler is None:
-            scheduler = pipe_scheduler()
+            scheduler = pipe_scheduler.__wrapped__()
         if not isinstance(scheduler, PipeScheduler):
             raise ValueError("tle.pipe scheduler must be built by tle.dsa.ascend.pipe_scheduler, "
                              f"got {type(scheduler).__name__}")
