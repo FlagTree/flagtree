@@ -271,8 +271,8 @@ class FlagPrismSetup:
         self.build_config = None
         self._dependency_cmake_args = dependency_cmake_args
 
-        if self.enabled and backend not in supported_backends:
-            # FlagPrism: report the supported integration backends.
+        # FlagPrism: allow the default NVIDIA build and supported named backends.
+        if self.enabled and backend and backend not in supported_backends:
             raise RuntimeError("TRITON_BUILD_FLAGPRISM is only supported when "
                                "FLAGTREE_BACKEND=ascend, iluvatar, mthreads, or enflame.")
         if not self.enabled:

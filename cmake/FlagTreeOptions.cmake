@@ -124,8 +124,9 @@ macro(flagtree_configure_flagprism)
          ${_flagprism_default})
 
   if(TRITON_BUILD_FLAGPRISM)
-    # FlagPrism: validate the supported integration backends.
-    if(NOT FLAGTREE_BACKEND MATCHES "^(ascend|iluvatar|mthreads|enflame)$")
+    # FlagPrism: allow the default NVIDIA build and supported named backends.
+    if(FLAGTREE_BACKEND AND
+       NOT FLAGTREE_BACKEND MATCHES "^(ascend|iluvatar|mthreads|enflame)$")
       message(FATAL_ERROR
         "TRITON_BUILD_FLAGPRISM is only supported when "
         "FLAGTREE_BACKEND is ascend, iluvatar, mthreads, or enflame.")
