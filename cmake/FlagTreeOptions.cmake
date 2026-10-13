@@ -27,9 +27,13 @@ macro(flagtree_configure_options)
     set(FLAGTREE_DEFAULT_OPTION OFF)
   endif()
 
-  # CommonIR is an explicit opt-in for the default NVIDIA backend. Keep the
-  # build contract as a C/C++ macro without introducing a CMake cache option.
-  set(FLAGTREE_COMMON_IR_ENABLED "$ENV{FLAGTREE_COMMON_IR}")
+  # CommonIR is enabled by default. Set FLAGTREE_COMMON_IR=0 (or OFF) to opt out.
+  # Keep the build contract as a C/C++ macro without introducing a CMake cache option.
+  if(DEFINED ENV{FLAGTREE_COMMON_IR})
+    set(FLAGTREE_COMMON_IR_ENABLED "$ENV{FLAGTREE_COMMON_IR}")
+  else()
+    set(FLAGTREE_COMMON_IR_ENABLED ON)
+  endif()
   if(FLAGTREE_COMMON_IR_ENABLED)
     #if(FLAGTREE_BACKEND)
     #  message(FATAL_ERROR "FLAGTREE_COMMON_IR requires the default NVIDIA backend")
