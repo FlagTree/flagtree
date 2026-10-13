@@ -58,7 +58,7 @@ _DESC = "!llvm.struct<(ptr, ptr, i64)>"
 # (= std::numeric_limits<int32_t>::min(), LLVM::GEP dynamic-index convention).
 _GEP_DYNAMIC = -2147483648
 
-# llvm.icmp predicate "slt" (signed less-than), used by tle.range loops.
+# llvm.icmp predicate "slt" (signed less-than), used by sr.range loops.
 _ICMP_SLT = 2
 
 
@@ -250,7 +250,7 @@ class LLVMDirectCodegen:
             raise NotImplementedError(f"llvm-direct: unsupported stmt {ast.dump(node)}")
 
     def _gen_for(self, node: ast.For) -> None:
-        """`for k in tle.range(lb[, ub, step]):` → llvm.br/cond_br loop.
+        """`for k in sr.range(lb[, ub, step]):` → llvm.br/cond_br loop.
 
         Vars reassigned in the body become iter-args (carried across the
         back-edge), mirroring host_ll.mlir's ^bb1(iv, acc...) header. Loop is
@@ -411,11 +411,11 @@ class LLVMDirectCodegen:
         The driver passes memrefs as rank-0 StridedMemRefType descriptors
         {allocated, aligned, offset} with no sizes/strides. There is no dim
         size to read. Pass shape info as an explicit scalar kernel parameter
-        (e.g. K: tle.index) and use that for loop bounds instead.
+        (e.g. K: sr.index) and use that for loop bounds instead.
         """
         raise NotImplementedError("llvm-direct: llvm_size is unavailable — the driver ABI passes rank-0 "
                                   "memref descriptors with no shape. Pass sizes as scalar params "
-                                  "(e.g. K: tle.index) and use them for loop bounds.")
+                                  "(e.g. K: sr.index) and use them for loop bounds.")
 
     def _p_program_id(self, node):
         """program_id(axis) -> i64 index of this program along `axis`.
@@ -447,7 +447,7 @@ class LLVMDirectCodegen:
             prog_v = self._entry_args[n_user_args + axis]
             return dllvm.sext(i64, prog_v)
 
-    # Plain llvm-dialect ops reachable through tle.call_intrinsic (dispatch
+    # Plain llvm-dialect ops reachable through sr.call_intrinsic (dispatch
     # table; anything unlisted fails loudly instead of guessing).
     _PLAIN_UNARY = {
         "llvm.fptrunc": staticmethod(lambda rt, ops: dllvm.fptrunc(rt, ops[0])),

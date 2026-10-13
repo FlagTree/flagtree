@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """@smt_rvisa decorator and SmtLinalgJITFunction.
 
-SmtLinalgJITFunction wraps a Python function annotated with tle.mem/tle.index
+SmtLinalgJITFunction wraps a Python function annotated with sr.mem/sr.index
 and, on first call to make_body_builder(), runs SmtMLIRBuilderCodegen to build
 the raw kernel body straight through the C++ builder API (no MLIR text).
 """
@@ -37,7 +37,7 @@ class SmtLinalgJITFunction:
         control-flow and used by both, so it doesn't count as a svector marker.
         A mixed kernel (svector helpers + call_intrinsic) goes to
         SmtMLIRBuilderCodegen, whose _gen_call_intrinsic handles
-        tle.call_intrinsic inline.
+        sr.call_intrinsic inline.
         """
         import ast
         import inspect
@@ -89,7 +89,7 @@ def smt_rvisa(*, name: str = "linalg") -> Callable:
 
     Usage:
         @smt_rvisa(name="linalg")
-        def mv_acc_raw_inner(A: tle.mem(f16), K: tle.index, C: tle.mem(f32, out=True)):
+        def mv_acc_raw_inner(A: sr.mem(f16), K: sr.index, C: sr.mem(f32, out=True)):
             ...
     """
     if name not in _REGISTRY:

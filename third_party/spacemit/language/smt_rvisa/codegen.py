@@ -45,9 +45,9 @@ def _parse_signature(fn: Callable) -> list[tuple[str, _TypedAnnotation]]:
         ann = param.annotation
         if ann is inspect.Parameter.empty:
             raise ValueError(f"Parameter '{pname}' of @smt_rvisa function '{fn.__name__}' "
-                             f"must have a tle.mem(...) or tle.index annotation.")
+                             f"must have a sr.mem(...) or sr.index annotation.")
         if not isinstance(ann, _TypedAnnotation):
-            raise ValueError(f"Parameter '{pname}' annotation must be tle.mem(...) or tle.index, got {ann!r}")
+            raise ValueError(f"Parameter '{pname}' annotation must be sr.mem(...) or sr.index, got {ann!r}")
         result.append((pname, ann))
     return result
 
@@ -502,7 +502,7 @@ class SmtMLIRBuilderCodegen:
         if _is_smt_rvisa_attr(node.func, "proton_mark", self._aliases):
             pass  # skip profiling marks in builder path
         elif _is_smt_rvisa_attr(node.func, "vconfig", self._aliases):
-            # Bare `tle.vconfig(avl, lmul)` statement: set active VL/valid
+            # Bare `sr.vconfig(avl, lmul)` statement: set active VL/valid
             # without binding a name (same semantics as the assignment form).
             self._apply_vconfig(node)
         elif _is_smt_rvisa_attr(node.func, "vstore", self._aliases):
@@ -524,7 +524,7 @@ class SmtMLIRBuilderCodegen:
         if isinstance(node, ast.Name):
             # Kernel params and locals take precedence over the host-module
             # global constexpr capture. Params are bound to block args in _env;
-            # locals (e.g. nvl after `nvl = tle.vconfig(...)`) are recorded in
+            # locals (e.g. nvl after `nvl = sr.vconfig(...)`) are recorded in
             # _constexpr_ints by _gen_vconfig_assign. A test-script global that
             # happens to share a name (`N = 64` loop variable in __main__) must
             # never shadow these — otherwise N is baked to the first value and

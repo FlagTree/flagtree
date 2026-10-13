@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Type metadata for @smt_rvisa kernel parameters.
 
-Parameter annotations are structured objects, not MLIR text: ``tle.mem(f16)`` /
-``tle.mem(f32, out=True)`` / ``tle.index`` build ``Ty`` instances directly, and
+Parameter annotations are structured objects, not MLIR text: ``sr.mem(f16)`` /
+``sr.mem(f32, out=True)`` / ``sr.index`` build ``Ty`` instances directly, and
 codegen reads shape/element/layout/space as attributes. Types cross into C++
 structurally too: ``Ty.build(builder)`` calls the official MLIR type
 constructors exposed on the builder (``get_memref_type`` / ``get_vector_type``
@@ -15,7 +15,7 @@ that text is fed to the official MLIR parser (``builder.parse_type``) and
 re-derived structurally by ``classify_type`` — no Python-side parser.
 
 Usage:
-    def my_fn(A: tle.mem(f16), n: tle.index, C: tle.mem(f32, out=True)):
+    def my_fn(A: sr.mem(f16), n: sr.index, C: sr.mem(f32, out=True)):
         ...
 """
 from __future__ import annotations
@@ -374,7 +374,7 @@ def classify_type(b, T) -> Ty:
 
 # ---------------------------------------------------------------------------
 # Parameter annotations (document-facing sugar, feishu 3.3):
-# tle.mem(f16) / tle.mem(f32, out=True) / tle.index.
+# sr.mem(f16) / sr.mem(f32, out=True) / sr.index.
 # ---------------------------------------------------------------------------
 
 
@@ -404,8 +404,8 @@ class _TypedAnnotation:
 def mem(dtype: str, out: bool = False) -> _TypedAnnotation:
     """Pointer-parameter annotation for a raw kernel.
 
-    tle.mem(f16)           -> read-only  ``memref<*xf16, <bridge space>>``
-    tle.mem(f32, out=True) -> writable   ``memref<*xf32, <bridge space>>``
+    sr.mem(f16)           -> read-only  ``memref<*xf16, <bridge space>>``
+    sr.mem(f32, out=True) -> writable   ``memref<*xf32, <bridge space>>``
 
     The memory space is the ``BRIDGE`` sentinel, resolved at build time by
     ``builder.get_bridge_memory_space()`` (C++ getDefaultBridgeMemorySpace) so
@@ -420,5 +420,5 @@ def mem(dtype: str, out: bool = False) -> _TypedAnnotation:
     return _TypedAnnotation(ty, writable=out)
 
 
-# Scalar index parameter annotation, e.g.  K: tle.index
+# Scalar index parameter annotation, e.g.  K: sr.index
 index = _TypedAnnotation(INDEX, writable=False)

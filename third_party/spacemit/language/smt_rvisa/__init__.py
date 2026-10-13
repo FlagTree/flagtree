@@ -5,8 +5,8 @@
 Public API:
     smt_rvisa   : decorator factory to mark a function as a raw MLIR kernel
     raw_kernel  : convenience alias for smt_rvisa(name="linalg")
-    mem, index  : parameter annotations (tle.mem(f16) / tle.mem(f32, out=True)
-                  / tle.index)
+    mem, index  : parameter annotations (sr.mem(f16) / sr.mem(f32, out=True)
+                  / sr.index)
     call        : inside @triton.jit, emit tle.dsl_region (C++ DSLRegionOpPattern
                   lowers it to spine_ext.raw_region)
     proton_mark : profiling marker (rdtime + proton_record)
@@ -25,7 +25,7 @@ from .builtins import mma_cube
 from .builtins import range as range  # noqa: A001 (shadows builtin intentionally)
 
 # raw_kernel: bare decorator alias for @smt_rvisa(name="linalg") to match the
-# feishu 3.3 surface (`@tle.raw_kernel`).
+# feishu 3.3 surface (`@sr.raw_kernel`).
 raw_kernel = smt_rvisa(name="linalg")
 
 __all__ = [

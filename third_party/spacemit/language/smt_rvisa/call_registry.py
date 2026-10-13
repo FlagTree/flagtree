@@ -160,7 +160,7 @@ def call(fn, outputs=None, inputs=None, _semantic=None):
                                  f"mixed mode requires every input to be a host launch arg "
                                  f"(a tt.func parameter); got a computed/constexpr value for "
                                  f"{pname!r}. Compute derived values INSIDE the kernel from "
-                                 f"tle.program_id(axis).")
+                                 f"sr.program_id(axis).")
             pos = argid_to_pos.get(v.handle.id())
             if pos is None:
                 raise ValueError(f"smt_rvisa.call: input for {pname!r} of {raw_fn.__name__!r} "

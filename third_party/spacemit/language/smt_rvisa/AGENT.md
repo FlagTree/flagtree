@@ -6,7 +6,7 @@ are written in a restricted Python subset, lowered through the C++ builder API
 
 > All examples below are verified on K3 (riscv64). See `python/tests/raw/` for
 > 25 working operator families (231 tests). For the full language spec, see
-> `SPEC.md` (tle.raw eDSL 规格说明书).
+> `SPEC.md` (smt_rvisa raw eDSL 规格说明书).
 
 ---
 
@@ -47,11 +47,11 @@ A raw kernel is you making four choices explicitly (SPEC §2):
   `vstore` writes a vector back; `sstore` writes a single scalar. Scratch
   memory via `alloc`.
 - **Loops carry state via iter_args**: a variable reassigned inside a
-  `tle.range` loop becomes a loop-carried value (like `acc` in a reduction).
+  `sr.range` loop becomes a loop-carried value (like `acc` in a reduction).
   This is why tail loops need distinct temp names — see §3.
 
 ### raw kernel vs host kernel (the boundary)
-- **raw kernel** (`@tle.raw_kernel`): the vector-level body. Runs on the vector
+- **raw kernel** (`@sr.raw_kernel`): the vector-level body. Runs on the vector
   unit. Every parameter is type-annotated (`mem`/`index`). Emitted as a
   `tle.dsl_region` op, lowered `tle→linalg→memref→llvm` through the C++ builder
   API (no MLIR text).
@@ -65,7 +65,7 @@ A raw kernel is you making four choices explicitly (SPEC §2):
 
 **Default path** (high-level primitives: `vload`/`vstore`/`vmacc`/...):
 ```
-@tle.raw_kernel Python
+@sr.raw_kernel Python
   → AST walk (codegen.py, builder API)   # no MLIR text
   → tle.dsl_region op in TTIR
   → --triton-to-linalg-experimental      # tle → linalg/memref
@@ -75,7 +75,7 @@ A raw kernel is you making four choices explicitly (SPEC §2):
 
 **LLVM-direct path** (`llvm_*` / `call_intrinsic` only, detected automatically):
 ```
-@tle.raw_kernel Python
+@sr.raw_kernel Python
   → AST walk (llvm_direct.py)            # MLIR Python bindings emitter, no text
   → top-level llvm.func module (text)
   → mlir-translate --mlir-to-llvmir      # skip spine-opt, only translate
@@ -100,21 +100,21 @@ import triton.language as tl
 from triton.backends.spine_triton.driver import CPUDriver
 triton.runtime.driver.set_active(CPUDriver())
 
-import triton.language.extra.smt_rvisa as tle           # MUST import from here
+import triton.language.extra.smt_rvisa as sr           # MUST import from here
 from triton.language.extra.smt_rvisa import call as _sr_call
 
-f16 = tle.f16
-f32 = tle.f32
+f16 = sr.f16
+f32 = sr.f32
 
 # ── PART 1: the raw kernel (runs on the vector unit) ─────────────────────
-@tle.raw_kernel
-def my_kernel(X: tle.mem(f32), out: tle.mem(f32, out=True), N: tle.index):
-    nvl = tle.vconfig(-1, 1)                 # set VL (VLMAX for f32 = 64)
-    acc = tle.vzero(f32)
-    for i in tle.range(0, N, nvl):
-        vx = tle.vload(X, i, dtype=f32)
+@sr.raw_kernel
+def my_kernel(X: sr.mem(f32), out: sr.mem(f32, out=True), N: sr.index):
+    nvl = sr.vconfig(-1, 1)                 # set VL (VLMAX for f32 = 64)
+    acc = sr.vzero(f32)
+    for i in sr.range(0, N, nvl):
+        vx = sr.vload(X, i, dtype=f32)
         acc = acc + vx
-    tle.sstore(out, 0, tle.vreduce_sum(acc))
+    sr.sstore(out, 0, sr.vreduce_sum(acc))
 
 # ── PART 2: the @triton.jit host wrapper (dispatches the kernel) ─────────
 @triton.jit
@@ -128,9 +128,9 @@ my_host[(1,)](X, out, 256)                   # grid=(1,)
 ```
 
 **Rules:**
-- Import `tle` ONLY from `triton.language.extra.smt_rvisa` (never a standalone path).
-- Kernel params are annotated: `tle.mem(dtype)` (read), `tle.mem(dtype, out=True)`
-  (write), `tle.index` (scalar loop bound / offset).
+- Import `sr` ONLY from `triton.language.extra.smt_rvisa` (never a standalone path).
+- Kernel params are annotated: `sr.mem(dtype)` (read), `sr.mem(dtype, out=True)`
+  (write), `sr.index` (scalar loop bound / offset).
 - The host is a normal `@triton.jit` function; it calls `_sr_call(kernel, outputs=[], inputs=[...])`.
 - `grid=(G,)` launches G programs; use `tl.program_id(0)` in the host to get the
   row/group index and pass it into `inputs`.
@@ -286,15 +286,15 @@ plus a narrowed tail loop. **Use distinct temp names in the tail** or they leak
 into the outer scope and corrupt iter-arg detection.
 
 ```python
-nvl = tle.vconfig(-1, 1)
+nvl = sr.vconfig(-1, 1)
 Nfloor = (N // nvl) * nvl                     # largest multiple of VL ≤ N
-acc = tle.vzero(f32)
-for i in tle.range(0, Nfloor, nvl):           # main: full VL tiles, fast path
-    vx = tle.vload(X, i, dtype=f32)
+acc = sr.vzero(f32)
+for i in sr.range(0, Nfloor, nvl):           # main: full VL tiles, fast path
+    vx = sr.vload(X, i, dtype=f32)
     acc = acc + vx
-for i in tle.range(Nfloor, N, nvl):           # tail: runs 0 or 1 times
-    nvl_t = tle.vconfig(N - i, 1)             # narrow VL to remaining elements
-    tx = tle.vload(X, i, dtype=f32)           # DISTINCT name (tx, not vx)
+for i in sr.range(Nfloor, N, nvl):           # tail: runs 0 or 1 times
+    nvl_t = sr.vconfig(N - i, 1)             # narrow VL to remaining elements
+    tx = sr.vload(X, i, dtype=f32)           # DISTINCT name (tx, not vx)
     acc = acc + tx
 ```
 
@@ -309,46 +309,46 @@ Padded lanes in the tail read as `fill` (default 0.0). For ops where 0 is wrong
 
 ### 4.1 Reduce to scalar
 ```python
-@tle.raw_kernel
-def sum_kernel(X: tle.mem(f32), out: tle.mem(f32, out=True), N: tle.index):
-    nvl = tle.vconfig(-1, 1); Nf = (N // nvl) * nvl
-    acc = tle.vzero(f32)
-    for i in tle.range(0, Nf, nvl):
-        acc = acc + tle.vload(X, i, dtype=f32)
-    for i in tle.range(Nf, N, nvl):
-        nvl_t = tle.vconfig(N - i, 1)
-        acc = acc + tle.vload(X, i, dtype=f32)
-    tle.sstore(out, 0, tle.vreduce_sum(acc))
+@sr.raw_kernel
+def sum_kernel(X: sr.mem(f32), out: sr.mem(f32, out=True), N: sr.index):
+    nvl = sr.vconfig(-1, 1); Nf = (N // nvl) * nvl
+    acc = sr.vzero(f32)
+    for i in sr.range(0, Nf, nvl):
+        acc = acc + sr.vload(X, i, dtype=f32)
+    for i in sr.range(Nf, N, nvl):
+        nvl_t = sr.vconfig(N - i, 1)
+        acc = acc + sr.vload(X, i, dtype=f32)
+    sr.sstore(out, 0, sr.vreduce_sum(acc))
 ```
 
 ### 4.2 Mean / variance — use E[x²]-mean², NOT E[(x-mean)²]
 > **Critical**: with fill-0 tail padding, `(0-mean)²=mean²` inflates variance.
 > `E[x²]-mean²` is padding-safe because `0²=0`.
 ```python
-acc_sum = tle.vzero(f32); acc_sq = tle.vzero(f32)
-for i in tle.range(0, Nf, nvl):
-    vx = tle.vload(X, i, dtype=f32)
+acc_sum = sr.vzero(f32); acc_sq = sr.vzero(f32)
+for i in sr.range(0, Nf, nvl):
+    vx = sr.vload(X, i, dtype=f32)
     acc_sum = acc_sum + vx
     acc_sq  = acc_sq  + vx * vx
 # (tail loop analogous)
-mean = tle.vreduce_sum(acc_sum) / N
-var  = tle.vreduce_sum(acc_sq) / N - mean * mean
+mean = sr.vreduce_sum(acc_sum) / N
+var  = sr.vreduce_sum(acc_sq) / N - mean * mean
 ```
 
 ### 4.3 Normalize (reduce → scalar → broadcast back to vector)
 ```python
-inv = tle.rsqrt(tle.vreduce_sum(acc_sq))       # 1/||x||, scalar
-for i in tle.range(0, Nf, nvl):
-    nx = tle.vload(X, i, dtype=f32)
-    tle.vstore(out, i, nx * inv)               # vec * scalar → auto-broadcast
+inv = sr.rsqrt(sr.vreduce_sum(acc_sq))       # 1/||x||, scalar
+for i in sr.range(0, Nf, nvl):
+    nx = sr.vload(X, i, dtype=f32)
+    sr.vstore(out, i, nx * inv)               # vec * scalar → auto-broadcast
 ```
 
 ### 4.4 Per-row 2D op (grid parallelism)
 ```python
-@tle.raw_kernel
-def row_kernel(X: tle.mem(f32), out: tle.mem(f32, out=True),
-               M: tle.index, N: tle.index, row: tle.index):
-    nvl = tle.vconfig(-1, 1)
+@sr.raw_kernel
+def row_kernel(X: sr.mem(f32), out: sr.mem(f32, out=True),
+               M: sr.index, N: sr.index, row: sr.index):
+    nvl = sr.vconfig(-1, 1)
     base = row * N                             # row offset into flat buffer
     # ... reduce X[base : base+N] ...
 
@@ -363,26 +363,26 @@ def row_host(X, out, M, N):
 
 ### 4.5 Index-tracking reduce (argmax)
 ```python
-lane = tle.viota()                             # [0,1,..,VL-1] as f32
-best_val = tle.vload(X, 0, dtype=f32); best_idx = lane
-for i in tle.range(0, Nf, nvl):
-    vx = tle.vload(X, i, dtype=f32)
-    idx = lane + tle.cast(i, f32)              # global indices this tile
+lane = sr.viota()                             # [0,1,..,VL-1] as f32
+best_val = sr.vload(X, 0, dtype=f32); best_idx = lane
+for i in sr.range(0, Nf, nvl):
+    vx = sr.vload(X, i, dtype=f32)
+    idx = lane + sr.cast(i, f32)              # global indices this tile
     gt = vx > best_val
-    best_val = tle.select(gt, vx, best_val)
-    best_idx = tle.select(gt, idx, best_idx)
-gmax = tle.vreduce_max(best_val)
-masked = tle.select(best_val >= gmax, best_idx, tle.vzero(f32) + 1e30)
-argmax = tle.vreduce_min(masked)               # first index achieving max
-tle.sstore(out, 0, argmax)
+    best_val = sr.select(gt, vx, best_val)
+    best_idx = sr.select(gt, idx, best_idx)
+gmax = sr.vreduce_max(best_val)
+masked = sr.select(best_val >= gmax, best_idx, sr.vzero(f32) + 1e30)
+argmax = sr.vreduce_min(masked)               # first index achieving max
+sr.sstore(out, 0, argmax)
 ```
 
 ### 4.6 Activation (elementwise transcendental)
 ```python
-for i in tle.range(0, Nf, nvl):
-    vx = tle.vload(X, i, dtype=f32)
-    sig = 1.0 / (1.0 + tle.vexp(-vx))          # sigmoid
-    tle.vstore(out, i, vx * sig)               # silu = x*sigmoid(x)
+for i in sr.range(0, Nf, nvl):
+    vx = sr.vload(X, i, dtype=f32)
+    sig = 1.0 / (1.0 + sr.vexp(-vx))          # sigmoid
+    sr.vstore(out, i, vx * sig)               # silu = x*sigmoid(x)
 ```
 
 ---
@@ -490,27 +490,27 @@ The **LLVM-direct path** is a second compilation route for kernels that use *onl
 ### Example: MV with vle/vse
 
 ```python
-import triton.language.extra.smt_rvisa as tle
+import triton.language.extra.smt_rvisa as sr
 from triton.language.extra.smt_rvisa import call as _sr_call
 
-@tle.raw_kernel
-def llvm_direct_mv(A: tle.mem("f32"), B: tle.mem("f32"),
-                   C: tle.mem("f32", out=True), K: tle.index):
-    vl = tle.llvm_const(8, "i64")
-    acc = tle.llvm_const("0.000000e+00", "vector<[8]xf32>")
-    zero = tle.llvm_const(0, "i64")
+@sr.raw_kernel
+def llvm_direct_mv(A: sr.mem("f32"), B: sr.mem("f32"),
+                   C: sr.mem("f32", out=True), K: sr.index):
+    vl = sr.llvm_const(8, "i64")
+    acc = sr.llvm_const("0.000000e+00", "vector<[8]xf32>")
+    zero = sr.llvm_const(0, "i64")
     # Loop bound comes from the scalar K param (llvm_size unavailable in LLVM-direct ABI)
-    for k in tle.range(zero, K, vl):
-        pa = tle.llvm_poison("vector<[8]xf32>")
-        pb = tle.llvm_poison("vector<[8]xf32>")
-        ga = tle.llvm_gep(tle.llvm_base_ptr(A), k, "f32")
-        gb = tle.llvm_gep(tle.llvm_base_ptr(B), k, "f32")
-        va = tle.call_intrinsic("llvm.riscv.vle", [pa, ga, vl], result_type="vector<[8]xf32>")
-        vb = tle.call_intrinsic("llvm.riscv.vle", [pb, gb, vl], result_type="vector<[8]xf32>")
-        prod = tle.call_intrinsic("llvm.fmul", [va, vb], result_type="vector<[8]xf32>")
-        acc = tle.call_intrinsic("llvm.fadd", [acc, prod], result_type="vector<[8]xf32>")
-    gc = tle.llvm_base_ptr(C)
-    tle.call_intrinsic("llvm.riscv.vse", [acc, gc, vl], result_type="()")
+    for k in sr.range(zero, K, vl):
+        pa = sr.llvm_poison("vector<[8]xf32>")
+        pb = sr.llvm_poison("vector<[8]xf32>")
+        ga = sr.llvm_gep(sr.llvm_base_ptr(A), k, "f32")
+        gb = sr.llvm_gep(sr.llvm_base_ptr(B), k, "f32")
+        va = sr.call_intrinsic("llvm.riscv.vle", [pa, ga, vl], result_type="vector<[8]xf32>")
+        vb = sr.call_intrinsic("llvm.riscv.vle", [pb, gb, vl], result_type="vector<[8]xf32>")
+        prod = sr.call_intrinsic("llvm.fmul", [va, vb], result_type="vector<[8]xf32>")
+        acc = sr.call_intrinsic("llvm.fadd", [acc, prod], result_type="vector<[8]xf32>")
+    gc = sr.llvm_base_ptr(C)
+    sr.call_intrinsic("llvm.riscv.vse", [acc, gc, vl], result_type="()")
 
 @triton.jit
 def llvm_direct_mv_host(A, B, C, K):
@@ -565,23 +565,23 @@ the emitter lowers `*` / `+` / `-` to `llvm.mul` / `llvm.add` / `llvm.sub`, so n
 `call_intrinsic` boilerplate is needed:
 
 ```python
-@tle.raw_kernel
-def gemv(A: tle.mem("f32"), B: tle.mem("f32"),
-         C: tle.mem("f32", out=True), M: tle.index, K: tle.index):
-    vl = tle.llvm_const(8, "i64"); eight = tle.llvm_const(8, "i64")
-    zero = tle.llvm_const(0, "i64")
-    row = tle.program_id(0)                 # ← per-program identity, the ONLY thing that varies
-    acc = tle.llvm_const("0.000000e+00", "vector<[8]xf32>")
-    for k in tle.range(zero, K, vl):
-        ga = tle.llvm_gep(tle.llvm_base_ptr(A), row * K + k, "f32")   # natural arithmetic
-        gb = tle.llvm_gep(tle.llvm_base_ptr(B), k, "f32")
-        pa = tle.llvm_poison("vector<[8]xf32>"); pb = tle.llvm_poison("vector<[8]xf32>")
-        va = tle.call_intrinsic("llvm.riscv.vle", [pa, ga, vl], result_type="vector<[8]xf32>")
-        vb = tle.call_intrinsic("llvm.riscv.vle", [pb, gb, vl], result_type="vector<[8]xf32>")
-        prod = tle.call_intrinsic("llvm.fmul", [va, vb], result_type="vector<[8]xf32>")
-        acc = tle.call_intrinsic("llvm.fadd", [acc, prod], result_type="vector<[8]xf32>")
-    gc = tle.llvm_gep(tle.llvm_base_ptr(C), row * eight, "f32")       # natural arithmetic
-    tle.call_intrinsic("llvm.riscv.vse", [acc, gc, vl], result_type="()")
+@sr.raw_kernel
+def gemv(A: sr.mem("f32"), B: sr.mem("f32"),
+         C: sr.mem("f32", out=True), M: sr.index, K: sr.index):
+    vl = sr.llvm_const(8, "i64"); eight = sr.llvm_const(8, "i64")
+    zero = sr.llvm_const(0, "i64")
+    row = sr.program_id(0)                 # ← per-program identity, the ONLY thing that varies
+    acc = sr.llvm_const("0.000000e+00", "vector<[8]xf32>")
+    for k in sr.range(zero, K, vl):
+        ga = sr.llvm_gep(sr.llvm_base_ptr(A), row * K + k, "f32")   # natural arithmetic
+        gb = sr.llvm_gep(sr.llvm_base_ptr(B), k, "f32")
+        pa = sr.llvm_poison("vector<[8]xf32>"); pb = sr.llvm_poison("vector<[8]xf32>")
+        va = sr.call_intrinsic("llvm.riscv.vle", [pa, ga, vl], result_type="vector<[8]xf32>")
+        vb = sr.call_intrinsic("llvm.riscv.vle", [pb, gb, vl], result_type="vector<[8]xf32>")
+        prod = sr.call_intrinsic("llvm.fmul", [va, vb], result_type="vector<[8]xf32>")
+        acc = sr.call_intrinsic("llvm.fadd", [acc, prod], result_type="vector<[8]xf32>")
+    gc = sr.llvm_gep(sr.llvm_base_ptr(C), row * eight, "f32")       # natural arithmetic
+    sr.call_intrinsic("llvm.riscv.vse", [acc, gc, vl], result_type="()")
 
 @triton.jit
 def gemv_host(A, B, C, M, K):
