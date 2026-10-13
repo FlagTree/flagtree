@@ -618,6 +618,11 @@ class CMakeBuild(build_ext):
 
         if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
             cmake_args += self.get_proton_cmake_args()
+        # FlagPrism: the NVIDIA profiler requires CUPTI, so reuse Proton's
+        # existing dependency discovery only for the NVIDIA backend.
+        elif (FLAGPRISM_SETUP.enabled and os.getenv("FLAGPRISM_BACKEND", "").strip().lower() == "nvidia"):
+            cmake_args += self.get_proton_cmake_args()
+        # end FlagPrism
         cmake_args += FLAGPRISM_SETUP.cmake_args(self.build_lib)  # FlagPrism
         cmake_args += FLAGPRISM_SETUP.dependency_cmake_args(self)  # FlagPrism
 
