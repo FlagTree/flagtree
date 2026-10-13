@@ -227,7 +227,7 @@ def test_flagprism_is_enabled_by_default_for_supported_backends(flagprism_setup_
         assert policy.console_scripts() == []
 
 
-# FlagPrism: NVIDIA uses the generic FlagTree build and is selected separately.
+# FlagPrism: NVIDIA uses the default FlagTree build with FLAGTREE_BACKEND unset.
 def test_nvidia_can_explicitly_enable_flagprism_without_flagtree_backend(flagprism_setup_factory, monkeypatch):
     create, downloads = flagprism_setup_factory
     monkeypatch.setenv("TRITON_BUILD_FLAGPRISM", "ON")
@@ -306,7 +306,8 @@ def test_non_ascend_explicit_flagprism_is_rejected_before_side_effects(flagprism
     # FlagPrism: retain the former diagnostic assertion for reference.
     # with pytest.raises(RuntimeError, match="ascend or iluvatar"):
     #     create("enflame")
-    with pytest.raises(RuntimeError, match="unset, ascend, iluvatar, or mthreads"):
+    # FlagPrism: include mthreads in the supported-backend diagnostic.
+    with pytest.raises(RuntimeError, match="ascend, iluvatar, or mthreads"):
         create("enflame")
 
     assert not downloads

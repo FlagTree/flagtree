@@ -124,15 +124,13 @@ macro(flagtree_configure_flagprism)
          ${_flagprism_default})
 
   if(TRITON_BUILD_FLAGPRISM)
-    # FlagPrism: allow an explicit generic build for NVIDIA while retaining
-    # the existing backend integrations.
-    if(NOT (NOT FLAGTREE_BACKEND OR
-            FLAGTREE_BACKEND STREQUAL "ascend" OR
-            FLAGTREE_BACKEND STREQUAL "iluvatar" OR
-            FLAGTREE_BACKEND STREQUAL "mthreads"))
+    # FlagPrism: accept mthreads as a supported integration backend.
+    # FlagPrism: FLAGTREE_BACKEND is unset for the default NVIDIA build.
+    if(FLAGTREE_BACKEND AND
+       NOT FLAGTREE_BACKEND MATCHES "^(ascend|iluvatar|mthreads)$")
       message(FATAL_ERROR
         "TRITON_BUILD_FLAGPRISM is only supported when "
-        "FLAGTREE_BACKEND is unset, ascend, iluvatar, or mthreads.")
+        "FLAGTREE_BACKEND is ascend, iluvatar, or mthreads.")
     endif()
     if(TRITON_BUILD_PROTON)
       message(FATAL_ERROR
