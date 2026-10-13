@@ -1,3 +1,4 @@
+# Copyright 2026- FlagOS Contributors
 # Copyright 2026- Xcoresigma Technology Co., Ltd
 
 from dataclasses import dataclass
@@ -82,7 +83,7 @@ class PipeScheduler:
     It bundles the Ascend-specific sync directions (which core sets/waits which
     event, through which hardware pipelines) and an optional explicit event id
     base. Build it with tle.dsa.ascend.pipe_scheduler and hand it to
-    tle.dsa.ascend.run_pipeline(scheduler=...); both sync directions
+    tle.dsa.ascend.run_pipe(scheduler=...); both sync directions
     default to the canonical cube->vector CV-mix handshake and event ids are
     auto-allocated per pipe when event_base is None.
     """
@@ -308,7 +309,7 @@ class pipe_value:
         self.free_sync = scheduler.free_sync
         self.fields = fields
         # Deferred init state: the public tle.pipe factory captures its creation
-        # point and emits the pre-arm on first use, after run_pipeline has
+        # point and emits the pre-arm on first use, after run_pipe has
         # had a chance to inject a scheduler.
         self._inited = False
         self._create_ip = None
@@ -356,7 +357,7 @@ class pipe_value:
     def ensure_initialized(self, _semantic=None, _generator=None):
         """Emit the free-direction pre-arm once, at the pipe's creation point.
 
-        tle.pipe defers init so tle.dsa.ascend.run_pipeline can inject a
+        tle.pipe defers init so tle.dsa.ascend.run_pipe can inject a
         scheduler first; the insertion point saved at creation keeps the pre-arm
         ahead of every loop using the pipe.
         """
@@ -416,7 +417,7 @@ def _deferred_pipe(*, capacity, scope="cta", name=None, readers=None, one_shot=F
                    _generator=None, **fields):
     """Public tle.pipe path: capture the creation point, defer init to first use.
 
-    Deferring lets tle.dsa.ascend.run_pipeline inject a scheduler before
+    Deferring lets tle.dsa.ascend.run_pipe inject a scheduler before
     the pre-arm is emitted; ensure_initialized then restores the saved creation
     point so the pre-arm still lands outside every loop using the pipe.
     """
@@ -503,7 +504,7 @@ def _collect_pipes(entries):
 
 
 @builtin
-def run_pipeline(functions_and_args, scheduler=None, _semantic=None, _generator=None):
+def run_pipe(functions_and_args, scheduler=None, _semantic=None, _generator=None):
     """Expand CV-mix role functions in place and bind their pipes' scheduling.
 
     functions_and_args is a [(role_fn, (args, ...)), ...] list; each role is
@@ -514,7 +515,7 @@ def run_pipeline(functions_and_args, scheduler=None, _semantic=None, _generator=
     Already-initialized pipes reject incompatible configs.
     """
     if _generator is None:
-        raise ValueError("run_pipeline requires code generator context")
+        raise ValueError("run_pipe requires code generator context")
 
     scheduler = _normalize_scheduler(scheduler)
     entries = []
@@ -524,12 +525,12 @@ def run_pipeline(functions_and_args, scheduler=None, _semantic=None, _generator=
         if hasattr(item, "values"):
             item = item.values
         if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise TypeError("run_pipeline entries must be (fn, args)")
+            raise TypeError("run_pipe entries must be (fn, args)")
         fn, args = _unwrap_ct_value(item[0]), _unwrap_ct_value(item[1])
         if hasattr(args, "values"):
             args = args.values
         if not isinstance(args, (list, tuple)):
-            raise TypeError("run_pipeline args must be a tuple")
+            raise TypeError("run_pipe args must be a tuple")
         args = [_unwrap_ct_value(arg) for arg in args]
         entries.append((fn, args))
 
@@ -543,7 +544,7 @@ def run_pipeline(functions_and_args, scheduler=None, _semantic=None, _generator=
         if pipe._inited:
             if pipe_scheduler_cfg is not None and not pipe._scheduler_compatible(pipe_scheduler_cfg):
                 raise ValueError(f"pipe {pipe.name!r} is already initialized; pass the scheduler on the first "
-                                 "run_pipeline call")
+                                 "run_pipe call")
             continue
         if pipe_scheduler_cfg is not None:
             pipe._apply_scheduler(pipe_scheduler_cfg)

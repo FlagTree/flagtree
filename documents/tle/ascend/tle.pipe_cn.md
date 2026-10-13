@@ -13,7 +13,7 @@ def pipe(*, capacity, scope="cta", name=None, readers=None, one_shot=False, **fi
 
 def pipe_scheduler(ready_sync=None, free_sync=None, event_base=None)  # Ascend：调度器构造入口
 
-def run_pipeline(functions_and_args, scheduler=None)  # Ascend：role 编排入口（tle.dsa.ascend.run_pipeline）
+def run_pipe(functions_and_args, scheduler=None)  # Ascend：role 编排入口（tle.dsa.ascend.run_pipe）
 
 class pipe_value:
     def writer() -> pipe_writer
@@ -38,10 +38,10 @@ class pipe_reader:
 |--------|------|------|
 | capacity | int | 流水深度（环形 stage 数），编译期整数，取值范围 [1, 16] |
 | scope | str | 仅支持 "cta" |
-| name | str / None | pipe 名称，仅用于标识；`run_pipeline(scheduler=...)` 的按名配置依赖它 |
+| name | str / None | pipe 名称，仅用于标识；`run_pipe(scheduler=...)` 的按名配置依赖它 |
 | readers | tuple / list | Ascend 暂不支持，传入即报错（原因见第 5 节） |
 | one_shot | bool | 单次 ready/full 边模式：commit/wait 可用，acquire/release 拒绝；Ascend 上要求 capacity=1 |
-| scheduler | PipeScheduler | 仅 `tle.dsa.ascend.run_pipeline` 接受；由 tle.dsa.ascend.pipe_scheduler 构造，默认 ready 为 cube→vector（FIX→MTE2）、free 为 vector→cube（MTE2→FIX）的标准 CV-mix 握手，event id 自动分配 |
+| scheduler | PipeScheduler | 仅 `tle.dsa.ascend.run_pipe` 接受；由 tle.dsa.ascend.pipe_scheduler 构造，默认 ready 为 cube→vector（FIX→MTE2）、free 为 vector→cube（MTE2→FIX）的标准 CV-mix 握手，event id 自动分配 |
 | fields | Workspace | 一个或多个 tle.dsa.workspace payload（关键字传入，如 c=c_workspace），每个 field 的 capacity 必须等于 pipe 的 capacity |
 | iteration | int / tensor | 端点方法入参，流水迭代号：stage = iteration % capacity，event id = event_base + stage |
 
@@ -72,7 +72,7 @@ class pipe_reader:
 
 | 差异点 | 原因 |
 |--------|------|
-| 调度配置经 `tle.dsa.ascend.run_pipeline(scheduler=...)` 这一 Ascend 专属入口提供，公共 `tle.pipe` 签名与 GPU 完全一致 | 硬件要求显式指定同步方向（哪端 set/wait、走哪条流水）；GPU mbarrier 相位机制自动且对称，无需配置入口 |
+| 调度配置经 `tle.dsa.ascend.run_pipe(scheduler=...)` 这一 Ascend 专属入口提供，公共 `tle.pipe` 签名与 GPU 完全一致 | 硬件要求显式指定同步方向（哪端 set/wait、走哪条流水）；GPU mbarrier 相位机制自动且对称，无需配置入口 |
 | readers=（SPMC 多读者）不支持 | 跨核事件为定向单播，一条边固定一个 set 端和一个 wait 端，没有 mbarrier 的到达计数聚合；且 event id 仅 16 个 |
 | 无 writer.close，is_closed 恒为编译期 False | 事件只有 0/N 计数语义，没有可被 wait 读出的终止态；EOS 由两侧已知的迭代次数表达 |
 | payload 为 tle.dsa.workspace（GM ring buffer），非 SMEM buffered_tensor | UB 核内私有，Cube（L0C 输出）与 Vector（UB 消费）没有双侧共享的 SMEM，GM 是唯一数据汇合点 |
@@ -145,12 +145,12 @@ def cv_mix_pipe_dsa_kernel(a_ptr, b_ptr, d_ptr, workspace_ptr, ...,
     c_writer = c_pipe.writer()
     c_reader = c_pipe.reader()
 
-    tle.dsa.ascend.run_pipeline([
+    tle.dsa.ascend.run_pipe([
         (_cv_mix_cube_producer, (c_writer, a_ptr, b_ptr, ...)),
         (_cv_mix_vector_consumer, (c_reader, d_ptr, stride_dm, ...)),
     ])
     # 需要自定义方向/event id 时，把调度器传给编排入口：
-    #   tle.dsa.ascend.run_pipeline([...], scheduler=(
+    #   tle.dsa.ascend.run_pipe([...], scheduler=(
     #       ("cv_mix_c_pipe", tle.dsa.ascend.pipe_scheduler(
     #           ready_sync=..., free_sync=..., event_base=0)),
     #   ))

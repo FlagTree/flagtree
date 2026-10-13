@@ -1,3 +1,4 @@
+# Copyright 2026- FlagOS Contributors
 # Copyright 2026- Xcoresigma Technology Co., Ltd
 
 import pytest
@@ -42,7 +43,7 @@ def test_one_shot_semantics():
 
 
 # The public tle.pipe entry dispatches by payload kind and keeps the GPU
-# frontend's parameter signature; run_pipeline stays an Ascend-only entry point.
+# frontend's parameter signature; run_pipe stays an Ascend-only entry point.
 def test_public_pipe_entry_matches_gpu_frontend():
     import inspect
     from triton.experimental.tle.language import pipe as public_pipe
@@ -63,9 +64,9 @@ def test_public_pipe_entry_matches_gpu_frontend():
     assert "scheduler" not in parameters
     assert "readers" in parameters and "one_shot" in parameters
 
-    # run_pipeline stays an Ascend-specific entry point.
-    assert callable(tle.dsa.ascend.run_pipeline)
-    assert not hasattr(tle.dsa, "run_pipeline")
+    # run_pipe stays an Ascend-specific entry point.
+    assert callable(tle.dsa.ascend.run_pipe)
+    assert not hasattr(tle.dsa, "run_pipe")
 
 
 # Without a semantic context (host-side construction) the pre-arm emission is
