@@ -4646,7 +4646,8 @@ bool LayoutRematerialization::rematerializeWritebackLayout(
       if (isa<BlockArgument>(v))
         return false;
       Operation *def = v.getDefiningOp();
-      if (!def || def->getNumRegions() != 0 || isLayoutAnchor(def) ||
+      if (!def || !isMemoryEffectFree(def) || def->getNumRegions() != 0 ||
+          isLayoutAnchor(def) ||
           isa<LoadOp, LocalLoadOp, ReduceOp, ConvertLayoutOp>(def))
         return false;
     }
