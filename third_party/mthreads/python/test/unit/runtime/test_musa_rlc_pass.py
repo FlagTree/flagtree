@@ -1,14 +1,50 @@
-"""Bound Phase 3 address and mask cloning without disabling small slices."""
+"""MThreads RLC pass regressions, collected by the backend's pytest CI."""
+
+from pathlib import Path
+import re
 
 import pytest
 from triton._C import libtriton
 from triton._C.libtriton import ir, passes
+from triton._filecheck import run_filecheck
 from triton.backends.compiler import GPUTarget
 from triton.compiler.compiler import make_backend
 
 pytestmark = pytest.mark.skipif(
     not hasattr(libtriton, "mthreads"), reason="MThreads backend is required"
 )
+
+
+def run_rlc(source, tmp_path, phase_mask):
+    path = tmp_path / "input.ttgir"
+    path.write_text(source)
+    context = ir.context()
+    ir.load_dialects(context)
+    make_backend(GPUTarget("musa", 31, 32)).load_dialects(context)
+    module = ir.parse_mlir_module(str(path), context)
+    pm = ir.pass_manager(context)
+    passes.ttgpuir.add_remove_layout_conversions(pm, phase_mask != 0, phase_mask)
+    pm.run(module, "musa_rlc")
+    return module.str_nodebug()
+
+
+@pytest.mark.parametrize("phase_mask", [0, 5, 8, 15], ids=["off", "phase2", "phase3", "all"])
+def test_rlc_regressions(phase_mask, tmp_path, monkeypatch, capfd):
+    path = Path(__file__).resolve().parents[4] / "test/TritonGPU/remove-layout-conversions.mlir"
+    source = path.read_text()
+    monkeypatch.setenv("FLAGTREE_RLC_TRACE_REJECTS", str(int(phase_mask == 5)))
+    result = "\n".join(run_rlc(part, tmp_path, phase_mask) for part in source.split("// -----"))
+    trace = capfd.readouterr().err
+    prefixes = ["CONTRACT"]
+    # Phase 2 checks its intermediate layouts before later rematerialization.
+    if phase_mask == 5:
+        prefixes.append("P2")
+    if phase_mask & 8:
+        prefixes.append("P3")
+    checks = re.sub(r"// (?:" + "|".join(prefixes) + r")(?=[-:])", "// CHECK", source)
+    run_filecheck("musa_rlc", result, checks)
+    if phase_mask == 5:
+        run_filecheck("musa_rlc_trace", trace, source.replace("// TRACE", "// CHECK"))
 
 
 @pytest.mark.parametrize("mma", ["wmma", "sqmma"])
@@ -39,15 +75,6 @@ module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32
   }}
 }}
 """
-    path = tmp_path / "writeback.ttgir"
-    path.write_text(source)
-    context = ir.context()
-    ir.load_dialects(context)
-    make_backend(GPUTarget("musa", 31, 32)).load_dialects(context)
-    module = ir.parse_mlir_module(str(path), context)
-    pm = ir.pass_manager(context)
-    passes.ttgpuir.add_remove_layout_conversions(pm, True, phase_mask)
-    pm.run(module, "rlc_writeback_slice")
-    result = module.str_nodebug()
+    result = run_rlc(source, tmp_path, phase_mask)
     assert result.count("tt.atomic_rmw") == 1
     assert result.count("ttg.convert_layout") == (1 if length > 256 else 0)
