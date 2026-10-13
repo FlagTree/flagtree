@@ -37,7 +37,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ppu36x:
+  xpu36x:
     if: ${{ github.event_name == 'push' }}
     uses: flagos-ai/FlagTree/.github/workflows/template-gems-baseline.yml@main
     with:
