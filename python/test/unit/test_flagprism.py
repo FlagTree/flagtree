@@ -168,6 +168,16 @@ def test_build_helper_uses_unified_switch(build_helper, monkeypatch, tmp_path, v
     assert config.enabled is enabled
 
 
+# FlagPrism: NVIDIA is selected independently of FLAGTREE_BACKEND.
+def test_build_helper_forwards_nvidia_backend(build_helper, monkeypatch, tmp_path):
+    monkeypatch.setenv("TRITON_BUILD_FLAGPRISM", "ON")
+    monkeypatch.setenv("FLAGPRISM_BACKEND", "nvidia")
+
+    config = build_helper.FlagPrismBuildConfig.from_environment(tmp_path)
+
+    assert "-DFLAGPRISM_BACKEND=nvidia" in config.cmake_args("build")
+
+
 # FlagPrism: keep the host-resolved source authoritative across package layers.
 def test_build_helper_prefers_resolved_source_root(build_helper, monkeypatch, tmp_path):
     project_root = tmp_path / "FlagTree"
@@ -186,9 +196,6 @@ def test_build_helper_prefers_resolved_source_root(build_helper, monkeypatch, tm
         (None, False),
         ("ascend", True),
         ("iluvatar", True),
-        # FlagPrism: NVIDIA follows the CUDA/CUPTI path and is enabled by
-        # default when its backend is selected.
-        ("nvidia", True),
         ("enflame", False),
         ("tsingmicro", False),
         ("cambricon", False),
@@ -218,6 +225,21 @@ def test_flagprism_is_enabled_by_default_for_supported_backends(flagprism_setup_
         assert policy.packages() == ()
         assert policy.package_dirs() == ()
         assert policy.console_scripts() == []
+
+
+# FlagPrism: NVIDIA uses the generic FlagTree build and is selected separately.
+def test_nvidia_can_explicitly_enable_flagprism_without_flagtree_backend(flagprism_setup_factory, monkeypatch):
+    create, downloads = flagprism_setup_factory
+    monkeypatch.setenv("TRITON_BUILD_FLAGPRISM", "ON")
+    monkeypatch.setenv("FLAGPRISM_BACKEND", "nvidia")
+    monkeypatch.delenv("TRITON_BUILD_PROTON", raising=False)
+
+    policy = create(None)
+
+    assert policy.enabled
+    assert not downloads
+    assert policy.cmake_args("build") == ["-DTRITON_BUILD_FLAGPRISM=ON"]
+    assert setup_helper.os.environ["TRITON_BUILD_PROTON"] == "OFF"
 
 
 def test_ascend_can_explicitly_disable_flagprism_without_changing_proton(flagprism_setup_factory, monkeypatch):
@@ -284,7 +306,7 @@ def test_non_ascend_explicit_flagprism_is_rejected_before_side_effects(flagprism
     # FlagPrism: retain the former diagnostic assertion for reference.
     # with pytest.raises(RuntimeError, match="ascend or iluvatar"):
     #     create("enflame")
-    with pytest.raises(RuntimeError, match="unset, ascend, iluvatar, mthreads, or nvidia"):
+    with pytest.raises(RuntimeError, match="unset, ascend, iluvatar, or mthreads"):
         create("enflame")
 
     assert not downloads
