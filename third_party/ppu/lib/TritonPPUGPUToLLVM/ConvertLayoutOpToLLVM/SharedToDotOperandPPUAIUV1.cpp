@@ -90,8 +90,9 @@ loadX4(ConversionPatternRewriter &rewriter, Location loc, Value smemBase,
   auto ldmatrix = builder.create(ldstring)->o("shared.b16");
 
   // compiler will lowering correctly.
-  if(elemBits == 32 && needTrans)
-    ldmatrix = builder.create("ppu.ldmatrix.swzl.sync.aligned.m8n16.x1.trans")->o("shared.b32");
+  if (elemBits == 32 && needTrans)
+    ldmatrix = builder.create("ppu.ldmatrix.swzl.sync.aligned.m8n16.x1.trans")
+                   ->o("shared.b32");
 
   ldmatrix(resArgs, sbase, Args);
 
