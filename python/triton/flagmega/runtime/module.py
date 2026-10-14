@@ -84,6 +84,16 @@ def _resource_contract(codegen, target, *, requires_grid_wide_sync: bool = False
             # a future kernel change) will still raise.
             spill_tolerance_bytes=128,
         )
+    if target == "nvidia-sm89":
+        # Ada (sm_89) exposes a 99 KB opt-in shared-memory limit
+        # (Sm89Capability.max_shared_memory_bytes = 101376), not Hopper's
+        # 227,328-byte ResourceContract default. Use the matching capacity so
+        # the resource check rejects a kernel whose smem would overflow Ada.
+        return ResourceContract(
+            compute_num_warps=int(codegen["num_warps"]), resident_blocks_per_sm=1,
+            requires_grid_wide_sync=requires_grid_wide_sync,
+            shared_memory_capacity_bytes=101376,
+        )
     return ResourceContract(
         compute_num_warps=int(codegen["num_warps"]), resident_blocks_per_sm=1,
         requires_grid_wide_sync=requires_grid_wide_sync,
