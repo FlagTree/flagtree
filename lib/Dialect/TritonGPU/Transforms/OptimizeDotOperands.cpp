@@ -114,13 +114,18 @@ static Value stripMemDescViews(Value value) {
 
 static bool isBackedByLocalAlloc(Value value, llvm::DenseSet<Value> &active);
 
-// True for a memdesc defined directly by a local_alloc with a non-trivial
-// swizzled shared encoding (max phase > 1, i.e. chosen explicitly rather than
-// the plain default) that is written by local_store: that layout was picked
-// for the stores, so it is kept.
+// PPU only: true for a memdesc defined directly by a local_alloc with a
+// non-trivial swizzled shared encoding (max phase > 1, i.e. chosen explicitly
+// rather than the plain default) that is written by local_store: that layout
+// was picked for the stores, so it is kept.
 static bool keepsStoredSwizzledLayout(Value memDesc) {
   auto alloc = memDesc.getDefiningOp<LocalAllocOp>();
   if (!alloc || alloc.getSrc())
+    return false;
+  auto module = alloc->getParentOfType<ModuleOp>();
+  auto target =
+      module ? module->getAttrOfType<StringAttr>(AttrTargetName) : nullptr;
+  if (!target || !target.strref().starts_with("ppu:"))
     return false;
   auto memDescTy = dyn_cast<MemDescType>(memDesc.getType());
   if (!memDescTy)
