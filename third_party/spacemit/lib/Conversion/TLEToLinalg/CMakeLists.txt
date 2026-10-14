@@ -14,5 +14,5 @@ add_triton_library(TLEToLinalg
   MLIRTensorDialect
   MLIRTransforms
   MLIRSupport
-  TLEIR
+  TleIR
 )

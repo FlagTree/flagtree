@@ -149,11 +149,10 @@
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
+#include "tle/dialect/include/IR/Dialect.h"
 #include "triton-shared/Analysis/OpFoldResultUtils.h"
 #include "triton-shared/AnalysisStructured/PtrAnalysis.h"
 #include "triton-shared/Conversion/TritonToUnstructured/TritonToUnstructured.h"
-#include "triton-shared/Dialect/TLE/IR/TLEDialect.h"
-#include "triton-shared/Dialect/TLE/IR/TLEOps.h"
 #include "triton-shared/Dialect/TritonStructured/IR/TritonStructuredDialect.h"
 #include "triton-shared/Utils/Utils.h"
 
@@ -576,7 +575,7 @@ public:
                   return failure();
                 })
                 .Case<tle::DSLRegionOp>([](tle::DSLRegionOp op) {
-                  // xtle.dsl_region carries its !tt.ptr operands untouched: the
+                  // tle.dsl_region carries its !tt.ptr operands untouched: the
                   // downstream ptr->memref pipeline wraps them in a cast chain
                   // and TLEToLinalg's DSLRegionOpPattern traces them back to
                   // the original memref. This pass must not rewrite them into

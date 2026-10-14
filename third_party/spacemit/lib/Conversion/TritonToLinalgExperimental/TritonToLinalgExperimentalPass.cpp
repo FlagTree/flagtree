@@ -128,6 +128,30 @@ public:
 
     PassManager pm(&getContext(), moduleOp.getOperationName());
 
+    // The generic third_party/tle DSLRegionOp (tle.dsl_region, emitted by
+    // create_tle_dsl_region_direct) violates that op's verifier by design:
+    // its operands are the kernel's !tt.ptr/i32 arguments while its region
+    // block-args carry the raw fn's memref<*>/index parameters, and the op
+    // survives several sub-passes in that shape until TLEToLinalg (below)
+    // consumes it. The --mlir-very-unsafe-disable-verifier-on-parsing flag
+    // covers load-time verification in compiler.py; this internal
+    // PassManager, which CLI flags don't reach, must skip per-pass
+    // verification for the same window. The top-level pass manager keeps
+    // verifying: TLEToLinalg rewrites dsl_region into valid
+    // spine_ext.raw_region before this composite pass returns, so a real
+    // breakage still fails loudly. Match by name string, like the
+    // gpu.barrier walk above.
+    bool hasDslRegion = false;
+    moduleOp->walk([&](Operation *op) {
+      if (op->getName().getStringRef() == "tle.dsl_region") {
+        hasDslRegion = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (hasDslRegion)
+      pm.enableVerifier(false);
+
     // Lower tt.scan before Triton-to-structured / PtrAnalysis.
     //
     // PtrAnalysis only understands a limited set of value-producing ops for

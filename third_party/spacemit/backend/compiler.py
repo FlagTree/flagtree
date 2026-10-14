@@ -71,18 +71,36 @@ def _ttir_to_linalgdir(mod, metadata):
         Path(src_path).write_text(ttir_code)
         dump_ir_if_needed([src_path], metadata["name"])
         spine_triton_opt_path = get_spine_triton_opt_path()
-        subprocess.check_call([
+        cmd = [
             spine_triton_opt_path,
             # spine_ext.raw_region (emitted by DSLRegionOpPattern when lowering
-            # xtle.dsl_region) is an unregistered op here — its dialect lives in
+            # tle.dsl_region) is an unregistered op here — its dialect lives in
             # spine-mlir's spine-opt downstream. Allow it so the conversion can
             # create it in generic form.
             "--allow-unregistered-dialect",
+            # The generic third_party/tle DSLRegionOp's verifier rejects our
+            # emit shape on purpose (operands are the kernel's !tt.ptr/i32
+            # arguments, region block-args are the raw fn's memref<*>/index
+            # parameters; TLEToLinalg consumes the op before it leaves the
+            # composite pass). Skip the load-time full verification; the
+            # composite pass disables per-pass verification on its internal
+            # PassManager when tle.dsl_region is present (see
+            # TritonToLinalgExperimentalPass.cpp).
+            "--mlir-very-unsafe-disable-verifier-on-parsing",
             src_path,
             "--triton-to-linalg-experimental",
             "-o",
             dst_path,
-        ])
+        ]
+        if "tle.dsl_region" in ttir_code:
+            # On the CLI the composite pass expands into a pipeline, so
+            # mlir-opt runs its own verifier after EVERY sub-pass — while
+            # dsl_region is still alive (TLEToLinalg sits late in the
+            # sequence) it gets rejected mid-pipeline. The internal
+            # enableVerifier(false) above cannot reach this driver-level
+            # check, so disable it here for raw kernels only.
+            cmd.insert(1, "--verify-each=false")
+        subprocess.check_call(cmd)
         dump_ir_if_needed([dst_path], metadata["name"])
         return _convert_dense_i1_blobs_for_spine_opt(Path(dst_path).read_text())
 
@@ -405,6 +423,25 @@ class CPUBackend(BaseBackend):
     def make_ttir(mod, metadata, opt):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        # smt_rvisa raw kernels embed tle.dsl_region (generic third_party/tle
+        # op) whose operand/region-arg shape violates that op's verifier by
+        # design — operands are the kernel's !tt.ptr/i32 arguments, region
+        # block-args carry the raw fn's memref<*>/index parameters — until
+        # spine-triton-opt's TLEToLinalg pass consumes it. Turn off per-pass
+        # verification for such kernels only, mirroring the two downstream
+        # gates (the --mlir-very-unsafe-disable-verifier-on-parsing flag on
+        # spine-triton-opt and the conditional enableVerifier(false) on its
+        # internal PassManager in TritonToLinalgExperimentalPass.cpp).
+        has_dsl_region = False
+
+        def _find_dsl_region(op):
+            nonlocal has_dsl_region
+            if op.get_name() == "tle.dsl_region":
+                has_dsl_region = True
+
+        mod.walk(_find_dsl_region)
+        if has_dsl_region:
+            pm.enable_verifier(False)
         passes.common.add_inliner(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
@@ -461,7 +498,27 @@ class CPUBackend(BaseBackend):
             pass
 
         tt_pattern = r"tt\.func\s+public\s+@(\w+)\s*\("
-        kernel_name = extract_kernel_name(tt_pattern, str(mod))
+        ttir_asm = str(mod)
+        if re.findall(tt_pattern, ttir_asm):
+            kernel_name = extract_kernel_name(tt_pattern, ttir_asm)
+        elif has_dsl_region:
+            # The same tle.dsl_region operand/region-arg mismatch noted above
+            # also makes the module printer fall back to whole-module generic
+            # form ("builtin.module"() ({ "tt.func"() <{sym_name = ...}>),
+            # where the custom-form pattern finds nothing. Extract the entry
+            # function's name structurally instead. Only reachable for raw
+            # kernels, which carry exactly one public tt.func.
+            kernel_name = None
+
+            def _find_entry_func(op):
+                nonlocal kernel_name
+                if kernel_name is None and op.get_name() == "tt.func":
+                    kernel_name = op.get_str_attr("sym_name")
+
+            mod.walk(_find_entry_func)
+            assert kernel_name, "no tt.func found in ttir module"
+        else:
+            kernel_name = extract_kernel_name(tt_pattern, ttir_asm)
         metadata["name"] = kernel_name
         # LLVM-direct: the binary exports the emitted llvm.func's symbol (the raw
         # kernel name), not the @triton.jit host wrapper. The launcher looks up

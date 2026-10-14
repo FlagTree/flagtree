@@ -6,7 +6,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "triton-shared/Conversion/TLEToLinalg/TLEToLinalg.h"
-#include "triton-shared/Dialect/TLE/IR/TLEDialect.h"
+#include "tle/dialect/include/IR/Dialect.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -34,7 +34,7 @@ class TLEToLinalgPass : public triton::impl::TLEToLinalgBase<TLEToLinalgPass> {
 public:
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<arith::ArithDialect, tensor::TensorDialect,
-                    func::FuncDialect, mlir::tle::TLEDialect>();
+                    func::FuncDialect, mlir::triton::tle::TleDialect>();
   }
 
   void runOnOperation() override {
@@ -43,7 +43,7 @@ public:
     // Quick check: skip if no TLE ops present.
     bool hasTLEOp = false;
     moduleOp.walk([&](Operation *op) {
-      if (op->getName().getStringRef().starts_with("xtle.")) {
+      if (op->getName().getStringRef().starts_with("tle.")) {
         hasTLEOp = true;
         return WalkResult::interrupt();
       }
