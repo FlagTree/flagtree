@@ -372,9 +372,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   if(FLAGTREE_BACKEND STREQUAL "ascend")
     list(APPEND TRITON_PLUGIN_NAMES "flir")
-    add_compile_definitions(FLAGTREE_BACKEND_ASCEND=1)
-    include_directories(${PROJECT_SOURCE_DIR}/third_party/flir/include)
-    include_directories(${PROJECT_BINARY_DIR}/third_party/flir/include)
     add_subdirectory(third_party/flir)
   endif()
 
