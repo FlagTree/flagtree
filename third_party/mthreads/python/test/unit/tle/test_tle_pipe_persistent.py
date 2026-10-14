@@ -46,6 +46,56 @@ def _persistent_single_writer(
 
 
 @triton.jit
+def _persistent_hazard_writer(
+    writer,
+    a_desc,
+    b_desc,
+    sink,
+    outer_tiles: tl.constexpr,
+    k_tiles: tl.constexpr,
+    hazard_kind: tl.constexpr,
+):
+    """Add a branch-carried non-pipe access before a cyclic TME overwrite."""
+    block_m: tl.constexpr = 256
+    block_n: tl.constexpr = 256
+    block_k: tl.constexpr = 64
+    for tile in range(outer_tiles):
+        for k_iter in range(k_tiles):
+            token = tile * k_tiles + k_iter
+            slot = writer.acquire(token)
+            # The first iteration reaches the TME write without this access;
+            # the loop backedge and branch join expose it on later dataflow
+            # visits.  A provisional pipe-only proof must therefore be able to
+            # degrade to a full partition barrier before finalization.
+            if tile > 0 and hazard_kind != 2:
+                ptr = tle.gpu.local_ptr(slot.a, (0, 0))
+                if hazard_kind == 0:
+                    tl.store(sink, tl.load(ptr))
+                else:
+                    tl.store(ptr, 0.0)
+            tle.gpu.copy(
+                a_desc,
+                slot.a,
+                (block_m, block_k),
+                (tile * block_m, k_iter * block_k),
+            )
+            tle.gpu.copy(
+                b_desc,
+                slot.b,
+                (block_k, block_n),
+                (k_iter * block_k, 0),
+            )
+            # A TME global-to-local payload is write-only, so RAW cannot
+            # disqualify the barrier immediately before that payload.  Cover
+            # the corresponding late CFG/backedge RAW edge at its only valid
+            # position: a read following the asynchronous payload write.
+            if tile > 0 and hazard_kind == 2:
+                ptr = tle.gpu.local_ptr(slot.a, (0, 0))
+                tl.store(sink, tl.load(ptr))
+            writer.commit(token)
+
+
+@triton.jit
 def _persistent_single_reader(
     reader,
     out,
@@ -121,6 +171,63 @@ def _persistent_single_reader_kernel(
             (
                 _persistent_single_writer,
                 (pipe.writer(), a_desc, b_desc, OUTER_TILES, K_TILES),
+            ),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[192],
+    )
+
+
+@triton.jit
+def _persistent_hazard_kernel(
+    a_desc,
+    b_desc,
+    out,
+    sink,
+    OUTER_TILES: tl.constexpr,
+    K_TILES: tl.constexpr,
+    HAZARD_KIND: tl.constexpr,
+):
+    block_m: tl.constexpr = 256
+    block_n: tl.constexpr = 256
+    block_k: tl.constexpr = 64
+    stages: tl.constexpr = 3
+    a = tle.gpu.alloc(
+        (stages, block_m, block_k),
+        dtype=tl.bfloat16,
+        layout=None,
+        nv_mma_shared_layout=True,
+    )
+    b = tle.gpu.alloc(
+        (stages, block_k, block_n),
+        dtype=tl.bfloat16,
+        layout=None,
+        nv_mma_shared_layout=True,
+    )
+    pipe = tle.pipe(
+        capacity=stages,
+        scope="cta",
+        name="persistent_hazard",
+        a=a,
+        b=b,
+    )
+    tle.gpu.warp_specialize(
+        [
+            (
+                _persistent_single_reader,
+                (pipe.reader(), out, OUTER_TILES, K_TILES),
+            ),
+            (
+                _persistent_hazard_writer,
+                (
+                    pipe.writer(),
+                    a_desc,
+                    b_desc,
+                    sink,
+                    OUTER_TILES,
+                    K_TILES,
+                    HAZARD_KIND,
+                ),
             ),
         ],
         worker_num_warps=[4],
@@ -333,6 +440,34 @@ def test_tme_only_pipe_does_not_get_local_store_wait_groups():
     )
     ttgir = compiled.asm["ttgir"]
     assert "musa_tle.pipe_local_store_group" not in ttgir
+
+
+@pytest.mark.parametrize(
+    "hazard_kind", [0, 1, 2], ids=["war", "non_pipe_waw", "raw"]
+)
+def test_pipe_reuse_join_hazard_keeps_full_partition_barrier(hazard_kind):
+    compiled = compile_musa(
+        _persistent_hazard_kernel,
+        {
+            "a_desc": "tensordesc<bf16[256, 64]>",
+            "b_desc": "tensordesc<bf16[64, 256]>",
+            "out": "*bf16",
+            "sink": "*bf16",
+            "OUTER_TILES": "constexpr",
+            "K_TILES": "constexpr",
+            "HAZARD_KIND": "constexpr",
+        },
+        {"OUTER_TILES": 4, "K_TILES": 1, "HAZARD_KIND": hazard_kind},
+        options={"num_warps": 16, "num_stages": 1},
+    )
+    llir = compiled.asm["llir"]
+    init_calls = re.findall(
+        r"(?:tail )?call void @llvm\.musa\.async\.init\.arrival\(", llir
+    )
+    # Six barriers belong to the three-stage full/empty pipe rings.  The
+    # branch-carried shared-memory access must retain at least one additional
+    # full partition barrier instead of being narrowed to an LMA-only wait.
+    assert len(init_calls) >= 7, llir
 
 
 @pytest.mark.skipif(not torch.musa.is_available(), reason="MUSA device is not available")

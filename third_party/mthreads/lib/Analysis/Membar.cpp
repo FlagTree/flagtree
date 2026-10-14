@@ -187,6 +187,11 @@ void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
     }
   }
 
+  // Some analyses attach provisional annotations while the worklist is
+  // running.  Publish them only after every predecessor/backedge contribution
+  // has been observed.
+  finalize(funcOp);
+
   // Update the final dangling buffers that haven't been synced
   BlockInfo &funcBlockInfo = (*funcBlockInfoMap)[funcOp];
   funcOp.walk<WalkOrder::PreOrder>([&](triton::ReturnOp returnOp) {
@@ -264,18 +269,23 @@ void MembarOrFenceAnalysis::visitTerminator(
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
-                                   bool pipeTMEReuseSync) {
+Operation *MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrier = triton::gpu::BarrierOp::create(
-      *builder, op->getLoc(), triton::gpu::AddrSpace::Local);
-#ifdef __TLE__
-  if (pipeTMEReuseSync)
-    barrier->setAttr("musa_tle.pipe_tme_reuse_sync", builder->getUnitAttr());
-#endif
+  return triton::gpu::BarrierOp::create(*builder, op->getLoc(),
+                                        triton::gpu::AddrSpace::Local)
+      .getOperation();
 }
 
 #ifdef __TLE__
+static constexpr StringLiteral kPipePayloadCopyAttr =
+    "musa_tle.pipe_payload_copy";
+static constexpr StringLiteral kPipeTMEReuseCandidateAttr =
+    "musa_tle.pipe_tme_reuse_candidate";
+static constexpr StringLiteral kPipeTMEReuseDisqualifiedAttr =
+    "musa_tle.pipe_tme_reuse_disqualified";
+static constexpr StringLiteral kPipeTMEReuseSyncAttr =
+    "musa_tle.pipe_tme_reuse_sync";
+
 static bool syncPipeLocalStoreGroups(Operation *wait, BlockInfo *blockInfo,
                                      Allocation *allocation) {
   auto waitGroups = wait->getAttrOfType<DenseI64ArrayAttr>(
@@ -335,7 +345,7 @@ static bool hasOnlyPipeTMEReuseHazard(Operation *op,
                                       const BlockInfo &current,
                                       MembarFilterFn filter,
                                       Allocation *allocation) {
-  if (!op->hasAttr("musa_tle.pipe_payload_copy"))
+  if (!op->hasAttr(kPipePayloadCopyAttr))
     return false;
 
   auto hasActiveIntersection = [&](const BlockInfo::SliceMapT &lhs,
@@ -352,8 +362,8 @@ static bool hasOnlyPipeTMEReuseHazard(Operation *op,
               continue;
             sawIntersection = true;
             if (requirePipeCopies &&
-                (!lhsOp->hasAttr("musa_tle.pipe_payload_copy") ||
-                 !rhsOp->hasAttr("musa_tle.pipe_payload_copy")))
+                (!lhsOp->hasAttr(kPipePayloadCopyAttr) ||
+                 !rhsOp->hasAttr(kPipePayloadCopyAttr)))
               return false;
           }
         }
@@ -376,7 +386,55 @@ static bool hasOnlyPipeTMEReuseHazard(Operation *op,
     return false;
   return sawPipeWAW;
 }
+
+// Reconstruct the explicit shared-memory effects of the operation immediately
+// following a provisional barrier. Pipe payload copies are ordinary
+// MemoryEffectOpInterface writes; keeping this helper deliberately narrow
+// makes a malformed candidate fail closed.
+static BlockInfo getExplicitMemoryEffects(Operation *op,
+                                          Allocation *allocation) {
+  BlockInfo effects;
+  auto memoryEffects = dyn_cast<MemoryEffectOpInterface>(op);
+  if (!memoryEffects)
+    return effects;
+
+  auto scratchBufferId = allocation->getBufferId(op);
+  SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> instances;
+  memoryEffects.getEffects(instances);
+  for (auto effect : instances) {
+    Value value = effect.getValue();
+    if (!value)
+      continue;
+    for (auto bufferId : allocation->getBufferIds(value)) {
+      if (bufferId == Allocation::InvalidBufferId ||
+          bufferId == scratchBufferId)
+        continue;
+      auto interval = allocation->getAllocatedInterval(bufferId);
+      auto slice = AllocationSlice(value, interval);
+      if (isa<MemoryEffects::Write>(effect.getEffect()))
+        effects.syncWriteSlices[slice].insert(op);
+      else if (isa<MemoryEffects::Read>(effect.getEffect()))
+        effects.syncReadSlices[slice].insert(op);
+    }
+  }
+  return effects;
+}
 #endif
+
+void MembarAnalysis::finalize(FunctionOpInterface funcOp) {
+#ifdef __TLE__
+  funcOp.walk([&](triton::gpu::BarrierOp barrier) {
+    if (!barrier->hasAttr(kPipeTMEReuseCandidateAttr))
+      return;
+    bool disqualified = barrier->hasAttr(kPipeTMEReuseDisqualifiedAttr);
+    barrier->removeAttr(kPipeTMEReuseCandidateAttr);
+    barrier->removeAttr(kPipeTMEReuseDisqualifiedAttr);
+    if (!disqualified)
+      barrier->setAttr(kPipeTMEReuseSyncAttr,
+                       UnitAttr::get(funcOp.getContext()));
+  });
+#endif
+}
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
@@ -392,6 +450,28 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   };
 
   if (containsLocalBarrier(op)) {
+#ifdef __TLE__
+    // A pipe-reuse barrier is first inserted as a provisional candidate. The
+    // transfer function is non-monotonic, so a later worklist visit can bring
+    // an additional RAW/WAR/non-pipe-WAW predecessor that was not visible at
+    // insertion time. Re-check before clearing the state and remember only a
+    // monotonic safe-to-unsafe transition. The final marker is published once
+    // the worklist reaches its fixed point.
+    if (op->hasAttr(kPipeTMEReuseCandidateAttr) &&
+        !op->hasAttr(kPipeTMEReuseDisqualifiedAttr)) {
+      Operation *target = op->getNextNode();
+      BlockInfo effects;
+      bool stillPipeOnly = false;
+      if (target && target->hasAttr(kPipePayloadCopyAttr)) {
+        effects = getExplicitMemoryEffects(target, allocation);
+        stillPipeOnly = hasOnlyPipeTMEReuseHazard(
+            target, *blockInfo, effects, filter, allocation);
+      }
+      if (!stillPipeOnly)
+        op->setAttr(kPipeTMEReuseDisqualifiedAttr,
+                    UnitAttr::get(op->getContext()));
+    }
+#endif
     // If the current op is a local barrier, we sync previous reads and writes
     blockInfo->sync();
     return;
@@ -526,7 +606,10 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
 #ifdef __TLE__
     bool pipeTMEReuseSync = hasOnlyPipeTMEReuseHazard(
         op, *blockInfo, curBlockInfo, filter, allocation);
-    insertBarrier(op, builder, pipeTMEReuseSync);
+    Operation *barrier = insertBarrier(op, builder);
+    if (pipeTMEReuseSync) {
+      barrier->setAttr(kPipeTMEReuseCandidateAttr, builder->getUnitAttr());
+    }
 #else
     insertBarrier(op, builder);
 #endif

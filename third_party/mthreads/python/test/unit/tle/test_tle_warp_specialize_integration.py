@@ -331,6 +331,25 @@ def _ws_explicit_sync_producer(out):
 
 
 @triton.jit
+def _ws_explicit_sync_idle(out):
+    tl.store(out + 1, 2.0)
+
+
+@triton.jit
+def _ws_explicit_sync_nested_if(out, predicate):
+    if predicate != 0:
+        mthreads_common.local_barrier()
+    tl.store(out, 1.0)
+
+
+@triton.jit
+def _ws_explicit_sync_nested_for(out, trip_count):
+    for _ in tl.range(0, trip_count):
+        mthreads_common.local_barrier()
+    tl.store(out, 1.0)
+
+
+@triton.jit
 def _ws_explicit_sync_kernel(out):
     tle.gpu.warp_specialize(
         [
@@ -339,6 +358,68 @@ def _ws_explicit_sync_kernel(out):
         ],
         worker_num_warps=[4],
         worker_num_regs=[24],
+    )
+
+
+@triton.jit
+def _ws_explicit_sync_one_vs_zero_kernel(out):
+    tle.gpu.warp_specialize(
+        [
+            (_ws_explicit_sync_consumer, (out, )),
+            (_ws_explicit_sync_idle, (out, )),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
+@triton.jit
+def _ws_explicit_sync_nested_if_kernel(out, predicate):
+    tle.gpu.warp_specialize(
+        [
+            (_ws_explicit_sync_nested_if, (out, predicate)),
+            (_ws_explicit_sync_producer, (out, )),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
+@triton.jit
+def _ws_explicit_sync_nested_for_kernel(out, trip_count):
+    tle.gpu.warp_specialize(
+        [
+            (_ws_explicit_sync_nested_for, (out, trip_count)),
+            (_ws_explicit_sync_producer, (out, )),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
+@triton.jit
+def _ws_explicit_sync_multi_worker_missing_kernel(out):
+    tle.gpu.warp_specialize(
+        [
+            (_ws_explicit_sync_consumer, (out, )),
+            (_ws_explicit_sync_producer, (out, )),
+            (_ws_explicit_sync_idle, (out, )),
+        ],
+        worker_num_warps=[4, 4],
+        worker_num_regs=[24, 24],
+    )
+
+
+@triton.jit
+def _ws_explicit_sync_multi_worker_balanced_kernel(out):
+    tle.gpu.warp_specialize(
+        [
+            (_ws_explicit_sync_consumer, (out, )),
+            (_ws_explicit_sync_producer, (out, )),
+            (_ws_explicit_sync_producer, (out, )),
+        ],
+        worker_num_warps=[4, 4],
+        worker_num_regs=[24, 24],
     )
 
 
@@ -439,14 +520,14 @@ def _compile_ws_dot_integration(stages):
     return ttir, ttgir, allocated, module.str_nodebug()
 
 
-def _compile_ws_explicit_sync():
+def _compile_ws_explicit_sync(fn=_ws_explicit_sync_kernel, signature=None):
     target, backend = mthreads_backend()
     options = backend.parse_options({"num_warps": 4, "num_stages": 1})
     context = ir.context()
     ir.load_dialects(context)
     backend.load_dialects(context)
 
-    src = ASTSource(fn=_ws_explicit_sync_kernel, signature={"out": "*fp32"})
+    src = ASTSource(fn=fn, signature=signature or {"out": "*fp32"})
     module = src.make_ir(
         target,
         options,
@@ -506,6 +587,52 @@ def test_mthreads_tle_explicit_cta_sync_survives_static_partition_lowering():
     assert late.count('"llvm.musa.syncthreads.lm"') == 2, late
     assert "musa_tle.explicit_cta_sync" not in late, late
     assert "musa_tle.layout_conversion_sync" not in late, late
+
+
+def test_mthreads_tle_explicit_cta_sync_balanced_multi_worker_is_accepted():
+    ttgir, late = _compile_ws_explicit_sync(
+        _ws_explicit_sync_multi_worker_balanced_kernel
+    )
+    assert ttgir.count("ttg.barrier local") == 3, ttgir
+    assert late.count('"llvm.musa.syncthreads.lm"') == 3, late
+
+
+@pytest.mark.parametrize(
+    "kernel,signature,diagnostic",
+    [
+        (
+            _ws_explicit_sync_one_vs_zero_kernel,
+            {"out": "*fp32"},
+            "explicit CTA sync count mismatch: default partition has 1 "
+            "but worker partition #0 has 0",
+        ),
+        (
+            _ws_explicit_sync_nested_if_kernel,
+            {"out": "*fp32", "predicate": "i32"},
+            "explicit CTA sync in the default partition must be directly "
+            "in the partition top-level block",
+        ),
+        (
+            _ws_explicit_sync_nested_for_kernel,
+            {"out": "*fp32", "trip_count": "i32"},
+            "explicit CTA sync in the default partition must be directly "
+            "in the partition top-level block",
+        ),
+        (
+            _ws_explicit_sync_multi_worker_missing_kernel,
+            {"out": "*fp32"},
+            "explicit CTA sync count mismatch: default partition has 1 "
+            "but worker partition #1 has 0",
+        ),
+    ],
+    ids=["one-vs-zero", "nested-if", "nested-for", "multi-worker-missing"],
+)
+def test_mthreads_tle_explicit_cta_sync_rejects_unsafe_partition_contract(
+    kernel, signature, diagnostic, capfd
+):
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        _compile_ws_explicit_sync(kernel, signature)
+    assert diagnostic in capfd.readouterr().err
 
 
 def test_mthreads_tle_warp_specialize_stage_three_remains_deferred():

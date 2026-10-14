@@ -36,6 +36,62 @@ static constexpr StringLiteral kConsumerEpochSyncAttr =
     "musa_tle.consumer_epoch_sync";
 static constexpr StringLiteral kConsumerEpochRequiredAttr =
     "musa_tle.consumer_epoch_rendezvous_required";
+static constexpr StringLiteral kExplicitCtaSyncAttr =
+    "musa_tle.explicit_cta_sync";
+
+static FailureOr<unsigned>
+countExplicitCtaSyncs(Region &partition,
+                      std::optional<unsigned> workerIndex = std::nullopt) {
+  unsigned count = 0;
+  bool invalid = false;
+  partition.walk([&](ttg::BarrierOp barrier) {
+    if (!barrier->hasAttr(kExplicitCtaSyncAttr))
+      return WalkResult::advance();
+    if (barrier.getAddrSpace() != ttg::AddrSpace::Local) {
+      barrier.emitOpError(
+          "MUSA TLE explicit CTA sync must target local memory");
+      invalid = true;
+      return WalkResult::interrupt();
+    }
+    if (barrier->getBlock() != &partition.front()) {
+      auto diagnostic = barrier.emitOpError("MUSA TLE explicit CTA sync in ");
+      if (workerIndex)
+        diagnostic << "worker partition #" << *workerIndex;
+      else
+        diagnostic << "the default partition";
+      diagnostic << " must be directly in the partition top-level block";
+      invalid = true;
+      return WalkResult::interrupt();
+    }
+    ++count;
+    return WalkResult::advance();
+  });
+  if (invalid)
+    return failure();
+  return count;
+}
+
+static LogicalResult validateExplicitCtaSyncs(ttg::WarpSpecializeOp ws) {
+  FailureOr<unsigned> defaultCount =
+      countExplicitCtaSyncs(ws.getDefaultRegion());
+  if (failed(defaultCount))
+    return failure();
+
+  for (auto [workerIndex, workerRegion] :
+       llvm::enumerate(ws.getPartitionRegions())) {
+    FailureOr<unsigned> workerCount =
+        countExplicitCtaSyncs(*workerRegion, workerIndex);
+    if (failed(workerCount))
+      return failure();
+    if (*workerCount != *defaultCount)
+      return ws.emitOpError()
+             << "MUSA TLE explicit CTA sync count mismatch: default "
+                "partition has "
+             << *defaultCount << " but worker partition #" << workerIndex
+             << " has " << *workerCount;
+  }
+  return success();
+}
 
 static bool containsAsyncSqmmaAndGlobalStore(scf::ForOp loop) {
   bool hasAsyncSqmma = false;
@@ -242,6 +298,9 @@ class PrepareWarpSpecializePass
             "MUSA TLE static warp_specialize capture must dominate the "
             "partition split");
     }
+
+    if (failed(validateExplicitCtaSyncs(ws)))
+      return failure();
 
     int32_t baseNumWarps = ttg::lookupNumWarps(ws);
     if (baseNumWarps <= 0)
