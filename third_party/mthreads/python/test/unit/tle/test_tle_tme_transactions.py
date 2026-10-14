@@ -198,7 +198,9 @@ def test_mthreads_tle_completion_transaction_is_single_and_idempotent(stages, sl
     assert ttgir.count("ttmg.async_tme_copy_global_to_local") == 1, ttgir
     assert ttgir.count("ttmg.arrive_barrier_noret") == 1, ttgir
     assert ttgir.count("musa.tme.explicit_completion") == 3, ttgir
-    assert ttgir.count("musa.tme.issue_thread = 0 : i32") == 3, ttgir
+    # The three explicit completion operations and each full-barrier
+    # initialization are all issued by the same physical CTA thread.
+    assert ttgir.count("musa.tme.issue_thread = 0 : i32") == 3 + stages, ttgir
     assert "musa_tle.expect_bytes" not in ttgir, ttgir
     assert "ttmg.wait_barrier" not in ttgir, ttgir
 
@@ -244,7 +246,9 @@ def test_mthreads_tle_explicit_completion_uses_raw_issue_thread_without_barrier0
     assert llir.count('llvm.call_intrinsic "llvm.musa.tme.ld.tile.2d"') == 1, llir
     assert llir.count('llvm.call_intrinsic "llvm.musa.async.arrive.none.phaseid"') == 1, llir
     issue_constant = re.search(r"(%\d+) = llvm\.mlir\.constant\(512 : i32\) : i32", llir).group(1)
-    assert len(re.findall(rf'llvm\.icmp "eq" %\d+, {re.escape(issue_constant)} : i32', llir)) == 3, llir
+    # One predicate protects full-barrier initialization and three protect
+    # the explicit add/copy/arrive completion transaction.
+    assert len(re.findall(rf'llvm\.icmp "eq" %\d+, {re.escape(issue_constant)} : i32', llir)) == 4, llir
     assert (llir.index("llvm.musa.async.add.trans") < llir.index("llvm.musa.tme.ld.tile.2d") <
             llir.index("llvm.musa.async.arrive.none.phaseid")), llir
 

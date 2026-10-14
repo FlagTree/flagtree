@@ -623,7 +623,15 @@ resolveCanonicalPH1TMESharedCarrierConfig(ttg::MemDescType localType) {
 
   constexpr int64_t kLineBytes = 256;
   int64_t elemBytes = *maybeElemBytes;
-  int64_t leadingWidthBytes = localType.getShape()[order.front()] * elemBytes;
+  ArrayRef<int64_t> physicalShape = localType.getAllocShape();
+  if (physicalShape.empty())
+    physicalShape = localType.getShape();
+  else {
+    if (physicalShape.size() < localType.getShape().size())
+      return failure();
+    physicalShape = physicalShape.take_back(localType.getShape().size());
+  }
+  int64_t leadingWidthBytes = physicalShape[order.front()] * elemBytes;
   if (leadingWidthBytes <= 0)
     return failure();
 
@@ -768,7 +776,8 @@ inline FailureOr<ResolvedTMESwizzleConfig>
 resolveTMESwizzleConfigFromMatrixView(ttg::MemDescType localType,
                                       ArrayRef<int64_t> matrixPhysicalShape,
                                       ArrayRef<unsigned> matrixOrder) {
-  if (localType.getShape().size() == 2)
+  if (localType.getShape().size() == 2 &&
+      localType.getShape() == matrixPhysicalShape)
     return resolveTMESwizzleConfigFromEncoding(localType);
 
   auto swizzled =

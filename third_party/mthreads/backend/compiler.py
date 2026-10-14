@@ -713,6 +713,10 @@ def _llc_extra_options(metadata: Dict[str, object], options: "MUSAOptions", capa
         ],
     }
     opts = list(llc_options_map[(uses_sqmma, enable_backend_opt)])
+    # This option is deliberately narrow: it suppresses only the SQMMA
+    # optimized LLC scheduling flag when that flag is otherwise selected.
+    if options.disable_max_ilp_scheduler:
+        opts = [opt for opt in opts if opt != "-misched=mtgpu-max-ilp"]
     if capability == 22:
         opts.append("-mtgpu-alloc-shared-memory-from-zero=1")
     if options.llc_options:
@@ -747,6 +751,8 @@ class MUSAOptions:
     llc_options: Optional[str] = None
     enable_llc_opt: bool = False
     enable_backend_opt: bool = False
+    disable_max_ilp_scheduler: bool = False
+    disable_sqmma_m_split_preference: bool = False
     enable_fp8_burst2: bool = False
     enable_llvm_compat: bool = True
     extern_libs: Optional[tuple] = None
@@ -1020,6 +1026,11 @@ class MUSABackend(BaseBackend):
     def make_ttgir(mod, metadata, opt, arch, capability):
         if opt.maxnreg is not None:
             mod.set_attr("ttg.maxnreg", ir.builder(mod.context).get_int32_attr(opt.maxnreg))
+        if opt.disable_sqmma_m_split_preference:
+            mod.set_attr(
+                "musa_tle.disable_sqmma_m_split_preference",
+                ir.builder(mod.context).get_int32_attr(1),
+            )
 
         pm = ir.pass_manager(mod.context)
         dump_enabled = pm.enable_debug()

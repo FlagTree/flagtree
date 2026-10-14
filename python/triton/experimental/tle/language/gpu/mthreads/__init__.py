@@ -21,6 +21,13 @@
 from . import buffer, common, copy, pipe, warp_specialize, wgmma
 from .types import MusaDotOperandEncoding, MusaSqmmaEncoding, MusaWmmaEncoding
 
+# Public capability markers for clients that need to retain a safe fallback
+# when running against an older FlagTree wheel.  Consumer-sync version 1
+# covers physical-CTA barrier initialization, cyclic multi-epoch named-reader
+# rendezvous, and mixed-warp rectangular shared-memory slice operands.
+MTHREADS_GEMM_COMPILER_OPTIONS_VERSION = 2
+MTHREADS_TLE_CONSUMER_SYNC_VERSION = 1
+
 __all__ = [
     "buffer",
     "common",
@@ -31,4 +38,6 @@ __all__ = [
     "MusaDotOperandEncoding",
     "MusaSqmmaEncoding",
     "MusaWmmaEncoding",
+    "MTHREADS_GEMM_COMPILER_OPTIONS_VERSION",
+    "MTHREADS_TLE_CONSUMER_SYNC_VERSION",
 ]

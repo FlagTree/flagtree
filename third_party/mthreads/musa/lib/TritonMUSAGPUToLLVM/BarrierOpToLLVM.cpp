@@ -18,7 +18,17 @@ struct TTGBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    targetInfo.barrier(op.getLoc(), rewriter, op.getAddrSpace());
+    if (auto group =
+            op->getAttrOfType<IntegerAttr>("musa_tle.consumer_epoch_sync")) {
+      if (op.getAddrSpace() != triton::gpu::AddrSpace::Local)
+        return op.emitOpError(
+            "MThreads TLE consumer epoch sync must target local memory");
+      auto call = LLVM::createLLVMIntrinsicCallOp(
+          rewriter, op.getLoc(), "llvm.musa.syncthreads.lm", TypeRange{}, {});
+      call->setAttr("musa_tle.consumer_epoch_sync", group);
+    } else {
+      targetInfo.barrier(op.getLoc(), rewriter, op.getAddrSpace());
+    }
     rewriter.eraseOp(op);
     return success();
   }

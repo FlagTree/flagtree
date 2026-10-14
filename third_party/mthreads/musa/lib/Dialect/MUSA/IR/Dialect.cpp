@@ -484,15 +484,6 @@ LogicalResult BarRecordOp::verify() {
   return success();
 }
 
-LogicalResult InitArrivalOp::verify() {
-  if (failed(verifyAsyncBarrierId(getOperation(), getBarId(), "barId")))
-    return failure();
-  if (failed(verifyNonNegativeI32Constant(getOperation(), getArriveCount(),
-                                          "arriveCount")))
-    return failure();
-  return verifyNonNegativeI32Constant(getOperation(), getPhaseId(), "phaseId");
-}
-
 #ifdef __TLE__
 static LogicalResult verifyTMEIssueThread(Operation *op) {
   Attribute attr = op->getAttr(triton::musa::kTMEIssueThreadAttr);
@@ -505,6 +496,22 @@ static LogicalResult verifyTMEIssueThread(Operation *op) {
   return success();
 }
 #endif // __TLE__
+
+LogicalResult InitArrivalOp::verify() {
+  if (failed(verifyAsyncBarrierId(getOperation(), getBarId(), "barId")))
+    return failure();
+  if (failed(verifyNonNegativeI32Constant(getOperation(), getArriveCount(),
+                                          "arriveCount")))
+    return failure();
+  if (failed(verifyNonNegativeI32Constant(getOperation(), getPhaseId(),
+                                          "phaseId")))
+    return failure();
+#ifdef __TLE__
+  return verifyTMEIssueThread(getOperation());
+#else
+  return success();
+#endif // __TLE__
+}
 
 LogicalResult BarrierAddTransOp::verify() {
   if (failed(verifyAsyncBarrierId(getOperation(), getBarId(), "barId")))

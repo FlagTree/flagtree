@@ -35,6 +35,8 @@ constexpr llvm::StringLiteral
 constexpr llvm::StringLiteral kExplicitSqmmaAttr("musa_tle.explicit_sqmma");
 constexpr llvm::StringLiteral kEnableEncodingRematerializationAttr(
     "tle.enable_encoding_rematerialization");
+constexpr llvm::StringLiteral kDisableMSplitPreferenceAttr(
+    "musa_tle.disable_sqmma_m_split_preference");
 
 struct SelectedSqmmaConfig {
   SmallVector<unsigned, 3> instrShape;
@@ -43,7 +45,8 @@ struct SelectedSqmmaConfig {
 
 static std::optional<SelectedSqmmaConfig>
 selectSqmmaConfig(unsigned m, unsigned n, unsigned k, unsigned numWarps,
-                  musa::SQMMAEltType operandType) {
+                  musa::SQMMAEltType operandType,
+                  bool disableMSplitPreference) {
   if (numWarps < 4 || numWarps % 4 != 0)
     return std::nullopt;
   const auto *sqTraits = musa::getMusaSqmmaArchTraits(musa::MusaArch::PH1);
@@ -81,8 +84,9 @@ selectSqmmaConfig(unsigned m, unsigned n, unsigned k, unsigned numWarps,
           // dot result along axis=1, and an M-split keeps every output row
           // inside one squad so the reduction never crosses warps. Finer M
           // splits (instM 16) measure slower and are never preferred.
-          bool preferMSplit =
-              warpsN == 1 && instM >= 32 && best && best->warpsPerCTA[1] != 1;
+          bool preferMSplit = !disableMSplitPreference && warpsN == 1 &&
+                              instM >= 32 && best &&
+                              best->warpsPerCTA[1] != 1;
           if (!best || count < bestCount ||
               (count == bestCount &&
                (volume > bestVolume ||
@@ -229,10 +233,15 @@ static LogicalResult updateOperandLayout(musa_tle::SqmmaOp op,
         "requires layout=None and nv_mma_shared_layout=True for initial "
         "mthreads TLE SQMMA operands");
 
-  auto order = ttg::getOrder(operandTy);
+  SmallVector<int64_t> physicalShape =
+      musa::getMemDescPhysicalShape(operandTy);
+  auto order = musa::getSharedOrder(operandTy.getEncoding(), physicalShape);
   auto cga = ttg::getCGALayout(operandTy.getEncoding());
+  // Use the current SQMMA attribute API directly.  A DotOperandEncodingAttr
+  // describes a register operand and is intentionally rejected for TLE
+  // SQMMA, whose operands must remain shared-memory memdescs.
   auto shared = mmaEnc.composeSharedLayoutForOperand(
-      cga, operandIdx, operandTy.getShape(), order,
+      cga, operandIdx, physicalShape, order,
       /*kWidth=*/0, operandTy.getElementTypeBitWidth(),
       /*needTrans=*/false);
 
@@ -257,7 +266,12 @@ static LogicalResult updateOperandLayout(musa_tle::SqmmaOp op,
     landingTy = *sourceTy;
   }
 
-  if (failed(musa::resolveTMESwizzleConfigFromEncoding(landingTy)))
+  SmallVector<int64_t> landingPhysicalShape =
+      musa::getMemDescPhysicalShape(landingTy);
+  auto landingOrder =
+      musa::getSharedOrder(landingTy.getEncoding(), landingPhysicalShape);
+  if (failed(musa::resolveTMESwizzleConfigFromMatrixView(
+          landingTy, landingPhysicalShape, landingOrder)))
     return op.emitOpError(
                "inferred physical SQMMA landing layout is not uniquely "
                "TME-compatible for operand ")
@@ -278,6 +292,24 @@ static LogicalResult updateOperandLayout(musa_tle::SqmmaOp op,
       ttg::MemDescType::get(rootTy.getShape(), rootTy.getElementType(),
                             rootEncoding, rootTy.getMemorySpace(),
                             rootTy.getMutableMemory(), rootTy.getAllocShape());
+  // A rank-preserving operand slice (for example B[64, 256] viewed as two
+  // B[64, 128] tiles) must not shrink the stage returned by memdesc_index.
+  // Build that stage from the root allocation and reserve landingTy for the
+  // final view only.
+  ttg::MemDescType stageTy = landingTy;
+  if (rootTy.getRank() == landingTy.getRank() + 1) {
+    SmallVector<int64_t> stageShape(rootTy.getShape().drop_front());
+    SmallVector<int64_t> stageAllocShape;
+    ArrayRef<int64_t> rootAllocShape = rootTy.getAllocShape();
+    if (rootAllocShape.size() == rootTy.getRank()) {
+      ArrayRef<int64_t> trailingAllocShape = rootAllocShape.drop_front();
+      stageAllocShape.append(trailingAllocShape.begin(),
+                             trailingAllocShape.end());
+    }
+    stageTy = ttg::MemDescType::get(
+        stageShape, rootTy.getElementType(), landingEncoding,
+        rootTy.getMemorySpace(), rootTy.getMutableMemory(), stageAllocShape);
+  }
   root.getResult().setType(newRootTy);
   landing.setType(landingTy);
   operand.setType(desiredTy);
@@ -330,8 +362,8 @@ static LogicalResult updateOperandLayout(musa_tle::SqmmaOp op,
       if (srcTy.getRank() != dstTy.getRank() + 1 ||
           !llvm::is_contained(rootAliases, index.getSrc()))
         return;
-      if (index.getResult().getType() != landingTy) {
-        index.getResult().setType(landingTy);
+      if (index.getResult().getType() != stageTy) {
+        index.getResult().setType(stageTy);
         (void)checkAndSet(index.getOperation());
         changed = true;
       }
@@ -367,6 +399,8 @@ struct TritonMUSAGPUTLELowerSqmmaPass
     : impl::TritonMUSAGPUTLELowerSqmmaBase<TritonMUSAGPUTLELowerSqmmaPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    bool disableMSplitPreference =
+        module->hasAttr(kDisableMSplitPreferenceAttr);
     SmallVector<musa_tle::SqmmaOp> dots;
     SmallVector<Operation *> worklist;
     module.walk([&](Operation *candidate) {
@@ -393,7 +427,8 @@ struct TritonMUSAGPUTLELowerSqmmaPass
       unsigned numWarps = ttg::maybeLookupNumWarps(dot).value_or(0);
       auto config =
           selectSqmmaConfig(aTy.getShape()[0], bTy.getShape()[1],
-                            aTy.getShape()[1], numWarps, *operandType);
+                            aTy.getShape()[1], numWarps, *operandType,
+                            disableMSplitPreference);
       if (!config) {
         dot.emitOpError("cannot select a supported SQMMA configuration");
         return signalPassFailure();
@@ -413,7 +448,10 @@ struct TritonMUSAGPUTLELowerSqmmaPass
     }
 
     DenseMap<Value, Value> nativeAccumulators;
+    llvm::SmallPtrSet<Operation *, 8> loweredWaits;
     for (Operation *candidate : worklist) {
+      if (loweredWaits.contains(candidate))
+        continue;
       OpBuilder builder(candidate);
       if (auto dot = dyn_cast<musa_tle::SqmmaOp>(candidate)) {
         auto oldAccTy = cast<RankedTensorType>(dot.getC().getType());
@@ -448,23 +486,41 @@ struct TritonMUSAGPUTLELowerSqmmaPass
       }
 
       auto wait = cast<musa_tle::SqmmaWaitOp>(candidate);
-      Value nativeInput = nativeAccumulators.lookup(wait.getInput());
-      if (!nativeInput) {
-        wait.emitOpError("input must be the async result of musa_tle.sqmma");
-        return signalPassFailure();
+      SmallVector<musa_tle::SqmmaWaitOp, 4> adjacentWaits{wait};
+      for (Operation *next = wait->getNextNode(); next;) {
+        auto nextWait = dyn_cast<musa_tle::SqmmaWaitOp>(next);
+        if (!nextWait || nextWait.getPendings() != wait.getPendings())
+          break;
+        adjacentWaits.push_back(nextWait);
+        next = next->getNextNode();
       }
-      auto nativeWait =
-          musa::SquadDotWaitOp::create(builder, wait.getLoc(), nativeInput);
+
+      SmallVector<Value, 4> nativeInputs;
+      for (musa_tle::SqmmaWaitOp adjacentWait : adjacentWaits) {
+        Value nativeInput = nativeAccumulators.lookup(adjacentWait.getInput());
+        if (!nativeInput) {
+          adjacentWait.emitOpError(
+              "input must be the async result of musa_tle.sqmma");
+          return signalPassFailure();
+        }
+        nativeInputs.push_back(nativeInput);
+      }
+      auto nativeWait = musa::SquadDotWaitOp::create(
+          builder, wait.getLoc(), nativeInputs);
       nativeWait->setAttr(kExplicitSqmmaAttr, builder.getUnitAttr());
-      Value released = ttg::ConvertLayoutOp::create(builder, wait.getLoc(),
-                                                    wait.getOutput().getType(),
-                                                    nativeWait.getResult(0));
-      if (Attribute explicitEncoding =
-              getTleExplicitValueEncoding(wait.getOutput()))
-        setTleExplicitResultEncoding(released.getDefiningOp(), 0,
-                                     explicitEncoding);
-      wait.getOutput().replaceAllUsesWith(released);
-      wait.erase();
+      for (auto [index, adjacentWait] : llvm::enumerate(adjacentWaits)) {
+        Value released = ttg::ConvertLayoutOp::create(
+            builder, adjacentWait.getLoc(), adjacentWait.getOutput().getType(),
+            nativeWait.getResult(index));
+        if (Attribute explicitEncoding =
+                getTleExplicitValueEncoding(adjacentWait.getOutput()))
+          setTleExplicitResultEncoding(released.getDefiningOp(), 0,
+                                       explicitEncoding);
+        adjacentWait.getOutput().replaceAllUsesWith(released);
+        loweredWaits.insert(adjacentWait.getOperation());
+      }
+      for (musa_tle::SqmmaWaitOp adjacentWait : adjacentWaits)
+        adjacentWait.erase();
     }
 
     for (musa_tle::SqmmaOp dot : llvm::reverse(dots))

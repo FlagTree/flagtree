@@ -25,13 +25,27 @@ from typing import List, Any
 from triton._utils import validate_block_shape
 
 
+# Increment this when the public stride-alignment override contract changes.
+# Backends can use the marker to retain a safe fallback with older wheels.
+TENSOR_DESCRIPTOR_STRIDE_ALIGNMENT_VERSION = 1
+
+
 @dataclass
 class TensorDescriptor:
+    """Host-side tensor descriptor.
+
+    Descriptor strides remain 16-byte aligned by default.  Backends with a
+    verified looser contract may explicitly request a power-of-two alignment
+    of at least four bytes; the caller is responsible for selecting an
+    alignment supported by the target.  Four-byte alignment is validated by
+    the MThreads backend.
+    """
     base: Any
     shape: List[int]
     strides: List[int]
     block_shape: List[int]
     padding: str = "zero"
+    stride_alignment: int = 16
 
     def __post_init__(self):
         rank = len(self.shape)
@@ -43,9 +57,14 @@ class TensorDescriptor:
         if ty.__name__ not in ("FakeTensor", "FunctionalTensor"):
             assert self.base.data_ptr() % 16 == 0, "base must be 16-byte aligned"
         validate_block_shape(self.block_shape)
+        assert isinstance(self.stride_alignment, int) and not isinstance(self.stride_alignment, bool), \
+            "stride_alignment must be an integer"
+        assert self.stride_alignment >= 4 and (self.stride_alignment & (self.stride_alignment - 1)) == 0, \
+            "stride_alignment must be a power of two greater than or equal to 4"
         elem_bytes = self.base.dtype.itemsize
         for stride in self.strides[:-1]:
-            assert (stride * elem_bytes) % 16 == 0, "strides must be 16-byte aligned"
+            assert (stride * elem_bytes) % self.stride_alignment == 0, \
+                f"strides must be {self.stride_alignment}-byte aligned"
         for shape_dim in self.shape:
             assert shape_dim > 0, "shape must be positive"
         assert self.strides[-1] == 1, "Last dimension must be contiguous"
@@ -54,5 +73,5 @@ class TensorDescriptor:
             assert self.base.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
 
     @staticmethod
-    def from_tensor(tensor: Any, block_shape: List[int], padding="zero"):
-        return TensorDescriptor(tensor, tensor.shape, tensor.stride(), block_shape, padding)
+    def from_tensor(tensor: Any, block_shape: List[int], padding="zero", *, stride_alignment=16):
+        return TensorDescriptor(tensor, tensor.shape, tensor.stride(), block_shape, padding, stride_alignment)

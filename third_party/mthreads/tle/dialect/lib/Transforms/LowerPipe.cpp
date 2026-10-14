@@ -87,6 +87,7 @@ static Value captureForUse(Operation *use, Value value) {
 
 struct PipeLoweringArtifacts {
   Value fullBase;
+  SmallVector<Value> fullBases;
   Value emptyBase;
   Value closeTags;
   ttg::MemDescType closeTagSlotType;
@@ -384,6 +385,29 @@ class LowerPipePass
         fullBase.getDefiningOp()->setAttr(kPipeBarrierRingAttr,
                                           builder.getUnitAttr());
       }
+      SmallVector<Value> fullBases{fullBase};
+      for (const musa_tle::PipeBarrierRingPlan &segment :
+           plan.additionalFull) {
+        if (!segment.transactionBytes ||
+            segment.storageOwner !=
+                musa_tle::PipeBarrierStorageOwner::Pipe ||
+            segment.externalStorage || segment.capacity != plan.full.capacity ||
+            segment.arrivalCount != plan.full.arrivalCount)
+          return create.emitOpError(
+              "internal MUSA TLE pipe lowering requires valid segmented "
+              "full-barrier plans");
+        IntegerAttr segmentBytes;
+        if (*segment.transactionBytes > 0)
+          segmentBytes =
+              builder.getI32IntegerAttr(*segment.transactionBytes);
+        Value segmentBase = musa_tle::BarrierAllocOp::create(
+            builder, loc, builder.getI32IntegerAttr(segment.capacity),
+            builder.getI32IntegerAttr(segment.arrivalCount), pending,
+            segmentBytes);
+        segmentBase.getDefiningOp()->setAttr(kPipeBarrierRingAttr,
+                                             builder.getUnitAttr());
+        fullBases.push_back(segmentBase);
+      }
       Value emptyBase;
       if (plan.empty) {
         emptyBase = musa_tle::BarrierAllocOp::create(
@@ -455,7 +479,13 @@ class LowerPipePass
                 return llvm::any_of(
                     commit->completionSources, [&](const auto &source) {
                       const auto &region = source.coveredRegion;
-                      return source.destinationField == field.index &&
+                      bool isLocalStoreTransport =
+                          source.kind ==
+                              musa_tle::PipeTransportKind::LocalStore ||
+                          source.kind ==
+                              musa_tle::PipeTransportKind::AsyncCopy;
+                      return isLocalStoreTransport &&
+                             source.destinationField == field.index &&
                              region.exact && region.byteOffset == 0 &&
                              region.byteSize == bytes;
                     });
@@ -476,6 +506,7 @@ class LowerPipePass
 
       PipeLoweringArtifacts pipeArtifacts;
       pipeArtifacts.fullBase = fullBase;
+      pipeArtifacts.fullBases = std::move(fullBases);
       pipeArtifacts.emptyBase = emptyBase;
       pipeArtifacts.closeTags = closeTags;
       pipeArtifacts.closeTagSlotType = closeTagSlotType;
@@ -636,72 +667,87 @@ class LowerPipePass
           }
         }
 
-        SmallVector<const musa_tle::PipeCompletionSource *> tmeSources;
-        for (const auto &source : group->completionSources)
-          if (source.kind == musa_tle::PipeTransportKind::TME &&
-              !loweredCopies.contains(source.operation))
-            tmeSources.push_back(&source);
-        int64_t tmeBytes = 0;
-        for (auto *source : tmeSources)
-          tmeBytes += source->transactionBytes;
-        Value commonBarrier;
-        int64_t groupId = nextCompletionGroupId++;
-        int64_t memberIndex = 0;
-        if (!tmeSources.empty() && llvm::all_of(tmeSources, [&](auto *source) {
-              return source->operation->getBlock() ==
-                     tmeSources.front()->operation->getBlock();
-            })) {
-          llvm::sort(tmeSources, [](auto *left, auto *right) {
-            return left->operation->isBeforeInBlock(right->operation);
-          });
-          auto *first = tmeSources.front();
-          OpBuilder firstBuilder(first->operation);
-          commonBarrier = createIndex(firstBuilder, first->operation->getLoc(),
-                                      first->operation, pipeArtifacts.fullBase,
-                                      first->stage);
-        }
-        for (const auto &source : group->completionSources) {
-          if (source.kind != musa_tle::PipeTransportKind::TME ||
-              !loweredCopies.insert(source.operation).second)
-            continue;
-          auto copy = cast<ttg::TMACopyOp>(source.operation);
-          OpBuilder copyBuilder(copy);
-          Value barrier =
-              commonBarrier ? commonBarrier
-                            : createIndex(copyBuilder, copy.getLoc(), copy,
-                                          pipeArtifacts.fullBase, source.stage);
-          auto replacement =
-              ttg::TMACopyOp::create(copyBuilder, copy.getLoc(), copy.getSrc(),
-                                     copy.getDst(), copy.getIndices(), barrier);
-          replacement->setDiscardableAttrs(
-              copy->getDiscardableAttrDictionary());
-          replacement->setAttr("expect_bytes", copyBuilder.getI32IntegerAttr(
-                                                   source.transactionBytes));
-          // Each executed copy adds its transaction bytes. The pipe commit,
-          // not the last syntactic copy, supplies the control arrival.
-          replacement->setAttr(ttmg::kTLEPipeDeferredArrivalAttr,
-                               copyBuilder.getUnitAttr());
-          if (commonBarrier)
+        if (group->segmentTransactionBytes.size() !=
+            pipeArtifacts.fullBases.size())
+          return commit.emitOpError(
+              "lost analyzed full-barrier segmentation");
+        for (unsigned segment = 0;
+             segment < pipeArtifacts.fullBases.size(); ++segment) {
+          SmallVector<const musa_tle::PipeCompletionSource *> tmeSources;
+          for (const auto &source : group->completionSources)
+            if (source.kind == musa_tle::PipeTransportKind::TME &&
+                source.fullBarrierSegment == segment &&
+                !loweredCopies.contains(source.operation))
+              tmeSources.push_back(&source);
+          int64_t tmeBytes = 0;
+          for (auto *source : tmeSources)
+            tmeBytes += source->transactionBytes;
+          Value commonBarrier;
+          int64_t completionGroupId = nextCompletionGroupId++;
+          int64_t memberIndex = 0;
+          if (!tmeSources.empty() &&
+              llvm::all_of(tmeSources, [&](auto *source) {
+                return source->operation->getBlock() ==
+                       tmeSources.front()->operation->getBlock();
+              })) {
+            llvm::sort(tmeSources, [](auto *left, auto *right) {
+              return left->operation->isBeforeInBlock(right->operation);
+            });
+            auto *first = tmeSources.front();
+            OpBuilder firstBuilder(first->operation);
+            commonBarrier = createIndex(
+                firstBuilder, first->operation->getLoc(), first->operation,
+                pipeArtifacts.fullBases[segment], first->stage);
+          }
+          for (const auto &source : group->completionSources) {
+            if (source.kind != musa_tle::PipeTransportKind::TME ||
+                source.fullBarrierSegment != segment ||
+                !loweredCopies.insert(source.operation).second)
+              continue;
+            auto copy = cast<ttg::TMACopyOp>(source.operation);
+            OpBuilder copyBuilder(copy);
+            Value barrier =
+                commonBarrier
+                    ? commonBarrier
+                    : createIndex(copyBuilder, copy.getLoc(), copy,
+                                  pipeArtifacts.fullBases[segment],
+                                  source.stage);
+            auto replacement = ttg::TMACopyOp::create(
+                copyBuilder, copy.getLoc(), copy.getSrc(), copy.getDst(),
+                copy.getIndices(), barrier);
+            replacement->setDiscardableAttrs(
+                copy->getDiscardableAttrDictionary());
             replacement->setAttr(
-                ttmg::kTLECompletionGroupAttr,
-                copyBuilder.getDenseI64ArrayAttr(
-                    {groupId, memberIndex++,
-                     static_cast<int64_t>(tmeSources.size()), tmeBytes}));
-          copy.erase();
-        }
-        if (group->tmeGroupArrivalCount) {
-          Value barrier = createIndex(builder, loc, op, pipeArtifacts.fullBase,
-                                      group->stage);
-          Value predicate = arith::ConstantIntOp::create(builder, loc, 1, 1);
-          auto arrival = ttmg::ArriveBarrierNoRetOp::create(builder, loc,
-                                                            barrier, predicate);
-          int32_t issueThread = 0;
-          if (failed(getWriterIssueThread(op, issueThread)))
-            return failure();
-          arrival->setAttr(ttmg::kTMEIssueThreadAttr,
-                           builder.getI32IntegerAttr(issueThread));
-          arrival->setAttr(ttmg::kTMEExplicitCompletionAttr,
-                           builder.getUnitAttr());
+                "expect_bytes",
+                copyBuilder.getI32IntegerAttr(source.transactionBytes));
+            // Each executed copy adds its transaction bytes.  The commit,
+            // not the last syntactic copy, supplies the control arrival.
+            replacement->setAttr(ttmg::kTLEPipeDeferredArrivalAttr,
+                                 copyBuilder.getUnitAttr());
+            if (commonBarrier)
+              replacement->setAttr(
+                  ttmg::kTLECompletionGroupAttr,
+                  copyBuilder.getDenseI64ArrayAttr(
+                      {completionGroupId, memberIndex++,
+                       static_cast<int64_t>(tmeSources.size()), tmeBytes}));
+            copy.erase();
+          }
+          if (group->tmeGroupArrivalCount) {
+            Value barrier = createIndex(builder, loc, op,
+                                        pipeArtifacts.fullBases[segment],
+                                        group->stage);
+            Value predicate =
+                arith::ConstantIntOp::create(builder, loc, 1, 1);
+            auto arrival = ttmg::ArriveBarrierNoRetOp::create(
+                builder, loc, barrier, predicate);
+            int32_t issueThread = 0;
+            if (failed(getWriterIssueThread(op, issueThread)))
+              return failure();
+            arrival->setAttr(ttmg::kTMEIssueThreadAttr,
+                             builder.getI32IntegerAttr(issueThread));
+            arrival->setAttr(ttmg::kTMEExplicitCompletionAttr,
+                             builder.getUnitAttr());
+          }
         }
         if (group->localStoreArrivalCount)
           lowerLocalStoreArrival(builder, loc, op, pipeArtifacts.fullBase,
@@ -716,19 +762,23 @@ class LowerPipePass
                                         analysis.lookupEndpoint(wait), wait);
         if (failed(readerParticipant))
           return failure();
-        Value barrier = createIndex(builder, loc, op, pipeArtifacts.fullBase,
-                                    wait.getStage());
         Value phase =
             state->lifecycle.mode == musa_tle::PipeLifecycleMode::OneShot
                 ? arith::ConstantIntOp::create(builder, loc, 0, 32)
                 : toI32Phase(builder, loc, wait.getPhase(), false);
-        auto loweredWait =
-            musa_tle::BarrierWaitOp::create(builder, loc, barrier, phase);
+        SmallVector<musa_tle::BarrierWaitOp> loweredWaits;
+        for (Value fullBase : pipeArtifacts.fullBases) {
+          Value barrier =
+              createIndex(builder, loc, op, fullBase, wait.getStage());
+          loweredWaits.push_back(
+              musa_tle::BarrierWaitOp::create(builder, loc, barrier, phase));
+        }
         FailureOr<SmallVector<int64_t>> waitGroups = getReaderLocalStoreGroups(
             pipeArtifacts, analysis.lookupEndpoint(wait), wait);
         if (failed(waitGroups))
           return failure();
-        setLocalStoreWaitGroups(loweredWait, builder, *waitGroups);
+        for (musa_tle::BarrierWaitOp loweredWait : loweredWaits)
+          setLocalStoreWaitGroups(loweredWait, builder, *waitGroups);
         if (const musa_tle::PipeReaderDrainGroup *drain =
                 analysis.lookupReaderDrainGroup(wait)) {
           for (const musa_tle::PipeReaderDrainSource &source :
@@ -770,7 +820,7 @@ class LowerPipePass
         if (!wait.getIsClosed().use_empty()) {
           Value isClosed;
           if (state->barrierPlan.closeTagPlan) {
-            builder.setInsertionPointAfter(loweredWait);
+            builder.setInsertionPointAfter(loweredWaits.back());
             RankedTensorType loadTensorType = getCloseTagTensorType(
                 wait, builder, {1}, readerParticipant->warpCount);
             isClosed = loadCloseTag(builder, loc, pipeArtifacts, op,

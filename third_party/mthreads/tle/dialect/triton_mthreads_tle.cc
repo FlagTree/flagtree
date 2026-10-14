@@ -884,6 +884,31 @@ void init_triton_musa_tle_ir(py::module m) {
                  resultType, src,
                  self.getBuilder().getI64IntegerAttr(offsetBytes));
            })
+      .def("create_memdesc_subslice",
+           [](TritonOpBuilder &self, mlir::Type resultType, mlir::Value src,
+              std::vector<int32_t> offsets) -> mlir::Value {
+             auto srcType = mlir::dyn_cast<ttg::MemDescType>(src.getType());
+             auto resultTypeMemDesc =
+                 mlir::dyn_cast<ttg::MemDescType>(resultType);
+             if (!srcType || !resultTypeMemDesc)
+               throw py::value_error(
+                   "mthreads TLE memdesc subslice requires memdesc types");
+             if (offsets.size() != srcType.getRank() ||
+                 resultTypeMemDesc.getRank() != srcType.getRank())
+               throw py::value_error(
+                   "mthreads TLE memdesc subslice requires rank-matched "
+                   "offsets");
+             for (auto [dim, offset] : llvm::enumerate(offsets)) {
+               int64_t length = resultTypeMemDesc.getShape()[dim];
+               if (offset < 0 || length <= 0 ||
+                   static_cast<int64_t>(offset) + length >
+                       srcType.getShape()[dim])
+                 throw py::value_error(
+                     "mthreads TLE memdesc subslice is out of bounds");
+             }
+             return self.create<ttg::MemDescSubsliceOp>(resultType, src,
+                                                        offsets);
+           })
       .def("create_memdesc_trans",
            [](TritonOpBuilder &self, mlir::Value src,
               std::vector<int> order) -> mlir::Value {
