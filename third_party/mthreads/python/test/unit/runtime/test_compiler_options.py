@@ -175,3 +175,17 @@ def test_mthreads_can_disable_sqmma_m_split_preference():
     assert enabled.disable_sqmma_m_split_preference is False
     assert disabled.disable_sqmma_m_split_preference is True
     assert disabled.hash() != enabled.hash()
+
+
+def test_mthreads_k128_sqmma_opt_in_is_part_of_options_and_cache_key(
+    monkeypatch,
+):
+    backend = _get_mthreads_backend()
+    monkeypatch.delenv("TRITON_MUSA_ENABLE_K128_SQMMA", raising=False)
+    disabled = backend.parse_options({})
+    monkeypatch.setenv("TRITON_MUSA_ENABLE_K128_SQMMA", "1")
+    enabled = backend.parse_options({})
+
+    assert disabled.k128_sqmma_opt_in == ""
+    assert enabled.k128_sqmma_opt_in == "1"
+    assert enabled.hash() != disabled.hash()

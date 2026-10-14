@@ -818,6 +818,9 @@ class MUSAOptions:
     backend_name: str = "musa"
     supports_noinline: bool = True
     arch: Optional[str] = None
+    # The PH1 narrow K=128 compatibility lowering is opt-in. Record the
+    # process-level switch in the immutable options and cache key.
+    k128_sqmma_opt_in: str = ""
     instrumentation_mode: str = ""
     inplace_alias_pairs: str = ""
 
@@ -842,6 +845,9 @@ class MUSAOptions:
         hash_dict["llc_tool_signature"] = _tool_version_signature(llc_path)
         hash_dict["lld_tool_signature"] = _tool_version_signature(lld_path)
         hash_dict["llc_asm_tool_signature"] = _tool_version_signature(llc_asm_path or "")
+        hash_dict["musa_k128_sqmma_opt_in_live"] = os.getenv(
+            "TRITON_MUSA_ENABLE_K128_SQMMA", ""
+        )
         if hash_dict["extern_libs"]:
             hash_dict["extern_libs"] = tuple((k, file_hash(v)) for k, v in sorted(hash_dict["extern_libs"]))
         key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
@@ -1026,6 +1032,10 @@ class MUSABackend(BaseBackend):
             args["enable_fp8_burst2"] = knobs.musa.enable_fp8_burst2
         if "enable_llvm_compat" not in opts:
             args["enable_llvm_compat"] = knobs.musa.enable_llvm_compat
+        if "k128_sqmma_opt_in" not in opts:
+            args["k128_sqmma_opt_in"] = os.getenv(
+                "TRITON_MUSA_ENABLE_K128_SQMMA", ""
+            )
         maxnreg = opts.get("maxnreg", None)
         if maxnreg is not None and (not isinstance(maxnreg, int) or maxnreg <= 0):
             raise ValueError(f"maxnreg must be a positive integer, got {maxnreg!r}")

@@ -76,6 +76,26 @@ def _tle_sqmma_kernel(out):
 
 
 @triton.jit
+def _tle_sqmma_ph1_bf16_k128_static_kernel(out):
+    a = tle.gpu.alloc(
+        (16, 128),
+        dtype=tl.bfloat16,
+        layout=None,
+        nv_mma_shared_layout=True,
+    )
+    b = tle.gpu.alloc(
+        (128, 64),
+        dtype=tl.bfloat16,
+        layout=None,
+        nv_mma_shared_layout=True,
+    )
+    acc = tle.gpu.wgmma(a, b, tl.zeros((16, 64), dtype=tl.float32))
+    acc = tle.gpu.wgmma_wait(0, acc)
+    offsets = tl.arange(0, 16)[:, None] * 64 + tl.arange(0, 64)[None, :]
+    tl.store(out + offsets, acc)
+
+
+@triton.jit
 def _tle_sqmma_nonzero_wait_kernel(out):
     a = tle.gpu.alloc((128, 64), dtype=tl.float16, layout=None)
     b = tle.gpu.alloc((64, 128), dtype=tl.float16, layout=None)
@@ -612,6 +632,44 @@ def test_mthreads_tle_sqmma_lowers_to_parameterless_wait():
     assert "call void @llvm.musa.sqmma.wait()" in compiled.asm["llir"]
 
 
+def test_mthreads_ph1_bf16_k128_opt_in_lowers_to_two_k64_intrinsics(
+    monkeypatch,
+):
+    monkeypatch.delenv("TRITON_OVERRIDE_ARCH", raising=False)
+    monkeypatch.setenv("TRITON_MUSA_ARCH", "ph1")
+    monkeypatch.setenv("TRITON_MUSA_ENABLE_K128_SQMMA", "1")
+    monkeypatch.setattr(triton.knobs.compilation, "always_compile", True)
+    _tle_sqmma_ph1_bf16_k128_static_kernel.device_caches.clear()
+
+    compiled = compile_musa(
+        _tle_sqmma_ph1_bf16_k128_static_kernel,
+        {"out": "*fp32"},
+        options={"num_warps": 4, "num_stages": 1},
+    )
+    ttgir = compiled.asm["ttgir"]
+    llir = compiled.asm["llir"]
+    assert "instrShape = [16, 64, 128]" in ttgir, ttgir
+    assert "llvm.musa.sqmma.bfmma.m16n64k128.mma" not in llir, llir
+    assert llir.count("@llvm.musa.sqmma.bfmma.m16n64k64.mma(") >= 3, llir
+    assert "call void @llvm.musa.sqmma.wait()" in llir, llir
+
+
+@pytest.mark.parametrize("opt_in", ["", "10", "1debug"])
+def test_mthreads_ph1_bf16_k128_requires_exact_opt_in(monkeypatch, opt_in):
+    monkeypatch.delenv("TRITON_OVERRIDE_ARCH", raising=False)
+    monkeypatch.setenv("TRITON_MUSA_ARCH", "ph1")
+    monkeypatch.setenv("TRITON_MUSA_ENABLE_K128_SQMMA", opt_in)
+    monkeypatch.setattr(triton.knobs.compilation, "always_compile", True)
+    _tle_sqmma_ph1_bf16_k128_static_kernel.device_caches.clear()
+
+    compiled = compile_musa(
+        _tle_sqmma_ph1_bf16_k128_static_kernel,
+        {"out": "*fp32"},
+        options={"num_warps": 4, "num_stages": 1},
+    )
+    assert "instrShape = [16, 64, 128]" not in compiled.asm["ttgir"]
+
+
 def test_mthreads_tle_sqmma_merges_adjacent_equal_pending_waits():
     compiled = compile_musa(_tle_sqmma_dual_wait_kernel, {"out": "*fp32"})
     assert compiled.asm["llir"].count("call void @llvm.musa.sqmma.wait()") == 1
@@ -1009,6 +1067,52 @@ def test_mthreads_tle_sqmma_all_supported_shapes_runtime(
     torch.testing.assert_close(out.cpu(), expected, atol=atol, rtol=rtol)
     intrinsic = f"llvm.musa.sqmma.{intrinsic_tag}.m{m}n{n}k{k}.mma"
     assert intrinsic in kernel.asm["llir"]
+
+
+@pytest.mark.parametrize("m,n", [(16, 64), (64, 16)])
+def test_mthreads_tle_sqmma_ph1_bf16_narrow_k128_runtime(monkeypatch, m, n):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    if not hasattr(torch, "musa") or not torch.musa.is_available():
+        pytest.skip("MUSA device is not available")
+
+    monkeypatch.delenv("TRITON_OVERRIDE_ARCH", raising=False)
+    monkeypatch.setenv("TRITON_MUSA_ARCH", "ph1")
+    monkeypatch.setenv("TRITON_MUSA_ENABLE_K128_SQMMA", "1")
+    monkeypatch.setattr(triton.knobs.compilation, "always_compile", True)
+    _tle_sqmma_all_shapes_runtime_kernel.device_caches.clear()
+
+    k = 128
+    torch.manual_seed(4321)
+    a_cpu = torch.randn((m, k), dtype=torch.float32).to(torch.bfloat16)
+    b_cpu = torch.randn((k, n), dtype=torch.float32).to(torch.bfloat16)
+    a = a_cpu.to("musa")
+    b = b_cpu.to("musa")
+    out = torch.empty((m, n), device="musa", dtype=torch.float32)
+    a_desc = TensorDescriptor.from_tensor(a, block_shape=[m, k])
+    b_desc = TensorDescriptor.from_tensor(b, block_shape=[k, n])
+
+    kernel = _tle_sqmma_all_shapes_runtime_kernel[(1, )](
+        a_desc,
+        b_desc,
+        out,
+        m,
+        n,
+        k,
+        1,
+        2,
+        num_warps=4,
+        num_stages=1,
+    )
+    torch.musa.synchronize()
+
+    expected = torch.matmul(a_cpu.float(), b_cpu.float())
+    torch.testing.assert_close(out.cpu(), expected, atol=3.0e-1, rtol=1.0e-1)
+    assert f"instrShape = [{m}, {n}, 128]" in kernel.asm["ttgir"]
+    assert f"llvm.musa.sqmma.bfmma.m{m}n{n}k128.mma" not in kernel.asm["llir"]
+    assert kernel.asm["llir"].count(
+        f"@llvm.musa.sqmma.bfmma.m{m}n{n}k64.mma("
+    ) >= 3
 
 
 def test_mthreads_tle_sqmma_macro_tile_auto_decomposition_runtime():

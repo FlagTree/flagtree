@@ -65,9 +65,9 @@ selectSqmmaConfig(unsigned m, unsigned n, unsigned k, unsigned numWarps,
         continue;
       for (unsigned instK : kK) {
         if (k % instK != 0 ||
-            !musa::isSupportedSqmma(operandType, operandType,
-                                    musa::SQMMAEltType::f32, instM, instN,
-                                    instK, *sqTraits))
+            !musa::isSupportedSqmmaWithK128Compatibility(
+                operandType, operandType, musa::SQMMAEltType::f32, instM, instN,
+                instK, *sqTraits))
           continue;
         for (unsigned warpsM = 4; warpsM <= numWarps; warpsM *= 2) {
           if (numWarps % warpsM != 0)

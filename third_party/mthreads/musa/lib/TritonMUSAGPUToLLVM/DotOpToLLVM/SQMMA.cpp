@@ -594,7 +594,8 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
 
   const unsigned instM = instrShape[0];
   const unsigned instN = instrShape[1];
-  const unsigned instK = instrShape[2];
+  const unsigned encodedInstK = instrShape[2];
+  unsigned instK = encodedInstK;
 
   Value opA = getDotOperandA(op);
   Value opB = getDotOperandB(op);
@@ -642,8 +643,16 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   if (elemBytes == 0)
     elemBytes = 1;
 
-  if (!isSupportedSqmma(eltTypeA, eltTypeB, eltTypeC, instM, instN, instK,
-                        *sqTraits, layoutA, layoutB, elemBytes, true, true))
+  const bool splitNarrowK128 = sqTraits->arch == triton::musa::MusaArch::PH1 &&
+                               encodedInstK == 128 && eltTypeA == eltTypeB &&
+                               (eltTypeA == triton::musa::SQMMAEltType::f16 ||
+                                eltTypeA == triton::musa::SQMMAEltType::bf16);
+  if (splitNarrowK128)
+    instK = 64;
+
+  if (!isSupportedSqmmaWithK128Compatibility(
+          eltTypeA, eltTypeB, eltTypeC, instM, instN, encodedInstK, *sqTraits,
+          layoutA, layoutB, elemBytes, true, true))
     return op.emitError("MUSA SQMMA: unsupported shape or element type");
   std::string sqmmaIntrinsic =
       triton::musa::lookupSqmmaIntrinsic(eltTypeA, instM, instN, instK);

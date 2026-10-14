@@ -233,9 +233,9 @@ LogicalResult SquadDotOp::verify() {
       sqArch ? triton::musa::getMusaSqmmaArchTraits(*sqArch) : nullptr;
   if (!sqTraits)
     return emitError("SQMMA encoding uses an unsupported MUSA SQMMA version");
-  if (!triton::musa::isSupportedSqmma(getEltTypeA(), getEltTypeB(),
-                                      getEltTypeC(), getM(), getN(), getK(),
-                                      *sqTraits))
+  if (!triton::musa::isSupportedSqmmaWithK128Compatibility(
+          getEltTypeA(), getEltTypeB(), getEltTypeC(), getM(), getN(), getK(),
+          *sqTraits))
     return emitError(
         "SQMMA encoding carries an unsupported PH1 shape/type combination");
   Dialect &dialect = aEncoding.getDialect();
