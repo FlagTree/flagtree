@@ -22,6 +22,7 @@
  */
 
 #include "tle/dialect/include/IR/Dialect.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "tle/dialect/include/IR/Dialect.cpp.inc"
@@ -50,6 +51,18 @@ static bool isWarpSpecializeBody(Region *region) {
   return false;
 }
 
+static bool isInsideWarpSpecializeBody(Region *region) {
+  while (region) {
+    if (isWarpSpecializeBody(region))
+      return true;
+    Operation *parent = region->getParentOp();
+    if (!parent || isa<FunctionOpInterface>(parent))
+      return false;
+    region = parent->getParentRegion();
+  }
+  return false;
+}
+
 struct TleInlinerInterface final : public DialectInlinerInterface {
   using DialectInlinerInterface::DialectInlinerInterface;
 
@@ -59,7 +72,7 @@ struct TleInlinerInterface final : public DialectInlinerInterface {
     // a DSL region into those bodies as one opaque operation; its nested
     // operations remain owned by TLE and are handled by TleDSLRegionInline.
     if (isa<DSLRegionOp>(op))
-      return isWarpSpecializeBody(dest);
+      return isInsideWarpSpecializeBody(dest);
 
     // TLE regions and terminators have their own semantics. Only allow
     // ordinary operations to be cloned with a containing Triton function.

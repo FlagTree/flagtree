@@ -20,6 +20,9 @@
 // SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 // RUN: triton-opt %s -split-input-file -inline -verify-each | FileCheck %s
+// RUN: triton-opt %s -split-input-file -inline -triton-tle-lower-barriers \
+// RUN:   -triton-tle-allocate-named-barriers -verify-each | FileCheck %s \
+// RUN:   --check-prefix=BARRIER
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -112,6 +115,79 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %true = arith.constant true
     %ptr = "tle.local_pointers"(%smem, %c0) : (!ttg.memdesc<16xi32, #shared, #smem, mutable>, i32) -> !tt.ptr<i32, 3>
     %old = tt.atomic_rmw add, relaxed, cta, %ptr, %c1, %true : (!tt.ptr<i32, 3>, i32, i1) -> i32
+    tt.return
+  }
+}
+
+// -----
+
+#slot = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  llvm.func @_sink(!llvm.ptr)
+
+  // Regionful helpers nested in control flow are still part of a
+  // warp-specialize execution region and must be inlined before partition
+  // lowering and named-barrier allocation.
+  // CHECK-LABEL: tt.func public @inline_dsl_region_helper_in_warp_specialize_loop
+  // CHECK: ttg.warp_specialize
+  // CHECK: partition0
+  // CHECK: scf.for
+  // CHECK: scf.if
+  // CHECK-NOT: tt.call @dsl_region_ws_loop_worker
+  // CHECK: tle.barrier.wait
+  // CHECK: "tle.dsl_region"
+  // CHECK: llvm.call @_sink
+  // CHECK: ttg.warp_return
+  // CHECK-NOT: tt.func private @dsl_region_ws_loop_worker
+  // BARRIER-LABEL: tt.func public @inline_dsl_region_helper_in_warp_specialize_loop
+  // BARRIER: partition0
+  // BARRIER: scf.for
+  // BARRIER: scf.if
+  // BARRIER: %[[ID:.+]] = arith.constant 3 : i32
+  // BARRIER: ttng.wait_barrier_named %[[ID]],
+  // BARRIER-NOT: tt.func private @dsl_region_ws_loop_worker
+  tt.func public @inline_dsl_region_helper_in_warp_specialize_loop(
+      %arg0: !tt.ptr<i32>,
+      %slot: !ttg.memdesc<1xi64, #slot, #smem, mutable>) {
+    ttg.warp_specialize(%arg0, %slot) attributes {requestedRegisters = array<i32: 48>}
+    default {
+      ttg.warp_yield
+    }
+    partition0(%capture: !tt.ptr<i32>,
+               %barrier: !ttg.memdesc<1xi64, #slot, #smem, mutable>) num_warps(2) {
+      %c0 = arith.constant 0 : index
+      %c1 = arith.constant 1 : index
+      %c2 = arith.constant 2 : index
+      scf.for %i = %c0 to %c2 step %c1 {
+        %cond = arith.cmpi eq, %i, %c0 : index
+        scf.if %cond {
+          tt.call @dsl_region_ws_loop_worker(%capture, %barrier)
+              : (!tt.ptr<i32>, !ttg.memdesc<1xi64, #slot, #smem, mutable>) -> ()
+        }
+        scf.yield
+      }
+      ttg.warp_return
+    } : (!tt.ptr<i32>, !ttg.memdesc<1xi64, #slot, #smem, mutable>) -> ()
+    tt.return
+  }
+
+  tt.func private @dsl_region_ws_loop_worker(
+      %arg0: !tt.ptr<i32>,
+      %barrier: !ttg.memdesc<1xi64, #slot, #smem, mutable>)
+      attributes {noinline = false, "ttg.num-warps" = 2 : i32} {
+    tle.barrier.wait %barrier {backend = "named", named_id = 16 : i32,
+        named_num_threads = 64 : i32}
+        : !ttg.memdesc<1xi64, #slot, #smem, mutable>
+    %ptr = "tle.dsl_region"(%arg0) ({
+    ^bb0(%input: !tt.ptr<i32>):
+      %raw = "tle.extract_ptr"(%input) : (!tt.ptr<i32>) -> !llvm.ptr
+      "tle.yield"(%raw) : (!llvm.ptr) -> ()
+    }) {arg_dialect = "llvm", output_operand_indices = array<i32: 0>,
+        region_dialect = "llvm", tle_raw.source_id = "inline-ws-loop-test"}
+        : (!tt.ptr<i32>) -> !llvm.ptr
+    llvm.call @_sink(%ptr) : (!llvm.ptr) -> ()
     tt.return
   }
 }
