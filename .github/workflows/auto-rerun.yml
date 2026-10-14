@@ -61,6 +61,8 @@ on:
       - "TileIR3.6-Build-And-Test"
       - "Tsingmicro3.6-Build-And-Test"
       - "Xpu3.6-Build-And-Test"
+      - "Xpu3.6-Gems-Baseline"
+      - "Xpu3.6-Gems-Test"
     types: [completed]
 
 permissions:
