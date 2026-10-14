@@ -48,6 +48,56 @@ def _pipe_producer(writer, desc, BLOCK: tl.constexpr, ITERATIONS: tl.constexpr):
 
 
 @triton.jit
+def _constant_expr_pipe_consumer(reader, out, ITERATIONS: tl.constexpr):
+    for iteration in tl.range(0, ITERATIONS + 0, num_stages=1):
+        wait = reader.wait(iteration)
+        tl.store(out + iteration, iteration + tl.where(wait.is_closed, 1000, 0))
+        reader.release(iteration)
+
+
+@triton.jit
+def _constant_expr_pipe_producer(
+    writer,
+    desc,
+    BLOCK: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+):
+    for iteration in tl.range(0, ITERATIONS + 0, num_stages=1):
+        slot = writer.acquire(iteration)
+        tle.gpu.copy(desc, slot.data, (BLOCK,), (iteration * BLOCK,))
+        writer.commit(iteration)
+
+
+@triton.jit
+def _constant_expr_pipe_kernel(
+    desc,
+    out,
+    STAGES: tl.constexpr,
+    BLOCK: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+):
+    smem = tle.gpu.alloc(
+        (STAGES, BLOCK),
+        dtype=tl.float16,
+        layout=None,
+        scope=tle.gpu.smem,
+        nv_mma_shared_layout=False,
+    )
+    pipe = tle.pipe(capacity=STAGES, scope="cta", data=smem)
+    tle.gpu.warp_specialize(
+        [
+            (_constant_expr_pipe_consumer, (pipe.reader(), out, ITERATIONS)),
+            (
+                _constant_expr_pipe_producer,
+                (pipe.writer(), desc, BLOCK, ITERATIONS),
+            ),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
+@triton.jit
 def _pipe_tme_store_consumer(reader, desc, BLOCK: tl.constexpr, ITERATIONS: tl.constexpr):
     for iteration in tl.static_range(0, ITERATIONS):
         wait = reader.wait(iteration)
@@ -2938,6 +2988,7 @@ def _compile_invalid_pipeline(
     kind=None,
     desc_type="tensordesc<fp16[128]>",
     signature=None,
+    constant_arithmetic_bounds_path=None,
 ):
     target, backend = mthreads_backend()
     options = backend.parse_options({"num_warps": 16, "num_stages": 1})
@@ -2973,7 +3024,82 @@ def _compile_invalid_pipeline(
     backend.add_stages(compiler_stages, options, Language.TRITON)
     metadata = {}
     module = compiler_stages["ttir"](module, metadata)
+    if constant_arithmetic_bounds_path is not None:
+        # Do this after the Python frontend: a constexpr expression such as
+        # ``ITERATIONS + 0`` is folded before it reaches MLIR and therefore
+        # does not exercise the pipeliner's scalar constant evaluator.
+        loop_header = re.compile(
+            r"^(?P<indent>\s*)scf\.for (?P<iv>%[-\w.$]+) = "
+            r"(?P<lb>%[-\w.$]+) to (?P<ub>%[-\w.$]+) step "
+            r"(?P<step>%[-\w.$]+)(?P<tail>\s+:\s+(?P<ty>index|i\d+)\s*\{.*)$"
+        )
+        rewritten = []
+        rewritten_loops = 0
+        for line in str(module).splitlines():
+            match = loop_header.match(line)
+            if match:
+                arithmetic_bound = f"%constant_arithmetic_ub_{rewritten_loops}"
+                rewritten.append(
+                    f"{match['indent']}{arithmetic_bound} = arith.addi "
+                    f"{match['ub']}, {match['lb']} : {match['ty']}"
+                )
+                line = (
+                    f"{match['indent']}scf.for {match['iv']} = {match['lb']} "
+                    f"to {arithmetic_bound} step {match['step']}{match['tail']}"
+                )
+                rewritten_loops += 1
+            rewritten.append(line)
+        assert rewritten_loops >= 2
+        constant_arithmetic_bounds_path.write_text("\n".join(rewritten))
+        module = ir.parse_mlir_module(str(constant_arithmetic_bounds_path), context)
+        # Parsed modules do not expose the convenience ``context`` property
+        # expected by the backend stage wrapper.  Run the exact front half of
+        # that stage explicitly, through TLE pipe lowering, using the context
+        # that parsed the fixture.
+        pm = ir.pass_manager(context)
+        passes = libtriton.passes
+        mthreads_passes = libtriton.mthreads.passes.ttgpuir
+        passes.ttir.add_convert_to_ttgpuir(
+            pm,
+            "musa:ph1",
+            options.num_warps,
+            options.warp_size,
+            options.num_ctas,
+        )
+        passes.ttgpuir.add_coalesce(pm)
+        passes.ttgpuir.add_f32_dot_tc(pm, True)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_optimize_thread_locality(pm)
+        for pass_name in (
+            "add_tle_optimize_local_pointer_async_stores",
+            "add_tle_early_assign_memory_space",
+            "add_tle_select_encodings",
+            "add_tle_lower_exclusive_cumsum",
+            "add_tle_insert_local_pointer_barriers",
+            "add_tle_optimize_local_pointer_loads",
+            "add_tle_optimize_local_pointer_stores",
+            "add_tle_lower_sqmma",
+        ):
+            if hasattr(mthreads_passes, pass_name):
+                getattr(mthreads_passes, pass_name)(pm)
+        mthreads_passes.add_tle_lower_pipe(pm)
+        pm.run(module, "constant_arithmetic_pipe_bounds")
+        return module
     return compiler_stages["ttgir"](module, metadata)
+
+
+def test_mthreads_pipeline_recognizes_constant_arithmetic_loop_bounds(tmp_path):
+    fixture_path = tmp_path / "constant_arithmetic_bounds.ttir"
+    module = _compile_invalid_pipeline(
+        _constant_expr_pipe_kernel,
+        constant_arithmetic_bounds_path=fixture_path,
+    )
+    fixture = fixture_path.read_text()
+    assert fixture.count("arith.addi") >= 2, fixture
+    assert fixture.count("to %constant_arithmetic_ub_") >= 2, fixture
+    ttgir = str(module)
+    assert "ttg.mask" not in ttgir, ttgir
+    assert "musa_tle.pipe." not in ttgir, ttgir
 
 
 def _assert_pipe_lowering_clean(compiled, *, static_ws=False, num_warps=None):

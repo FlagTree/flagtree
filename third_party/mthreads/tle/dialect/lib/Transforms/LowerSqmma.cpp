@@ -15,6 +15,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
@@ -35,8 +36,8 @@ constexpr llvm::StringLiteral
 constexpr llvm::StringLiteral kExplicitSqmmaAttr("musa_tle.explicit_sqmma");
 constexpr llvm::StringLiteral kEnableEncodingRematerializationAttr(
     "tle.enable_encoding_rematerialization");
-constexpr llvm::StringLiteral kDisableMSplitPreferenceAttr(
-    "musa_tle.disable_sqmma_m_split_preference");
+constexpr llvm::StringLiteral
+    kDisableMSplitPreferenceAttr("musa_tle.disable_sqmma_m_split_preference");
 
 struct SelectedSqmmaConfig {
   SmallVector<unsigned, 3> instrShape;
@@ -85,8 +86,7 @@ selectSqmmaConfig(unsigned m, unsigned n, unsigned k, unsigned numWarps,
           // inside one squad so the reduction never crosses warps. Finer M
           // splits (instM 16) measure slower and are never preferred.
           bool preferMSplit = !disableMSplitPreference && warpsN == 1 &&
-                              instM >= 32 && best &&
-                              best->warpsPerCTA[1] != 1;
+                              instM >= 32 && best && best->warpsPerCTA[1] != 1;
           if (!best || count < bestCount ||
               (count == bestCount &&
                (volume > bestVolume ||
@@ -233,8 +233,7 @@ static LogicalResult updateOperandLayout(musa_tle::SqmmaOp op,
         "requires layout=None and nv_mma_shared_layout=True for initial "
         "mthreads TLE SQMMA operands");
 
-  SmallVector<int64_t> physicalShape =
-      musa::getMemDescPhysicalShape(operandTy);
+  SmallVector<int64_t> physicalShape = musa::getMemDescPhysicalShape(operandTy);
   auto order = musa::getSharedOrder(operandTy.getEncoding(), physicalShape);
   auto cga = ttg::getCGALayout(operandTy.getEncoding());
   // Use the current SQMMA attribute API directly.  A DotOperandEncodingAttr
@@ -306,9 +305,9 @@ static LogicalResult updateOperandLayout(musa_tle::SqmmaOp op,
       stageAllocShape.append(trailingAllocShape.begin(),
                              trailingAllocShape.end());
     }
-    stageTy = ttg::MemDescType::get(
-        stageShape, rootTy.getElementType(), landingEncoding,
-        rootTy.getMemorySpace(), rootTy.getMutableMemory(), stageAllocShape);
+    stageTy = ttg::MemDescType::get(stageShape, rootTy.getElementType(),
+                                    landingEncoding, rootTy.getMemorySpace(),
+                                    rootTy.getMutableMemory(), stageAllocShape);
   }
   root.getResult().setType(newRootTy);
   landing.setType(landingTy);
@@ -372,6 +371,86 @@ static LogicalResult updateOperandLayout(musa_tle::SqmmaOp op,
   return success();
 }
 
+// A predicate around an async SQMMA is represented as an scf.if result. The
+// result is safe only when every branch stays on the same accumulator path and
+// the converged value reaches a completion boundary.
+static bool isAllowedAsyncIfValue(Value value, musa_tle::SqmmaOp root,
+                                  llvm::SmallPtrSetImpl<void *> &visited) {
+  if (!value || !visited.insert(value.getAsOpaquePointer()).second)
+    return false;
+  if (value == root.getD() || value == root.getC())
+    return true;
+
+  auto result = dyn_cast<OpResult>(value);
+  if (!result)
+    return false;
+  Operation *def = result.getOwner();
+  if (auto dot = dyn_cast<musa_tle::SqmmaOp>(def))
+    return dot.getC() == root.getC();
+  if (auto wait = dyn_cast<musa_tle::SqmmaWaitOp>(def)) {
+    unsigned idx = result.getResultNumber();
+    return idx == 0 && isAllowedAsyncIfValue(wait.getInput(), root, visited);
+  }
+  if (auto ifOp = dyn_cast<scf::IfOp>(def)) {
+    unsigned idx = result.getResultNumber();
+    auto checkRegion = [&](Region &region) {
+      if (region.empty())
+        return true;
+      auto yield = dyn_cast<scf::YieldOp>(region.front().getTerminator());
+      if (!yield || idx >= yield.getNumOperands())
+        return false;
+      llvm::SmallPtrSet<void *, 16> branchVisited;
+      return isAllowedAsyncIfValue(yield.getOperand(idx), root, branchVisited);
+    };
+    return checkRegion(ifOp.getThenRegion()) &&
+           (!ifOp.elseBlock() || checkRegion(ifOp.getElseRegion()));
+  }
+  return false;
+}
+
+static bool hasAsyncCompletionBoundary(Value value, musa_tle::SqmmaOp root,
+                                       llvm::SmallPtrSetImpl<void *> &visited) {
+  if (!value || !visited.insert(value.getAsOpaquePointer()).second)
+    return false;
+
+  bool foundBoundary = false;
+  for (OpOperand &use : value.getUses()) {
+    Operation *user = use.getOwner();
+    if (isa<musa_tle::SqmmaWaitOp>(user)) {
+      foundBoundary = true;
+      continue;
+    }
+    if (isa<musa_tle::SqmmaOp>(user)) {
+      if (use.getOperandNumber() == 2)
+        continue;
+      return false;
+    }
+    if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+      auto ifOp = dyn_cast<scf::IfOp>(yield->getParentOp());
+      if (!ifOp) {
+        auto forOp = dyn_cast<scf::ForOp>(yield->getParentOp());
+        unsigned idx = use.getOperandNumber();
+        if (forOp && idx < forOp.getNumRegionIterArgs() &&
+            root.getC() == forOp.getRegionIterArg(idx))
+          return true;
+        continue;
+      }
+      unsigned idx = use.getOperandNumber();
+      if (idx >= ifOp.getNumResults())
+        return false;
+      llvm::SmallPtrSet<void *, 16> valueVisited;
+      if (!isAllowedAsyncIfValue(ifOp.getResult(idx), root, valueVisited))
+        return false;
+      llvm::SmallPtrSet<void *, 16> nestedVisited;
+      if (hasAsyncCompletionBoundary(ifOp.getResult(idx), root, nestedVisited))
+        foundBoundary = true;
+      continue;
+    }
+    return false;
+  }
+  return foundBoundary;
+}
+
 static LogicalResult verifyAsyncUses(musa_tle::SqmmaOp op) {
   for (OpOperand &use : op.getD().getUses()) {
     Operation *user = use.getOwner();
@@ -379,11 +458,389 @@ static LogicalResult verifyAsyncUses(musa_tle::SqmmaOp op) {
       if (use.getOperandNumber() == 2)
         continue;
     }
-    if (isa<musa_tle::SqmmaWaitOp, scf::YieldOp, scf::ForOp>(user))
+    if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+      if (auto ifOp = dyn_cast<scf::IfOp>(yield->getParentOp())) {
+        unsigned idx = use.getOperandNumber();
+        if (idx < ifOp.getNumResults()) {
+          llvm::SmallPtrSet<void *, 16> valueVisited;
+          llvm::SmallPtrSet<void *, 16> boundaryVisited;
+          if (isAllowedAsyncIfValue(ifOp.getResult(idx), op, valueVisited) &&
+              hasAsyncCompletionBoundary(ifOp.getResult(idx), op,
+                                         boundaryVisited))
+            continue;
+        }
+      }
+      auto forOp = dyn_cast<scf::ForOp>(yield->getParentOp());
+      unsigned resultIndex = use.getOperandNumber();
+      if (!forOp || resultIndex >= forOp.getNumRegionIterArgs() ||
+          op.getC() != forOp.getRegionIterArg(resultIndex) ||
+          op->getNextNode() != yield.getOperation())
+        return op.emitOpError(
+            "async result must be consumed by musa_tle.sqmma_wait before "
+            "non-loop scf.yield");
+      continue;
+    }
+    if (isa<musa_tle::SqmmaWaitOp, scf::ForOp>(user))
       continue;
     return op.emitOpError(
         "async result must be consumed by musa_tle.sqmma_wait before "
         "ordinary tensor use");
+  }
+  return success();
+}
+
+// Complete a direct branch-local async result before it crosses the SCF
+// boundary. This remains deliberately conservative and does not accept
+// arbitrary branch values.
+static void
+materializeBranchLocalWaits(ArrayRef<musa_tle::SqmmaOp> dots,
+                            SmallVectorImpl<Operation *> &newWaits) {
+  for (musa_tle::SqmmaOp dot : dots) {
+    SmallVector<OpOperand *, 4> branchUses;
+    for (OpOperand &use : dot.getD().getUses()) {
+      auto yield = dyn_cast<scf::YieldOp>(use.getOwner());
+      if (yield && isa<scf::IfOp>(yield->getParentOp()))
+        branchUses.push_back(&use);
+    }
+    for (OpOperand *use : branchUses) {
+      auto yield = cast<scf::YieldOp>(use->getOwner());
+      auto ifOp = cast<scf::IfOp>(yield->getParentOp());
+      unsigned idx = use->getOperandNumber();
+      if (idx >= ifOp.getNumResults())
+        continue;
+      if (auto previous =
+              dyn_cast_or_null<musa_tle::SqmmaWaitOp>(yield->getPrevNode())) {
+        if (previous.getInput() == dot.getD())
+          continue;
+      }
+
+      OpBuilder builder(yield);
+      auto wait = musa_tle::SqmmaWaitOp::create(
+          builder, dot.getLoc(), dot.getD().getType(), dot.getD(),
+          builder.getI32IntegerAttr(0));
+      yield->setOperand(idx, wait.getOutput());
+      newWaits.push_back(wait.getOperation());
+    }
+  }
+}
+
+// A nested scf.if result is synchronous when every branch yields either an
+// already-completed inner if result, an explicit SQMMA wait result, or a block
+// argument which carries no newly-issued asynchronous work. Propagate that
+// proof outwards to a fixed point so an outer source-level wait is erased
+// rather than incorrectly lowered as another hardware wait.
+static void
+propagateSynchronousIfResults(Operation *root,
+                              llvm::DenseSet<Value> &synchronousIfResults) {
+  auto isKnownSynchronous = [&](Value value) {
+    if (synchronousIfResults.contains(value))
+      return true;
+    if (value.getDefiningOp<musa_tle::SqmmaWaitOp>())
+      return true;
+    if (value.getDefiningOp<musa_tle::SqmmaOp>())
+      return false;
+    if (auto result = dyn_cast<OpResult>(value)) {
+      if (isa<scf::IfOp, scf::ForOp>(result.getOwner()))
+        return false;
+    }
+    if (auto blockArg = dyn_cast<BlockArgument>(value))
+      return !isa_and_nonnull<scf::ForOp>(blockArg.getOwner()->getParentOp());
+    return value.getDefiningOp() != nullptr;
+  };
+
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    root->walk([&](scf::ForOp forOp) {
+      for (unsigned idx = 0; idx < forOp.getNumRegionIterArgs(); ++idx) {
+        Value iterArg = forOp.getRegionIterArg(idx);
+        if (!synchronousIfResults.contains(iterArg) &&
+            isKnownSynchronous(forOp.getInitArgs()[idx])) {
+          synchronousIfResults.insert(iterArg);
+          changed = true;
+        }
+      }
+    });
+    root->walk([&](scf::IfOp ifOp) {
+      for (unsigned idx = 0; idx < ifOp.getNumResults(); ++idx) {
+        Value result = ifOp.getResult(idx);
+        if (synchronousIfResults.contains(result))
+          continue;
+
+        bool sawCompletedPath = false;
+        auto isCompletedRegion = [&](Region &region) {
+          if (region.empty())
+            return false;
+          auto yield = dyn_cast<scf::YieldOp>(region.front().getTerminator());
+          if (!yield || idx >= yield.getNumOperands())
+            return false;
+          Value yielded = yield.getOperand(idx);
+          if (synchronousIfResults.contains(yielded)) {
+            sawCompletedPath = true;
+            return true;
+          }
+          if (yielded.getDefiningOp<musa_tle::SqmmaWaitOp>()) {
+            sawCompletedPath = true;
+            return true;
+          }
+          return isKnownSynchronous(yielded);
+        };
+
+        if (isCompletedRegion(ifOp.getThenRegion()) && ifOp.elseBlock() &&
+            isCompletedRegion(ifOp.getElseRegion()) && sawCompletedPath) {
+          synchronousIfResults.insert(result);
+          changed = true;
+        }
+      }
+    });
+    root->walk([&](scf::ForOp forOp) {
+      auto yield = dyn_cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      if (!yield)
+        return;
+      for (unsigned idx = 0; idx < forOp.getNumResults(); ++idx) {
+        Value result = forOp.getResult(idx);
+        if (synchronousIfResults.contains(result) ||
+            !synchronousIfResults.contains(forOp.getRegionIterArg(idx)) ||
+            !isKnownSynchronous(yield.getOperand(idx)))
+          continue;
+        synchronousIfResults.insert(result);
+        changed = true;
+      }
+    });
+  }
+}
+
+static bool isMmaEncoded(Value value) {
+  auto type = dyn_cast<RankedTensorType>(value.getType());
+  return type &&
+         isa_and_nonnull<ttg::MUSASqmmaEncodingAttr>(type.getEncoding());
+}
+
+// Prepare the strict `%next = sqmma ..., %iter; yield %next` form before the
+// TLE operation is replaced. The later MTGPU conversion then carries the
+// accumulator through SCF as an opaque native value.
+static LogicalResult prepareDirectLoopCarriedSqmmaTypes(
+    ArrayRef<musa_tle::SqmmaOp> dots,
+    DenseMap<musa_tle::SqmmaOp, ttg::MUSASqmmaEncodingAttr> &encodings) {
+  for (musa_tle::SqmmaOp dot : dots) {
+    auto mmaEncoding = encodings.find(dot);
+    if (mmaEncoding == encodings.end())
+      continue;
+
+    for (OpOperand &use : dot.getD().getUses()) {
+      auto yield = dyn_cast<scf::YieldOp>(use.getOwner());
+      if (!yield || dot->getNextNode() != yield.getOperation())
+        continue;
+      auto forOp = dyn_cast<scf::ForOp>(yield->getParentOp());
+      if (!forOp)
+        continue;
+
+      unsigned idx = use.getOperandNumber();
+      if (idx >= forOp.getNumRegionIterArgs() ||
+          dot.getC() != forOp.getRegionIterArg(idx))
+        continue;
+
+      bool isolated = true;
+      for (OpOperand &iterUse : forOp.getRegionIterArg(idx).getUses()) {
+        if (iterUse.getOwner() == dot.getOperation() &&
+            iterUse.getOperandNumber() == 2)
+          continue;
+        isolated = iterUse.getOwner() == yield.getOperation() &&
+                   iterUse.getOperandNumber() == idx;
+        if (!isolated)
+          break;
+      }
+      if (!isolated)
+        return dot.emitOpError(
+            "direct loop-carried accumulator has unsupported additional "
+            "users");
+
+      auto oldAccTy = dyn_cast<RankedTensorType>(dot.getC().getType());
+      auto oldLoopResultTy =
+          dyn_cast<RankedTensorType>(forOp.getResult(idx).getType());
+      if (!oldAccTy || !oldLoopResultTy)
+        return dot.emitOpError(
+            "direct loop-carried accumulator must be a ranked tensor");
+      auto nativeTy = RankedTensorType::get(
+          oldAccTy.getShape(), oldAccTy.getElementType(), mmaEncoding->second);
+
+      Value init = forOp.getInitArgs()[idx];
+      if (init.getType() != nativeTy) {
+        OpBuilder builder(forOp);
+        Value converted =
+            ttg::ConvertLayoutOp::create(builder, dot.getLoc(), nativeTy, init);
+        forOp.getInitArgsMutable()[idx].assign(converted);
+      }
+      forOp.getRegionIterArg(idx).setType(nativeTy);
+      forOp.getResult(idx).setType(nativeTy);
+      dot.getResult().setType(nativeTy);
+
+      SmallVector<OpOperand *> externalUses;
+      for (OpOperand &resultUse : forOp.getResult(idx).getUses()) {
+        if (!isa<musa_tle::SqmmaWaitOp>(resultUse.getOwner()))
+          externalUses.push_back(&resultUse);
+      }
+      if (!externalUses.empty()) {
+        OpBuilder builder(forOp);
+        builder.setInsertionPointAfter(forOp);
+        Value converted = ttg::ConvertLayoutOp::create(
+            builder, dot.getLoc(), oldLoopResultTy, forOp.getResult(idx));
+        for (OpOperand *resultUse : externalUses)
+          resultUse->set(converted);
+      }
+    }
+  }
+  return success();
+}
+
+// Prepare a loop-carried SQMMA chain whose completion wait is required by a
+// pipe slot release:
+//
+//   iter -> dot -> dot ... -> wait -> scf.yield
+//
+// Every value on the path must be single-use and every dot must select the
+// same accumulator encoding. Other control-flow and ordinary tensor users
+// remain fail-closed.
+static LogicalResult prepareWaitLoopCarriedSqmmaTypes(
+    ArrayRef<musa_tle::SqmmaOp> dots,
+    DenseMap<musa_tle::SqmmaOp, ttg::MUSASqmmaEncodingAttr> &encodings) {
+  for (musa_tle::SqmmaOp rootDot : dots) {
+    auto mmaEncoding = encodings.find(rootDot);
+    if (mmaEncoding == encodings.end())
+      continue;
+
+    for (Operation *ancestor = rootDot->getParentOp(); ancestor;
+         ancestor = ancestor->getParentOp()) {
+      auto forOp = dyn_cast<scf::ForOp>(ancestor);
+      if (!forOp || rootDot->getBlock() != forOp.getBody())
+        continue;
+
+      auto yield = dyn_cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      if (!yield)
+        continue;
+
+      for (unsigned idx = 0; idx < forOp.getNumRegionIterArgs(); ++idx) {
+        Value iterArg = forOp.getRegionIterArg(idx);
+        auto oldAccTy = dyn_cast<RankedTensorType>(iterArg.getType());
+        if (!oldAccTy || isMmaEncoded(iterArg))
+          continue;
+        auto sourceLoopResultTy =
+            dyn_cast<RankedTensorType>(forOp.getResult(idx).getType());
+        if (!sourceLoopResultTy)
+          continue;
+
+        Value current = yield.getOperand(idx);
+        SmallVector<musa_tle::SqmmaOp, 8> chainDots;
+        SmallVector<musa_tle::SqmmaWaitOp, 8> chainWaits;
+        llvm::SmallPtrSet<void *, 32> visited;
+        bool valid = true;
+        while (current != iterArg) {
+          if (!visited.insert(current.getAsOpaquePointer()).second) {
+            valid = false;
+            break;
+          }
+          auto result = dyn_cast<OpResult>(current);
+          if (!result) {
+            valid = false;
+            break;
+          }
+          Operation *def = result.getOwner();
+          if (auto wait = dyn_cast<musa_tle::SqmmaWaitOp>(def)) {
+            if (result.getResultNumber() != 0 ||
+                wait->getBlock() != forOp.getBody()) {
+              valid = false;
+              break;
+            }
+            chainWaits.push_back(wait);
+            current = wait.getInput();
+            continue;
+          }
+          auto dot = dyn_cast<musa_tle::SqmmaOp>(def);
+          if (!dot || result.getResultNumber() != 0 ||
+              dot->getBlock() != forOp.getBody()) {
+            valid = false;
+            break;
+          }
+          chainDots.push_back(dot);
+          current = dot.getC();
+        }
+        if (!valid || chainDots.empty() || chainDots.back() != rootDot)
+          continue;
+
+        for (musa_tle::SqmmaOp dot : chainDots) {
+          unsigned uses =
+              std::distance(dot.getD().use_begin(), dot.getD().use_end());
+          if (uses != 1) {
+            valid = false;
+            break;
+          }
+          auto dotEncoding = encodings.find(dot);
+          if (dotEncoding == encodings.end() ||
+              dotEncoding->second != mmaEncoding->second) {
+            valid = false;
+            break;
+          }
+        }
+        for (musa_tle::SqmmaWaitOp wait : chainWaits) {
+          if (std::distance(wait.getOutput().use_begin(),
+                            wait.getOutput().use_end()) != 1) {
+            valid = false;
+            break;
+          }
+        }
+        if (!valid)
+          continue;
+
+        unsigned iterUses = 0;
+        for (OpOperand &use : iterArg.getUses()) {
+          if (use.getOwner() == chainDots.back().getOperation() &&
+              use.getOperandNumber() == 2)
+            ++iterUses;
+          else {
+            valid = false;
+            break;
+          }
+        }
+        if (!valid || iterUses != 1)
+          continue;
+
+        auto nativeTy = RankedTensorType::get(oldAccTy.getShape(),
+                                              oldAccTy.getElementType(),
+                                              mmaEncoding->second);
+        Value init = forOp.getInitArgs()[idx];
+        if (init.getType() != nativeTy) {
+          OpBuilder builder(forOp);
+          Value converted = ttg::ConvertLayoutOp::create(
+              builder, rootDot.getLoc(), nativeTy, init);
+          forOp.getInitArgsMutable()[idx].assign(converted);
+        }
+        forOp.getRegionIterArg(idx).setType(nativeTy);
+        forOp.getResult(idx).setType(nativeTy);
+        for (musa_tle::SqmmaOp dot : chainDots)
+          dot.getResult().setType(nativeTy);
+        for (musa_tle::SqmmaWaitOp wait : chainWaits) {
+          wait.getInput().setType(nativeTy);
+          wait.getOutput().setType(nativeTy);
+        }
+
+        SmallVector<OpOperand *> externalUses;
+        for (OpOperand &use : forOp.getResult(idx).getUses()) {
+          if (!isa<musa_tle::SqmmaWaitOp>(use.getOwner()))
+            externalUses.push_back(&use);
+        }
+        if (!externalUses.empty()) {
+          OpBuilder builder(forOp);
+          builder.setInsertionPointAfter(forOp);
+          Value converted = ttg::ConvertLayoutOp::create(
+              builder, rootDot.getLoc(), sourceLoopResultTy,
+              forOp.getResult(idx));
+          for (OpOperand *use : externalUses)
+            use->set(converted);
+        }
+        break;
+      }
+      break;
+    }
   }
   return success();
 }
@@ -413,6 +870,15 @@ struct TritonMUSAGPUTLELowerSqmmaPass
       module->setAttr(kEnableEncodingRematerializationAttr,
                       UnitAttr::get(module.getContext()));
 
+    // A native asynchronous accumulator cannot cross an SCF branch as an
+    // ordinary tensor. Complete direct branch-local values before verifying
+    // and lowering the surrounding chain.
+    llvm::DenseSet<Value> synchronousIfResults;
+    SmallVector<Operation *> branchLocalWaits;
+    materializeBranchLocalWaits(dots, branchLocalWaits);
+    propagateSynchronousIfResults(module, synchronousIfResults);
+    worklist.append(branchLocalWaits.begin(), branchLocalWaits.end());
+
     DenseMap<musa_tle::SqmmaOp, ttg::MUSASqmmaEncodingAttr> encodings;
     for (musa_tle::SqmmaOp dot : dots) {
       if (failed(verifyAsyncUses(dot)))
@@ -425,10 +891,9 @@ struct TritonMUSAGPUTLELowerSqmmaPass
         return signalPassFailure();
       }
       unsigned numWarps = ttg::maybeLookupNumWarps(dot).value_or(0);
-      auto config =
-          selectSqmmaConfig(aTy.getShape()[0], bTy.getShape()[1],
-                            aTy.getShape()[1], numWarps, *operandType,
-                            disableMSplitPreference);
+      auto config = selectSqmmaConfig(aTy.getShape()[0], bTy.getShape()[1],
+                                      aTy.getShape()[1], numWarps, *operandType,
+                                      disableMSplitPreference);
       if (!config) {
         dot.emitOpError("cannot select a supported SQMMA configuration");
         return signalPassFailure();
@@ -447,10 +912,14 @@ struct TritonMUSAGPUTLELowerSqmmaPass
         return signalPassFailure();
     }
 
+    if (failed(prepareDirectLoopCarriedSqmmaTypes(dots, encodings)) ||
+        failed(prepareWaitLoopCarriedSqmmaTypes(dots, encodings)))
+      return signalPassFailure();
+
     DenseMap<Value, Value> nativeAccumulators;
     llvm::SmallPtrSet<Operation *, 8> loweredWaits;
     for (Operation *candidate : worklist) {
-      if (loweredWaits.contains(candidate))
+      if (!candidate || loweredWaits.contains(candidate))
         continue;
       OpBuilder builder(candidate);
       if (auto dot = dyn_cast<musa_tle::SqmmaOp>(candidate)) {
@@ -458,8 +927,13 @@ struct TritonMUSAGPUTLELowerSqmmaPass
         auto nativeTy = RankedTensorType::get(
             oldAccTy.getShape(), oldAccTy.getElementType(), encodings[dot]);
         Value nativeAcc = nativeAccumulators.lookup(dot.getC());
-        if (!nativeAcc)
-          nativeAcc = dot.getC();
+        if (!nativeAcc) {
+          if (isMmaEncoded(dot.getC()))
+            nativeAcc = dot.getC();
+          else
+            nativeAcc = ttg::ConvertLayoutOp::create(builder, dot.getLoc(),
+                                                     nativeTy, dot.getC());
+        }
         // An explicit SQMMA layout can describe another instruction shape.
         // Being MMA-encoded alone does not make its register distribution
         // compatible with this dot's selected accumulator type.
@@ -482,6 +956,19 @@ struct TritonMUSAGPUTLELowerSqmmaPass
             static_cast<int32_t>(dot.getInputPrecision()), 0);
         nativeDot->setAttr(kExplicitSqmmaAttr, builder.getUnitAttr());
         nativeAccumulators[dot.getD()] = nativeDot.getD();
+
+        // A direct loop-carried dot has no source wait. Redirect its yield to
+        // the native result before the TLE operation is erased below.
+        for (OpOperand &use : dot.getD().getUses()) {
+          auto yield = dyn_cast<scf::YieldOp>(use.getOwner());
+          if (!yield || dot->getNextNode() != yield.getOperation())
+            continue;
+          auto forOp = dyn_cast<scf::ForOp>(yield->getParentOp());
+          unsigned idx = use.getOperandNumber();
+          if (forOp && idx < forOp.getNumRegionIterArgs() &&
+              dot.getC() == forOp.getRegionIterArg(idx))
+            use.set(nativeDot.getD());
+        }
         continue;
       }
 
@@ -497,7 +984,11 @@ struct TritonMUSAGPUTLELowerSqmmaPass
 
       SmallVector<Value, 4> nativeInputs;
       for (musa_tle::SqmmaWaitOp adjacentWait : adjacentWaits) {
-        Value nativeInput = nativeAccumulators.lookup(adjacentWait.getInput());
+        Value nativeInput;
+        if (synchronousIfResults.contains(adjacentWait.getInput()))
+          nativeInput = adjacentWait.getInput();
+        else
+          nativeInput = nativeAccumulators.lookup(adjacentWait.getInput());
         if (!nativeInput) {
           adjacentWait.emitOpError(
               "input must be the async result of musa_tle.sqmma");
@@ -505,17 +996,37 @@ struct TritonMUSAGPUTLELowerSqmmaPass
         }
         nativeInputs.push_back(nativeInput);
       }
-      auto nativeWait = musa::SquadDotWaitOp::create(
-          builder, wait.getLoc(), nativeInputs);
+      // A MUSA SQMMA wait is a global completion boundary, not an SSA-local
+      // wait for only the listed accumulators.  Even when every source value
+      // was completed by a branch-local wait, preserve the source wait as an
+      // additional hardware boundary so unrelated outstanding SQMMA cannot
+      // escape it.  Thread synchronous values through that wait as ordinary
+      // SSA passthroughs: the native verifier deliberately rejects a wait
+      // without dependencies.
+      auto nativeWait =
+          musa::SquadDotWaitOp::create(builder, wait.getLoc(), nativeInputs);
       nativeWait->setAttr(kExplicitSqmmaAttr, builder.getUnitAttr());
-      for (auto [index, adjacentWait] : llvm::enumerate(adjacentWaits)) {
-        Value released = ttg::ConvertLayoutOp::create(
-            builder, adjacentWait.getLoc(), adjacentWait.getOutput().getType(),
-            nativeWait.getResult(index));
+      for (auto [nativeResult, adjacentWait] :
+           llvm::zip_equal(nativeWait.getOutputs(), adjacentWaits)) {
+        Value released;
+        if (synchronousIfResults.contains(adjacentWait.getInput())) {
+          released = nativeResult;
+        } else {
+          released = ttg::ConvertLayoutOp::create(
+              builder, adjacentWait.getLoc(),
+              adjacentWait.getOutput().getType(), nativeResult);
+          nativeAccumulators[released] = nativeResult;
+        }
         if (Attribute explicitEncoding =
-                getTleExplicitValueEncoding(adjacentWait.getOutput()))
-          setTleExplicitResultEncoding(released.getDefiningOp(), 0,
-                                       explicitEncoding);
+                getTleExplicitValueEncoding(adjacentWait.getOutput())) {
+          auto releasedResult = dyn_cast<OpResult>(released);
+          if (!releasedResult) {
+            adjacentWait.emitOpError(
+                "lowered SQMMA wait must release an operation result");
+            return signalPassFailure();
+          }
+          setTleExplicitResultEncoding(releasedResult, explicitEncoding);
+        }
         adjacentWait.getOutput().replaceAllUsesWith(released);
         loweredWaits.insert(adjacentWait.getOperation());
       }

@@ -62,6 +62,7 @@ struct SqmmaDescriptorIntrinsicSpec {
   llvm::StringRef intrinsicName;
   Type loadType;
   Type dataType;
+  int64_t elemsPerLeadingGroup;
   Value leadingStrideBytes;
   Value swizzleGranularity;
   Value swizzleStride;
@@ -171,6 +172,7 @@ buildSqmmaDescriptorIntrinsicSpec(Location loc, MemDescType memDescTy,
       intrinsicName,
       loadType,
       dataType,
+      grouping->elemsPerGroupInLeadingDim,
       b.i32_val(static_cast<int32_t>(groupedLeadingWidthBytes)),
       b.i32_val(static_cast<int32_t>(swizzle->swizzleGranularity)),
       b.i32_val(static_cast<int32_t>(swizzle->swizzleStride)),
@@ -194,9 +196,7 @@ public:
     (void)ty;
     ord.assign(matrixView.order.begin(), matrixView.order.end());
     elemBytes = ty.getElementTypeBitWidth() / 8;
-    uint32_t widthInByte = this->physicalShape[ord[0]] * elemBytes;
-    elemsPerSwizzlingRow =
-        widthInByte > 256 ? 256 / elemBytes : this->physicalShape[ord[0]];
+    elemsPerSwizzlingRow = descriptorSpec.elemsPerLeadingGroup;
     elemsPerSwizzlingRowVal =
         TritonLLVMOpBuilder(loc, rewriter).i32_val(elemsPerSwizzlingRow);
   }
