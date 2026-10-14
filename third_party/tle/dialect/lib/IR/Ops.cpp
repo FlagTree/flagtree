@@ -907,6 +907,8 @@ LogicalResult DistributedBarrierOp::verify() {
 
   if (spaceAttr) {
     StringRef space = spaceAttr.getValue();
+    if (space == "chiplet")
+      return success();
     if (space != "device" && space != "inter" && space != "world")
       return emitOpError()
              << "FlagCX space must be 'device', 'inter', or 'world', got '"
@@ -996,19 +998,26 @@ LogicalResult DistributedBarrierOp::verify() {
 LogicalResult NodePutOp::verify() {
   return verifyNodeTransfer(getOperation(), getSrc(), getDstMem(), getComm(),
                             getPeer(), getSrcOffset(), getDstOffset(),
-                            getNelems(), getNetIdx(), getElemBytesAttr(),
+                            getNelems(), getContextIdAttr(), getElemBytesAttr(),
                             getCoopKind());
 }
 
 LogicalResult NodeGetOp::verify() {
   return verifyNodeTransfer(getOperation(), getSrc(), getDstMem(), getComm(),
                             getPeer(), getSrcOffset(), getDstOffset(),
-                            getNelems(), getNetIdx(), getElemBytesAttr(),
+                            getNelems(), getContextIdAttr(), getElemBytesAttr(),
                             getCoopKind());
 }
 
 LogicalResult RemotePointersOp::verify() {
   StringRef spaceAttr = getSpace();
+
+  if (spaceAttr == "chiplet") {
+    if (!getShardId().getType().isInteger(32))
+      return emitOpError() << "expects shard_id to be i32";
+    return success();
+  }
+
   if (spaceAttr != "cluster" && spaceAttr != "device" && spaceAttr != "node")
     return emitOpError()
            << "expects space to be 'cluster', 'device', or 'node'";
@@ -1020,7 +1029,7 @@ LogicalResult RemotePointersOp::verify() {
     return RemotePointers::verifyNodeSpace(*this);
 
   auto coopKindAttr = getCoopKindAttr();
-  if (getComm() || getNetIdx() || coopKindAttr)
+  if (getComm() || getContextIdAttr() || coopKindAttr)
     return emitOpError()
            << "cluster/device space does not accept node-only operands or "
               "attributes";
