@@ -2448,6 +2448,67 @@ def _ws_named_partition_worker1_writer_kernel(
 
 
 @triton.jit
+def _ws_implicit_partition_worker1_writer_kernel(
+    half_src_desc,
+    float_src_desc,
+    half_output,
+    float_dst_desc,
+    idle_marker,
+    flags,
+    STAGES: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+    HALF_M: tl.constexpr,
+    HALF_N: tl.constexpr,
+    FLOAT_M: tl.constexpr,
+    FLOAT_N: tl.constexpr,
+):
+    half_smem = tle.gpu.alloc((STAGES, HALF_M, HALF_N), dtype=tl.float16, nv_mma_shared_layout=False)
+    float_smem = tle.gpu.alloc((STAGES, FLOAT_M, FLOAT_N), dtype=tl.float32, nv_mma_shared_layout=False)
+    pipe = tle.pipe(
+        capacity=STAGES,
+        name="ws_implicit_partition_worker1_writer",
+        a=half_smem,
+        b=float_smem,
+    )
+    tle.gpu.warp_specialize(
+        [
+            (
+                _ws_named_partition_default_left_reader,
+                (pipe.reader(), half_output, flags, ITERATIONS, HALF_M, HALF_N),
+            ),
+            (_ws_idle_worker, (idle_marker, float_src_desc)),
+            (
+                _ws_named_partition_writer,
+                (
+                    pipe.writer(),
+                    half_src_desc,
+                    float_src_desc,
+                    STAGES,
+                    ITERATIONS,
+                    HALF_M,
+                    HALF_N,
+                    FLOAT_M,
+                    FLOAT_N,
+                ),
+            ),
+            (
+                _ws_named_partition_right_reader,
+                (
+                    pipe.reader(),
+                    float_dst_desc,
+                    flags + ITERATIONS,
+                    ITERATIONS,
+                    FLOAT_M,
+                    FLOAT_N,
+                ),
+            ),
+        ],
+        worker_num_warps=[1, 4, 4],
+        worker_num_regs=[24, 24, 24],
+    )
+
+
+@triton.jit
 def _ws_named_payload_close_writer(
     writer,
     half_src_desc,
@@ -3401,6 +3462,72 @@ def test_musa_ws_named_reader_worker1_writer_partition_runtime(stages):
         idle_marker.fill_(-1)
         flags.fill_(-1)
         _ws_named_partition_worker1_writer_kernel[(1, )](
+            half_source_desc,
+            float_source_desc,
+            half_output,
+            float_destination_desc,
+            idle_marker,
+            flags,
+            STAGES=stages,
+            ITERATIONS=iterations,
+            HALF_M=half_m,
+            HALF_N=half_n,
+            FLOAT_M=float_m,
+            FLOAT_N=float_n,
+            num_warps=16,
+            num_stages=1,
+        )
+        torch.musa.synchronize()
+        assert torch.equal(half_output, half_source)
+        assert torch.equal(float_output, float_source)
+        assert torch.equal(idle_marker, torch.zeros_like(idle_marker))
+        assert torch.equal(flags, torch.zeros_like(flags))
+
+
+@pytest.mark.parametrize("stages", [1, 2, 3], ids=["stage1", "stage2", "stage3"])
+def test_musa_ws_implicit_readers_use_partition_endpoints_runtime(stages):
+    iterations = 2 * stages + 1
+    half_m, half_n = 16, 32
+    float_m, float_n = 8, 16
+    half_source = torch.arange(
+        iterations * half_m * half_n, dtype=torch.float16, device="musa"
+    ).reshape(iterations * half_m, half_n)
+    float_source = torch.arange(
+        iterations * float_m * float_n, dtype=torch.float32, device="musa"
+    ).reshape(iterations * float_m, float_n)
+    half_output = torch.empty_like(half_source)
+    float_output = torch.empty_like(float_source)
+    idle_marker = torch.full((1,), -1, dtype=torch.int32, device="musa")
+    flags = torch.empty((2 * iterations,), dtype=torch.int32, device="musa")
+    half_source_desc = TensorDescriptor.from_tensor(half_source, [half_m, half_n])
+    float_source_desc = TensorDescriptor.from_tensor(float_source, [float_m, float_n])
+    float_destination_desc = TensorDescriptor.from_tensor(float_output, [float_m, float_n])
+
+    compiled = _ws_implicit_partition_worker1_writer_kernel.warmup(
+        half_source_desc,
+        float_source_desc,
+        half_output,
+        float_destination_desc,
+        idle_marker,
+        flags,
+        STAGES=stages,
+        ITERATIONS=iterations,
+        HALF_M=half_m,
+        HALF_N=half_n,
+        FLOAT_M=float_m,
+        FLOAT_N=float_n,
+        grid=(1,),
+        num_warps=16,
+        num_stages=1,
+    )
+    _assert_pipe_lowering_clean(compiled, static_ws=True, num_warps=25)
+
+    for _ in range(4):
+        half_output.fill_(float("nan"))
+        float_output.fill_(float("nan"))
+        idle_marker.fill_(-1)
+        flags.fill_(-1)
+        _ws_implicit_partition_worker1_writer_kernel[(1,)](
             half_source_desc,
             float_source_desc,
             half_output,

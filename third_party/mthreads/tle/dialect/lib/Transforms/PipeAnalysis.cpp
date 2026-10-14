@@ -882,6 +882,29 @@ private:
     return success();
   }
 
+  // The first MThreads TLE pipe API did not expose named readers.  A single
+  // `pipe.reader()` value could therefore be materialized in more than one
+  // static warp-specialize partition, with every partition contributing to
+  // the empty-barrier arrival count.  Keep that source-compatible behavior
+  // for unnamed pipes by assigning one implicit endpoint per static
+  // partition.  Explicitly named readers retain the stricter one-name /
+  // one-partition contract handled by recordReader above.
+  LogicalResult recordImplicitReader(PipeState &state, Operation *op) {
+    FailureOr<PipeStaticPartitionInfo> placement = getEndpointPlacement(op);
+    if (failed(placement))
+      return failure();
+
+    unsigned endpointIndex = state.endpoints.size();
+    for (const PipeEndpointState &endpoint : state.endpoints) {
+      if (endpoint.role == PipeEndpointRole::Reader &&
+          samePlacement(endpoint, *placement)) {
+        endpointIndex = endpoint.index;
+        break;
+      }
+    }
+    return recordReader(state, op, endpointIndex, "");
+  }
+
   LogicalResult verifyReaderName(Operation *op,
                                  ArrayRef<StringAttr> declaredReaders) {
     auto readerName = op->getAttrOfType<StringAttr>("reader_name");
@@ -935,11 +958,11 @@ private:
 
       if (declaredReaders.empty()) {
         for (PipeReaderWaitOp wait : state.waits) {
-          if (failed(recordReader(state, wait, /*endpointIndex=*/1, "")))
+          if (failed(recordImplicitReader(state, wait)))
             return failure();
         }
         for (PipeReaderReleaseOp release : state.releases) {
-          if (failed(recordReader(state, release, /*endpointIndex=*/1, "")))
+          if (failed(recordImplicitReader(state, release)))
             return failure();
         }
       } else {
