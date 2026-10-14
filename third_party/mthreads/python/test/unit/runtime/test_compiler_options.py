@@ -28,12 +28,10 @@ def test_mthreads_can_disable_max_ilp_scheduler():
     enabled_args = _llc_extra_options({"uses_sqmma": True}, enabled, capability=31)
     assert "-misched=mtgpu-max-ilp" in enabled_args
 
-    disabled = backend.parse_options(
-        {
-            "enable_backend_opt": True,
-            "disable_max_ilp_scheduler": True,
-        }
-    )
+    disabled = backend.parse_options({
+        "enable_backend_opt": True,
+        "disable_max_ilp_scheduler": True,
+    })
     disabled_args = _llc_extra_options({"uses_sqmma": True}, disabled, capability=31)
     assert "-misched=mtgpu-max-ilp" not in disabled_args
     assert "-mtgpu-opt-level=1" in disabled_args
@@ -45,12 +43,10 @@ def test_mthreads_disable_max_ilp_scheduler_does_not_change_non_sqmma_options():
 
     backend = _get_mthreads_backend()
     enabled = backend.parse_options({"enable_backend_opt": True})
-    disabled = backend.parse_options(
-        {
-            "enable_backend_opt": True,
-            "disable_max_ilp_scheduler": True,
-        }
-    )
+    disabled = backend.parse_options({
+        "enable_backend_opt": True,
+        "disable_max_ilp_scheduler": True,
+    })
 
     enabled_args = _llc_extra_options({"uses_sqmma": False}, enabled, capability=31)
     disabled_args = _llc_extra_options({"uses_sqmma": False}, disabled, capability=31)
@@ -61,12 +57,10 @@ def test_mthreads_user_scheduler_and_opt_level_replace_backend_defaults():
     from triton.backends.mthreads.compiler import _llc_extra_options
 
     backend = _get_mthreads_backend()
-    options = backend.parse_options(
-        {
-            "enable_backend_opt": True,
-            "llc_options": "-misched=mtgpu-max-occupancy -mtgpu-opt-level=2",
-        }
-    )
+    options = backend.parse_options({
+        "enable_backend_opt": True,
+        "llc_options": "-misched=mtgpu-max-occupancy -mtgpu-opt-level=2",
+    })
     args = _llc_extra_options({"uses_sqmma": True}, options, capability=31)
 
     assert args.count("-misched=mtgpu-max-occupancy") == 1
@@ -101,9 +95,7 @@ def test_mthreads_known_llc_register_failure_is_recoverable(monkeypatch, tmp_pat
 
     monkeypatch.setattr(musa_compiler.subprocess, "run", lambda *args, **kwargs: FailedProcess())
     with pytest.raises(PTXASError, match="MTGPU register allocation"):
-        musa_compiler._run_tool_command(
-            "llc", ["llc", "kernel.ll", "-O2"], repro_dir=tmp_path
-        )
+        musa_compiler._run_tool_command("llc", ["llc", "kernel.ll", "-O2"], repro_dir=tmp_path)
 
 
 def test_mthreads_unknown_llc_failure_is_not_swallowed(monkeypatch, tmp_path):
@@ -116,9 +108,7 @@ def test_mthreads_unknown_llc_failure_is_not_swallowed(monkeypatch, tmp_path):
 
     monkeypatch.setattr(musa_compiler.subprocess, "run", lambda *args, **kwargs: FailedProcess())
     with pytest.raises(RuntimeError, match="`llc` failed with error code 134"):
-        musa_compiler._run_tool_command(
-            "llc", ["llc", "kernel.ll", "-O2"], repro_dir=tmp_path
-        )
+        musa_compiler._run_tool_command("llc", ["llc", "kernel.ll", "-O2"], repro_dir=tmp_path)
 
 
 def test_mthreads_post_ra_register_crash_is_recoverable(monkeypatch, tmp_path):
@@ -132,9 +122,7 @@ def test_mthreads_post_ra_register_crash_is_recoverable(monkeypatch, tmp_path):
 
     monkeypatch.setattr(musa_compiler.subprocess, "run", lambda *args, **kwargs: FailedProcess())
     with pytest.raises(PTXASError, match="MTGPU register allocation"):
-        musa_compiler._run_tool_command(
-            "llc", ["llc", "kernel.ll", "-O0"], repro_dir=tmp_path
-        )
+        musa_compiler._run_tool_command("llc", ["llc", "kernel.ll", "-O0"], repro_dir=tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -168,18 +156,14 @@ def test_mthreads_can_disable_sqmma_m_split_preference():
     assert MTHREADS_GEMM_COMPILER_OPTIONS_VERSION >= 2
     backend = _get_mthreads_backend()
     enabled = backend.parse_options({})
-    disabled = backend.parse_options(
-        {"disable_sqmma_m_split_preference": True}
-    )
+    disabled = backend.parse_options({"disable_sqmma_m_split_preference": True})
 
     assert enabled.disable_sqmma_m_split_preference is False
     assert disabled.disable_sqmma_m_split_preference is True
     assert disabled.hash() != enabled.hash()
 
 
-def test_mthreads_k128_sqmma_opt_in_is_part_of_options_and_cache_key(
-    monkeypatch,
-):
+def test_mthreads_k128_sqmma_opt_in_is_part_of_options_and_cache_key(monkeypatch, ):
     backend = _get_mthreads_backend()
     monkeypatch.delenv("TRITON_MUSA_ENABLE_K128_SQMMA", raising=False)
     disabled = backend.parse_options({})

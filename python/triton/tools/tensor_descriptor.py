@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from typing import List, Any
 from triton._utils import validate_block_shape
 
-
 # Increment this when the public stride-alignment override contract changes.
 # Backends can use the marker to retain a safe fallback with older wheels.
 TENSOR_DESCRIPTOR_STRIDE_ALIGNMENT_VERSION = 1

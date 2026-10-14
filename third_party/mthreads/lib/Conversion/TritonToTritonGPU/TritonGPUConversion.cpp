@@ -96,8 +96,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
       auto pointeeTensorType =
           dyn_cast<RankedTensorType>(ptrType.getPointeeType());
       if (pointeeTensorType) {
-        if (pointeeTensorType.getEncoding() &&
-            hasExplicitValueEncoding(value))
+        if (pointeeTensorType.getEncoding() && hasExplicitValueEncoding(value))
           return ptrType;
         return triton::PointerType::get(
             convertRankedTensorType(pointeeTensorType, valueNumWarps),
@@ -152,8 +151,9 @@ int TritonGPUTypeConverter::getNumWarps(Value value) const {
   return numWarps;
 }
 
-RankedTensorType TritonGPUTypeConverter::convertRankedTensorType(
-    RankedTensorType tensorType, int contextualNumWarps) const {
+RankedTensorType
+TritonGPUTypeConverter::convertRankedTensorType(RankedTensorType tensorType,
+                                                int contextualNumWarps) const {
   if (tensorType.getEncoding()) {
     auto blockedEncoding =
         dyn_cast<triton::gpu::BlockedEncodingAttr>(tensorType.getEncoding());

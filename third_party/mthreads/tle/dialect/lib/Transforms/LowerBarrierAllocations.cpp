@@ -165,9 +165,8 @@ class LowerBarrierAllocationsPass
         // partition-local logical thread id: the latter wraps at each
         // warp-specialize partition width and can initialize the same hardware
         // barrier several times after dispatch lowering.
-        lastInitArrival->setAttr(
-            triton::musa::kTMEIssueThreadAttr,
-            rewriter.getI32IntegerAttr(0));
+        lastInitArrival->setAttr(triton::musa::kTMEIssueThreadAttr,
+                                 rewriter.getI32IntegerAttr(0));
       }
 
       rewriter.replaceAllUsesWith(alloc.getBaseId(), base);

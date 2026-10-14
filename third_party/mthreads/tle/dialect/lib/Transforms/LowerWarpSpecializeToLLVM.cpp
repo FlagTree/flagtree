@@ -98,9 +98,10 @@ static bool isUnitIncrement(Value value, Value induction) {
 // scf.for has become CFG by late warp-specialize lowering.  Recover the
 // canonical zero-based, unit-step induction variable so every consumer in a
 // shared epoch group waits on the same alternating hardware phase.
-static FailureOr<Value>
-resolvePartitionSyncPhase(LLVM::CallIntrinsicOp sync, Region &partition,
-                          DominanceInfo &dominance, IRRewriter &rewriter) {
+static FailureOr<Value> resolvePartitionSyncPhase(LLVM::CallIntrinsicOp sync,
+                                                  Region &partition,
+                                                  DominanceInfo &dominance,
+                                                  IRRewriter &rewriter) {
   Block *loopHeader = nullptr;
   for (Block &candidate : partition.getBlocks()) {
     if (candidate.getNumArguments() == 0 ||
@@ -128,8 +129,7 @@ resolvePartitionSyncPhase(LLVM::CallIntrinsicOp sync, Region &partition,
       continue;
     FailureOr<Value> initial =
         getForwardedBlockArgument(entries.front(), &candidate, 0);
-    FailureOr<Value> next =
-        getForwardedBlockArgument(backedge, &candidate, 0);
+    FailureOr<Value> next = getForwardedBlockArgument(backedge, &candidate, 0);
     if (failed(initial) || failed(next) || !isConstant(*initial, 0) ||
         !isUnitIncrement(*next, induction))
       continue;
@@ -214,15 +214,15 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
       if (call.getIntrin() != kLocalSyncIntrinsic ||
           call->hasAttr(kExplicitCtaSyncAttr))
         return WalkResult::advance();
-      if (auto group = call->getAttrOfType<IntegerAttr>(
-              kConsumerEpochSyncAttr)) {
+      if (auto group =
+              call->getAttrOfType<IntegerAttr>(kConsumerEpochSyncAttr)) {
         if (group.getInt() < 0 ||
             group.getInt() > std::numeric_limits<int32_t>::max()) {
           invalidSharedGroup = true;
           return WalkResult::interrupt();
         }
-        syncs.push_back({call, warps, &region,
-                         static_cast<int32_t>(group.getInt())});
+        syncs.push_back(
+            {call, warps, &region, static_cast<int32_t>(group.getInt())});
         return WalkResult::advance();
       }
       syncs.push_back({call, warps, &region, -1});
@@ -389,8 +389,7 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
   SmallVector<std::pair<Value, Value>> initializationArgs;
   int32_t nextId = *reserved;
   for (PartitionSync &sync : syncs) {
-    if (sync.sharedGroup >= 0 ||
-        privateBarrierIds.count(sync.partition))
+    if (sync.sharedGroup >= 0 || privateBarrierIds.count(sync.partition))
       continue;
     Value id = arith::ConstantIntOp::create(rewriter, loc, nextId++, 32);
     Value count =
@@ -428,9 +427,8 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
 
   for (PartitionSync &sync : syncs) {
     rewriter.setInsertionPoint(sync.op);
-    Value id = sync.sharedGroup >= 0
-                   ? sharedBarrierIds.lookup(sync.sharedGroup)
-                   : privateBarrierIds.lookup(sync.partition);
+    Value id = sync.sharedGroup >= 0 ? sharedBarrierIds.lookup(sync.sharedGroup)
+                                     : privateBarrierIds.lookup(sync.partition);
     // syncthreads.lm also completes preceding local-memory accesses. A named
     // arrival/wait alone loses that ordering on PH1, including when vector
     // loads are still outstanding as the shared buffer is reused.
@@ -606,10 +604,8 @@ static LogicalResult lowerStaticWarpSpecialize(LLVM::LLVMFuncOp func,
         rewriter.createBlock(&funcBody, continuation->getIterator());
     funcBlocks.splice(continuation->getIterator(), defaultRegion.getBlocks());
 
-    Block *producerRoot =
-        defaultProducer ? defaultRoot : workerRoots.front();
-    Block *consumerRoot =
-        defaultProducer ? workerRoots.front() : defaultRoot;
+    Block *producerRoot = defaultProducer ? defaultRoot : workerRoots.front();
+    Block *consumerRoot = defaultProducer ? workerRoots.front() : defaultRoot;
     SmallVector<Operation *> producerTerminators;
     SmallVector<Operation *> consumerTerminators;
     if (defaultProducer) {
@@ -651,8 +647,7 @@ static LogicalResult lowerStaticWarpSpecialize(LLVM::LLVMFuncOp func,
         arith::ConstantIntOp::create(rewriter, loc, threadEnds.front(), 32);
     Value isProducer = arith::CmpIOp::create(
         rewriter, loc,
-        defaultProducer ? arith::CmpIPredicate::ult
-                        : arith::CmpIPredicate::uge,
+        defaultProducer ? arith::CmpIPredicate::ult : arith::CmpIPredicate::uge,
         tid, boundaryValue);
     cf::CondBranchOp::create(rewriter, loc, isProducer, producerRoot,
                              ValueRange{}, producerJoin, ValueRange{});
@@ -660,8 +655,7 @@ static LogicalResult lowerStaticWarpSpecialize(LLVM::LLVMFuncOp func,
     rewriter.setInsertionPointToEnd(producerJoin);
     Value isConsumer = arith::CmpIOp::create(
         rewriter, loc,
-        defaultProducer ? arith::CmpIPredicate::uge
-                        : arith::CmpIPredicate::ult,
+        defaultProducer ? arith::CmpIPredicate::uge : arith::CmpIPredicate::ult,
         tid, boundaryValue);
     cf::CondBranchOp::create(rewriter, loc, isConsumer, consumerRoot,
                              ValueRange{}, continuation, ValueRange{});

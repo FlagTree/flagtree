@@ -45,7 +45,5 @@ def local_barrier(_semantic=None) -> None:
     """Synchronize a CTA and make shared-memory accesses visible."""
     builder = _semantic.builder
     if not hasattr(builder, "create_mthreads_local_barrier"):
-        raise RuntimeError(
-            "MThreads TLE local barrier requires a newer native libtriton"
-        )
+        raise RuntimeError("MThreads TLE local barrier requires a newer native libtriton")
     builder.create_mthreads_local_barrier()

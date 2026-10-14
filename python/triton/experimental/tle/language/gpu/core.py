@@ -239,13 +239,9 @@ def warp_specialize(
     mthreads_enabled = mthreads_common.enabled()
     default_is_producer = tl._unwrap_if_constexpr(default_is_producer)
     if not isinstance(default_is_producer, bool):
-        raise ValueError(
-            "warp_specialize default_is_producer must be a compile-time bool"
-        )
+        raise ValueError("warp_specialize default_is_producer must be a compile-time bool")
     if default_is_producer and not mthreads_enabled:
-        raise ValueError(
-            "warp_specialize default_is_producer is only supported on MThreads"
-        )
+        raise ValueError("warp_specialize default_is_producer is only supported on MThreads")
     if mthreads_enabled:
         worker_num_warps, worker_num_regs = mthreads_warp_specialize.normalize_config(worker_num_warps, worker_num_regs)
     else:

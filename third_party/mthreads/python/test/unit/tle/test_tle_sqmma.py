@@ -82,9 +82,7 @@ def _sqmma_encoding_fixture(warps_per_cta, shape=(64, 64)):
 
 
 @pytest.mark.parametrize("warps_per_cta", [(4, 1), (4, 2), (8, 2, 1)])
-def test_musa_sqmma_encoding_accepts_power_of_two_warp_domains(
-    tmp_path, warps_per_cta
-):
+def test_musa_sqmma_encoding_accepts_power_of_two_warp_domains(tmp_path, warps_per_cta):
     _, backend = mthreads_backend()
     context = ir.context()
     ir.load_dialects(context)
@@ -97,9 +95,7 @@ def test_musa_sqmma_encoding_accepts_power_of_two_warp_domains(
 
 
 @pytest.mark.parametrize("warps_per_cta", [(4, 3), (12, 1), (4, 2, 3)])
-def test_musa_sqmma_encoding_rejects_non_power_of_two_warp_domains(
-    tmp_path, capfd, warps_per_cta
-):
+def test_musa_sqmma_encoding_rejects_non_power_of_two_warp_domains(tmp_path, capfd, warps_per_cta):
     _, backend = mthreads_backend()
     context = ir.context()
     ir.load_dialects(context)
@@ -109,10 +105,7 @@ def test_musa_sqmma_encoding_rejects_non_power_of_two_warp_domains(
 
     with pytest.raises(RuntimeError):
         ir.parse_mlir_module(str(fixture_path), context)
-    assert (
-        "SQMMA warpsPerCTA elements must be powers of two"
-        in capfd.readouterr().err
-    )
+    assert ("SQMMA warpsPerCTA elements must be powers of two" in capfd.readouterr().err)
 
 
 def _lower_sqmma_carrier_type(tmp_path, shape):
@@ -178,10 +171,8 @@ def test_multi_fragment_sqmma_carrier_lowers_to_literal_struct(tmp_path):
 
 def test_multi_fragment_sqmma_carrier_roundtrip_uses_struct_fields(tmp_path):
     lowered = _lower_sqmma_carrier_roundtrip(tmp_path)
-    carrier = (
-        "!llvm.struct<(vector<32xf32>, vector<32xf32>, "
-        "vector<32xf32>, vector<32xf32>)>"
-    )
+    carrier = ("!llvm.struct<(vector<32xf32>, vector<32xf32>, "
+               "vector<32xf32>, vector<32xf32>)>")
     assert carrier in lowered, lowered
     for index in range(4):
         assert re.search(rf"llvm\.extractvalue .*\[{index}\]", lowered), lowered
@@ -915,9 +906,7 @@ def test_mthreads_tle_sqmma_lowers_to_parameterless_wait():
     assert "call void @llvm.musa.sqmma.wait()" in compiled.asm["llir"]
 
 
-def test_mthreads_ph1_bf16_k128_opt_in_lowers_to_two_k64_intrinsics(
-    monkeypatch,
-):
+def test_mthreads_ph1_bf16_k128_opt_in_lowers_to_two_k64_intrinsics(monkeypatch, ):
     monkeypatch.delenv("TRITON_OVERRIDE_ARCH", raising=False)
     monkeypatch.setenv("TRITON_MUSA_ARCH", "ph1")
     monkeypatch.setenv("TRITON_MUSA_ENABLE_K128_SQMMA", "1")
@@ -961,9 +950,7 @@ def test_mthreads_tle_sqmma_merges_adjacent_equal_pending_waits():
 def test_mthreads_tle_sqmma_keeps_dead_result_completion_wait():
     compiled = compile_musa(_tle_sqmma_dead_result_wait_kernel, {"out": "*fp32"})
     assert "ttmg.squad_dot_wait" in compiled.asm["ttgir"], compiled.asm["ttgir"]
-    assert "call void @llvm.musa.sqmma.wait()" in compiled.asm["llir"], compiled.asm[
-        "llir"
-    ]
+    assert "call void @llvm.musa.sqmma.wait()" in compiled.asm["llir"], compiled.asm["llir"]
 
 
 def test_mthreads_tle_sqmma_lowers_direct_loop_yield():
@@ -1208,7 +1195,7 @@ def test_mthreads_tle_sqmma_loop_carrier_runtime_precision(branch):
     a_desc = TensorDescriptor.from_tensor(a, block_shape=[128, 64])
     b_desc = TensorDescriptor.from_tensor(b, block_shape=[64, 128])
 
-    kernel = _tle_sqmma_loop_carrier_runtime_kernel[(1,)](
+    kernel = _tle_sqmma_loop_carrier_runtime_kernel[(1, )](
         a_desc,
         b_desc,
         out,
@@ -1573,9 +1560,7 @@ def test_mthreads_tle_sqmma_ph1_bf16_narrow_k128_runtime(monkeypatch, m, n):
     torch.testing.assert_close(out.cpu(), expected, atol=3.0e-1, rtol=1.0e-1)
     assert f"instrShape = [{m}, {n}, 128]" in kernel.asm["ttgir"]
     assert f"llvm.musa.sqmma.bfmma.m{m}n{n}k128.mma" not in kernel.asm["llir"]
-    assert kernel.asm["llir"].count(
-        f"@llvm.musa.sqmma.bfmma.m{m}n{n}k64.mma("
-    ) >= 3
+    assert kernel.asm["llir"].count(f"@llvm.musa.sqmma.bfmma.m{m}n{n}k64.mma(") >= 3
 
 
 def test_mthreads_tle_sqmma_macro_tile_auto_decomposition_runtime():

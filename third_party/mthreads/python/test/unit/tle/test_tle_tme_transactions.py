@@ -195,9 +195,7 @@ def _lower_to_llvm_dialect(module, context):
     [(192, 3), (320, 5)],
     ids=["n192", "n320"],
 )
-def test_mthreads_tle_bf16_non_power_of_two_uses_64_element_tme_groups(
-    tmp_path, leading, expected_groups
-):
+def test_mthreads_tle_bf16_non_power_of_two_uses_64_element_tme_groups(tmp_path, leading, expected_groups):
     fixture = f"""#shared = #ttg.swizzled_shared<{{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}}>
 #smem = #ttg.shared_memory
 module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32,
@@ -267,15 +265,10 @@ def test_mthreads_sqmma_loader_uses_descriptor_grouping_contract():
     # producer.  Keep the SQMMA consumer coupled to that descriptor contract
     # and prevent the former independent `min(width, 256 / elemBytes)` rule
     # from returning unnoticed.
-    source_path = (
-        Path(__file__).resolve().parents[4]
-        / "musa/lib/TritonMUSAGPUToLLVM/DotOpToLLVM/SQMMA.cpp"
-    )
+    source_path = (Path(__file__).resolve().parents[4] / "musa/lib/TritonMUSAGPUToLLVM/DotOpToLLVM/SQMMA.cpp")
     source = source_path.read_text()
     assert "elemsPerLeadingGroup" in source
-    assert (
-        "elemsPerSwizzlingRow = descriptorSpec.elemsPerLeadingGroup;" in source
-    )
+    assert ("elemsPerSwizzlingRow = descriptorSpec.elemsPerLeadingGroup;" in source)
 
 
 @pytest.mark.parametrize("stages,slot", [(1, 0), (2, 0), (2, 1)])

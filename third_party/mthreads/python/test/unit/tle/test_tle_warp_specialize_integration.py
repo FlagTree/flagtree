@@ -592,9 +592,7 @@ def test_mthreads_tle_explicit_cta_sync_survives_static_partition_lowering():
 
 
 def test_mthreads_tle_explicit_cta_sync_balanced_multi_worker_is_accepted():
-    ttgir, late = _compile_ws_explicit_sync(
-        _ws_explicit_sync_multi_worker_balanced_kernel
-    )
+    ttgir, late = _compile_ws_explicit_sync(_ws_explicit_sync_multi_worker_balanced_kernel)
     assert ttgir.count("ttg.barrier local") == 3, ttgir
     assert late.count('"llvm.musa.syncthreads.lm"') == 3, late
 
@@ -629,9 +627,7 @@ def test_mthreads_tle_explicit_cta_sync_balanced_multi_worker_is_accepted():
     ],
     ids=["one-vs-zero", "nested-if", "nested-for", "multi-worker-missing"],
 )
-def test_mthreads_tle_explicit_cta_sync_rejects_unsafe_partition_contract(
-    kernel, signature, diagnostic, capfd
-):
+def test_mthreads_tle_explicit_cta_sync_rejects_unsafe_partition_contract(kernel, signature, diagnostic, capfd):
     with pytest.raises(RuntimeError, match="PassManager::run failed"):
         _compile_ws_explicit_sync(kernel, signature)
     assert diagnostic in capfd.readouterr().err

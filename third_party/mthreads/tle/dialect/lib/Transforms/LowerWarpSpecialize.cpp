@@ -125,8 +125,8 @@ getConstantLoopBounds(scf::ForOp loop) {
 // rendezvous at each consumer outer-loop latch.  Mark only the canonical,
 // constant-bound shape used by the persistent GEMM schedule; late lowering
 // merges equal markers into one hardware barrier.
-static LogicalResult markConsumerEpochRendezvous(
-    ttg::WarpSpecializeOp ws, IRRewriter &rewriter) {
+static LogicalResult markConsumerEpochRendezvous(ttg::WarpSpecializeOp ws,
+                                                 IRRewriter &rewriter) {
   if (ws->hasAttr(kDefaultProducerAttr) ||
       !ws->hasAttr(kConsumerEpochRequiredAttr))
     return success();
@@ -198,10 +198,9 @@ static LogicalResult markConsumerEpochRendezvous(
   for (scf::ForOp loop : epochLoops) {
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     rewriter.setInsertionPoint(yield);
-    auto barrier = ttg::BarrierOp::create(rewriter, yield.getLoc(),
-                                          ttg::AddrSpace::Local);
-    barrier->setAttr(kConsumerEpochSyncAttr,
-                     rewriter.getI32IntegerAttr(0));
+    auto barrier =
+        ttg::BarrierOp::create(rewriter, yield.getLoc(), ttg::AddrSpace::Local);
+    barrier->setAttr(kConsumerEpochSyncAttr, rewriter.getI32IntegerAttr(0));
   }
   ws->removeAttr(kConsumerEpochRequiredAttr);
   return success();

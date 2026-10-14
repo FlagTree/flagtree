@@ -11,7 +11,6 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from test_tle_utils import compile_musa, require_mthreads_libtriton
 
-
 require_mthreads_libtriton()
 
 
@@ -442,9 +441,7 @@ def test_tme_only_pipe_does_not_get_local_store_wait_groups():
     assert "musa_tle.pipe_local_store_group" not in ttgir
 
 
-@pytest.mark.parametrize(
-    "hazard_kind", [0, 1, 2], ids=["war", "non_pipe_waw", "raw"]
-)
+@pytest.mark.parametrize("hazard_kind", [0, 1, 2], ids=["war", "non_pipe_waw", "raw"])
 def test_pipe_reuse_join_hazard_keeps_full_partition_barrier(hazard_kind):
     compiled = compile_musa(
         _persistent_hazard_kernel,
@@ -461,9 +458,7 @@ def test_pipe_reuse_join_hazard_keeps_full_partition_barrier(hazard_kind):
         options={"num_warps": 16, "num_stages": 1},
     )
     llir = compiled.asm["llir"]
-    init_calls = re.findall(
-        r"(?:tail )?call void @llvm\.musa\.async\.init\.arrival\(", llir
-    )
+    init_calls = re.findall(r"(?:tail )?call void @llvm\.musa\.async\.init\.arrival\(", llir)
     # Six barriers belong to the three-stage full/empty pipe rings.  The
     # branch-carried shared-memory access must retain at least one additional
     # full partition barrier instead of being narrowed to an LMA-only wait.
@@ -485,7 +480,7 @@ def test_persistent_single_reader_pipe_reuses_ring_across_output_tiles():
 
     for _ in range(3):
         out.fill_(float("nan"))
-        compiled = _persistent_single_reader_kernel[(1,)](
+        compiled = _persistent_single_reader_kernel[(1, )](
             a_desc,
             b_desc,
             out,
@@ -505,9 +500,7 @@ def test_persistent_single_reader_pipe_reuses_ring_across_output_tiles():
     # per-K private barrier; the pipe acquire already supplies that edge.
     assert "llvm.musa.async.bar.record(i32 6)" in llir
     assert "call void @llvm.musa.lma.wait()" in llir
-    init_calls = re.findall(
-        r"(?:tail )?call void @llvm\.musa\.async\.init\.arrival\(", llir
-    )
+    init_calls = re.findall(r"(?:tail )?call void @llvm\.musa\.async\.init\.arrival\(", llir)
     assert len(init_calls) == 6
 
 
@@ -527,7 +520,7 @@ def test_persistent_named_readers_release_every_epoch_before_ring_reuse():
 
     for _ in range(10):
         out.fill_(float("nan"))
-        compiled = _persistent_multi_reader_kernel[(1,)](
+        compiled = _persistent_multi_reader_kernel[(1, )](
             a_desc,
             b_main_desc,
             b_tail_desc,
@@ -552,9 +545,5 @@ def test_persistent_named_readers_release_every_epoch_before_ring_reuse():
     )
     assert len(epoch_barrier_ids) == 3
     epoch_barrier_id = epoch_barrier_ids[-1]
-    assert llir.count(
-        f"call void @llvm.musa.async.arrive.none.phaseid(i32 {epoch_barrier_id})"
-    ) == 2
-    assert llir.count(
-        f"call void @llvm.musa.async.wait(i32 {epoch_barrier_id},"
-    ) == 2
+    assert llir.count(f"call void @llvm.musa.async.arrive.none.phaseid(i32 {epoch_barrier_id})") == 2
+    assert llir.count(f"call void @llvm.musa.async.wait(i32 {epoch_barrier_id},") == 2

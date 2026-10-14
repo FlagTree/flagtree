@@ -8,8 +8,7 @@ import triton
 import triton.language as tl
 import triton.experimental.tle.language as tle
 from triton.experimental.tle.language.gpu.mthreads import (
-    warp_specialize as mthreads_warp_specialize,
-)
+    warp_specialize as mthreads_warp_specialize, )
 from triton._C import libtriton
 from triton._C.libtriton import ir
 from triton.backends.compiler import Language
@@ -416,7 +415,9 @@ def test_tle_warp_specialize_musa_container_contract():
 
 
 def test_tle_warp_specialize_keeps_old_builder_call_compatible():
+
     class OldBuilder:
+
         def create_warp_specialize(self, result_types, worker_num_warps):
             return result_types, worker_num_warps
 
@@ -445,9 +446,7 @@ def test_tle_warp_specialize_default_producer_contract():
     for ir_text in (ttir, ttgir):
         assert "musa_tle.default_producer" in ir_text, ir_text
         assert "num_warps(16)" in ir_text, ir_text
-        assert re.search(
-            r"requestedRegisters\s*=\s*array<i32:\s*160>", ir_text
-        ), ir_text
+        assert re.search(r"requestedRegisters\s*=\s*array<i32:\s*160>", ir_text), ir_text
 
     assert '"ttg.total-num-warps" = 20 : i32' in ttgir, ttgir
     assert "warpGroupStartIds = array<i32: 4>" in ttgir, ttgir
@@ -475,9 +474,7 @@ def test_tle_warp_specialize_default_producer_runtime():
             num_stages=1,
         )
         torch.musa.synchronize()
-        torch.testing.assert_close(
-            out.cpu(), torch.tensor([1, 2], dtype=torch.int32)
-        )
+        torch.testing.assert_close(out.cpu(), torch.tensor([1, 2], dtype=torch.int32))
 
 
 @pytest.mark.parametrize(

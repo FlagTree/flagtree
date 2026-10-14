@@ -8,7 +8,6 @@ import triton.experimental.tle.language as tle
 
 from test_tle_utils import compile_musa, compile_to_ttir, require_mthreads_libtriton
 
-
 require_mthreads_libtriton()
 
 
@@ -35,7 +34,7 @@ def _staged_subslice_kernel(
 def _subslice_round_trip_kernel(out):
     values = tl.arange(0, 128).to(tl.float32) + 1.0
     storage = tle.gpu.alloc(
-        (128,),
+        (128, ),
         dtype=tl.float32,
         init_value=values,
         nv_mma_shared_layout=False,
@@ -77,21 +76,15 @@ def _staged_rectangular_sqmma_kernel(a_desc, b_desc, out):
 
     left = b.slice(0, half_n, 1)
     right = b.slice(half_n, half_n, 1)
-    left_acc = tle.gpu.wgmma(
-        a, left, tl.zeros((block_m, half_n), dtype=tl.float32)
-    )
-    right_acc = tle.gpu.wgmma(
-        a, right, tl.zeros((block_m, half_n), dtype=tl.float32)
-    )
+    left_acc = tle.gpu.wgmma(a, left, tl.zeros((block_m, half_n), dtype=tl.float32))
+    right_acc = tle.gpu.wgmma(a, right, tl.zeros((block_m, half_n), dtype=tl.float32))
     left_acc = tle.gpu.wgmma_wait(0, left_acc)
     right_acc = tle.gpu.wgmma_wait(0, right_acc)
 
     rows = tl.arange(0, block_m)
     cols = tl.arange(0, half_n)
     tl.store(out + rows[:, None] * block_n + cols[None, :], left_acc)
-    tl.store(
-        out + rows[:, None] * block_n + half_n + cols[None, :], right_acc
-    )
+    tl.store(out + rows[:, None] * block_n + half_n + cols[None, :], right_acc)
 
 
 @triton.jit
@@ -181,9 +174,7 @@ def _partitioned_sqmma_kernel(a_top_desc, a_bottom_desc, b_desc, out):
     "start,length,dim",
     [(0, 1, 0), (1, 1, -2), (64, 64, 1), (64, 64, -1)],
 )
-def test_tle_buffered_tensor_subslice_builds_native_memdesc_view(
-    start, length, dim, use_slice
-):
+def test_tle_buffered_tensor_subslice_builds_native_memdesc_view(start, length, dim, use_slice):
     ttir = compile_to_ttir(
         _staged_subslice_kernel,
         {"out": "*i32"},
@@ -237,8 +228,8 @@ def test_tle_partitioned_sqmma_uses_contextual_warp_layouts_and_captures():
 
 @pytest.mark.skipif(not torch.musa.is_available(), reason="MUSA device is not available")
 def test_tle_buffered_tensor_subslice_runtime_uses_view_offset():
-    out = torch.empty((64,), device="musa", dtype=torch.float32)
-    _subslice_round_trip_kernel[(1,)](out, num_warps=1)
+    out = torch.empty((64, ), device="musa", dtype=torch.float32)
+    _subslice_round_trip_kernel[(1, )](out, num_warps=1)
     torch.musa.synchronize()
 
     expected = torch.arange(65, 129, dtype=torch.float32)
@@ -259,9 +250,7 @@ def test_tle_staged_rectangular_slice_sqmma_runtime_matches_torch():
     a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k])
     b_desc = TensorDescriptor.from_tensor(b, [block_k, block_n])
 
-    _staged_rectangular_sqmma_kernel[(1,)](
-        a_desc, b_desc, out, num_warps=4, num_stages=1
-    )
+    _staged_rectangular_sqmma_kernel[(1, )](a_desc, b_desc, out, num_warps=4, num_stages=1)
     torch.musa.synchronize()
 
     expected = a_cpu.float() @ b_cpu.float()
@@ -284,7 +273,7 @@ def test_tle_partitioned_sqmma_runtime_matches_torch():
     a_bottom_desc = TensorDescriptor.from_tensor(a_bottom, [128, 32])
     b_desc = TensorDescriptor.from_tensor(b, [32, 256])
 
-    _partitioned_sqmma_kernel[(1,)](
+    _partitioned_sqmma_kernel[(1, )](
         a_top_desc,
         a_bottom_desc,
         b_desc,

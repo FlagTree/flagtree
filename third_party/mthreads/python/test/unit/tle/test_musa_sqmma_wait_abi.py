@@ -7,7 +7,6 @@ from pathlib import Path
 
 from triton.backends.mthreads import compiler as mthreads_compiler
 
-
 LLC = Path(mthreads_compiler.__file__).resolve().parent / "bin" / "llc"
 COMMON_ARGS = (
     "-march=mtgpu",
@@ -21,16 +20,14 @@ COMMON_ARGS = (
 def _run_llc(tmp_path: Path, name: str, declaration: str, call: str):
     llir = tmp_path / f"{name}.ll"
     obj = tmp_path / f"{name}.o"
-    llir.write_text(
-        f"""define void @{name}() {{
+    llir.write_text(f"""define void @{name}() {{
 entry:
   {call}
   ret void
 }}
 
 {declaration}
-"""
-    )
+""")
     return subprocess.run(
         [str(LLC), str(llir), *COMMON_ARGS, "-o", str(obj)],
         check=False,

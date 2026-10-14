@@ -340,8 +340,7 @@ static bool syncPipeLocalStoreGroups(Operation *wait, BlockInfo *blockInfo,
 // index, so the loop-carried WAW looks like an ordinary overlap. Narrow only
 // that exact case: every active conflict must be WAW between pipe-managed TME
 // copies. Any read, alias, or non-pipe writer keeps the full CTA barrier.
-static bool hasOnlyPipeTMEReuseHazard(Operation *op,
-                                      const BlockInfo &previous,
+static bool hasOnlyPipeTMEReuseHazard(Operation *op, const BlockInfo &previous,
                                       const BlockInfo &current,
                                       MembarFilterFn filter,
                                       Allocation *allocation) {
@@ -361,9 +360,8 @@ static bool hasOnlyPipeTMEReuseHazard(Operation *op,
             if (filter && filter(lhsOp, rhsOp, allocation))
               continue;
             sawIntersection = true;
-            if (requirePipeCopies &&
-                (!lhsOp->hasAttr(kPipePayloadCopyAttr) ||
-                 !rhsOp->hasAttr(kPipePayloadCopyAttr)))
+            if (requirePipeCopies && (!lhsOp->hasAttr(kPipePayloadCopyAttr) ||
+                                      !rhsOp->hasAttr(kPipePayloadCopyAttr)))
               return false;
           }
         }
@@ -373,16 +371,16 @@ static bool hasOnlyPipeTMEReuseHazard(Operation *op,
   };
 
   bool sawReadHazard = false;
-  if (!hasActiveIntersection(previous.syncWriteSlices,
-                             current.syncReadSlices, false, sawReadHazard) ||
-      !hasActiveIntersection(previous.syncReadSlices,
-                             current.syncWriteSlices, false, sawReadHazard) ||
+  if (!hasActiveIntersection(previous.syncWriteSlices, current.syncReadSlices,
+                             false, sawReadHazard) ||
+      !hasActiveIntersection(previous.syncReadSlices, current.syncWriteSlices,
+                             false, sawReadHazard) ||
       sawReadHazard)
     return false;
 
   bool sawPipeWAW = false;
-  if (!hasActiveIntersection(previous.syncWriteSlices,
-                             current.syncWriteSlices, true, sawPipeWAW))
+  if (!hasActiveIntersection(previous.syncWriteSlices, current.syncWriteSlices,
+                             true, sawPipeWAW))
     return false;
   return sawPipeWAW;
 }
@@ -464,8 +462,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       bool stillPipeOnly = false;
       if (target && target->hasAttr(kPipePayloadCopyAttr)) {
         effects = getExplicitMemoryEffects(target, allocation);
-        stillPipeOnly = hasOnlyPipeTMEReuseHazard(
-            target, *blockInfo, effects, filter, allocation);
+        stillPipeOnly = hasOnlyPipeTMEReuseHazard(target, *blockInfo, effects,
+                                                  filter, allocation);
       }
       if (!stillPipeOnly)
         op->setAttr(kPipeTMEReuseDisqualifiedAttr,

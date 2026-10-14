@@ -22,8 +22,8 @@ using namespace mlir::triton::gpu;
 static constexpr llvm::StringLiteral kLayoutConversionSyncAttr =
     "musa_tle.layout_conversion_sync";
 
-static void emitLayoutConversionBarrier(
-    Location loc, ConversionPatternRewriter &rewriter) {
+static void emitLayoutConversionBarrier(Location loc,
+                                        ConversionPatternRewriter &rewriter) {
   auto sync = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, "llvm.musa.syncthreads.lm", TypeRange{}, {});
   sync->setAttr(kLayoutConversionSyncAttr,

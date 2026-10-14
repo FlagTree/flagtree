@@ -1350,8 +1350,7 @@ static constexpr llvm::StringLiteral kPartitionMaterializationAttr =
 static Value unwrapInvalidPartitionMaterialization(
     Value value, Operation *context,
     SmallVectorImpl<triton::gpu::ConvertLayoutOp> &deadMaterializations) {
-  auto materialization =
-      value.getDefiningOp<triton::gpu::ConvertLayoutOp>();
+  auto materialization = value.getDefiningOp<triton::gpu::ConvertLayoutOp>();
   // Only dialect-conversion-created bridge casts are eligible.  Explicit
   // convert_layout operations are part of the program and must be preserved.
   if (!materialization ||
@@ -1390,9 +1389,10 @@ static void eraseDeadMaterializations(
   }
 }
 
-static LogicalResult convertRegionTypesWithValueContext(
-    Region *region, const TypeConverter &converter,
-    ConversionPatternRewriter &rewriter) {
+static LogicalResult
+convertRegionTypesWithValueContext(Region *region,
+                                   const TypeConverter &converter,
+                                   ConversionPatternRewriter &rewriter) {
   if (region->empty())
     return success();
   Block &entry = region->front();
@@ -1446,13 +1446,12 @@ struct SCFForPattern : public OpConversionPattern<scf::ForOp> {
     // convenience. Otherwise, failure is returned.
     if (failed(
 #ifdef __TLE__
-            convertRegionTypesWithValueContext(
-                &newOp.getRegion(), *getTypeConverter(), rewriter)
+            convertRegionTypesWithValueContext(&newOp.getRegion(),
+                                               *getTypeConverter(), rewriter)
 #else
-            rewriter.convertRegionTypes(&newOp.getRegion(),
-                                        *getTypeConverter())
+            rewriter.convertRegionTypes(&newOp.getRegion(), *getTypeConverter())
 #endif
-            )) {
+                )) {
       return rewriter.notifyMatchFailure(op, "could not convert body types");
     }
     // Change the clone to use the updated operands. We could have cloned with
@@ -1562,7 +1561,7 @@ public:
 #else
               rewriter.convertRegionTypes(&dstRegion, *converter)
 #endif
-              ))
+                  ))
         return rewriter.notifyMatchFailure(op, "could not convert body types");
     }
     rewriter.replaceOp(op, newOp.getResults());
@@ -1591,8 +1590,8 @@ void populateSCFPatterns(TritonGPUTypeConverter &typeConverter,
 #else
       GenericOpPattern<scf::YieldOp>,
 #endif
-      SCFForPattern, SCFIfPattern,
-               SCFWhilePattern, SCFConditionPattern>(typeConverter, context);
+      SCFForPattern, SCFIfPattern, SCFWhilePattern, SCFConditionPattern>(
+      typeConverter, context);
 }
 
 // CF
@@ -1659,8 +1658,8 @@ struct MUSATLESqmmaPattern
       return failure();
     SmallVector<triton::gpu::ConvertLayoutOp> deadMaterializations;
     SmallVector<Value> operands(adaptor.getOperands());
-    operands[2] = unwrapInvalidPartitionMaterialization(
-        operands[2], op, deadMaterializations);
+    operands[2] = unwrapInvalidPartitionMaterialization(operands[2], op,
+                                                        deadMaterializations);
     rewriter.replaceOpWithNewOp<mlir::triton::musa_tle::SqmmaOp>(
         op, resultTypes, operands, op->getAttrs());
     eraseDeadMaterializations(deadMaterializations, rewriter);
@@ -1682,8 +1681,8 @@ struct MUSATLESqmmaWaitPattern
       return failure();
     SmallVector<triton::gpu::ConvertLayoutOp> deadMaterializations;
     SmallVector<Value> operands(adaptor.getOperands());
-    operands[0] = unwrapInvalidPartitionMaterialization(
-        operands[0], op, deadMaterializations);
+    operands[0] = unwrapInvalidPartitionMaterialization(operands[0], op,
+                                                        deadMaterializations);
     rewriter.replaceOpWithNewOp<mlir::triton::musa_tle::SqmmaWaitOp>(
         op, resultTypes, operands, op->getAttrs());
     eraseDeadMaterializations(deadMaterializations, rewriter);

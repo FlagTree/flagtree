@@ -64,7 +64,7 @@ def _constant_expr_pipe_producer(
 ):
     for iteration in tl.range(0, ITERATIONS + 0, num_stages=1):
         slot = writer.acquire(iteration)
-        tle.gpu.copy(desc, slot.data, (BLOCK,), (iteration * BLOCK,))
+        tle.gpu.copy(desc, slot.data, (BLOCK, ), (iteration * BLOCK, ))
         writer.commit(iteration)
 
 
@@ -3028,25 +3028,19 @@ def _compile_invalid_pipeline(
         # Do this after the Python frontend: a constexpr expression such as
         # ``ITERATIONS + 0`` is folded before it reaches MLIR and therefore
         # does not exercise the pipeliner's scalar constant evaluator.
-        loop_header = re.compile(
-            r"^(?P<indent>\s*)scf\.for (?P<iv>%[-\w.$]+) = "
-            r"(?P<lb>%[-\w.$]+) to (?P<ub>%[-\w.$]+) step "
-            r"(?P<step>%[-\w.$]+)(?P<tail>\s+:\s+(?P<ty>index|i\d+)\s*\{.*)$"
-        )
+        loop_header = re.compile(r"^(?P<indent>\s*)scf\.for (?P<iv>%[-\w.$]+) = "
+                                 r"(?P<lb>%[-\w.$]+) to (?P<ub>%[-\w.$]+) step "
+                                 r"(?P<step>%[-\w.$]+)(?P<tail>\s+:\s+(?P<ty>index|i\d+)\s*\{.*)$")
         rewritten = []
         rewritten_loops = 0
         for line in str(module).splitlines():
             match = loop_header.match(line)
             if match:
                 arithmetic_bound = f"%constant_arithmetic_ub_{rewritten_loops}"
-                rewritten.append(
-                    f"{match['indent']}{arithmetic_bound} = arith.addi "
-                    f"{match['ub']}, {match['lb']} : {match['ty']}"
-                )
-                line = (
-                    f"{match['indent']}scf.for {match['iv']} = {match['lb']} "
-                    f"to {arithmetic_bound} step {match['step']}{match['tail']}"
-                )
+                rewritten.append(f"{match['indent']}{arithmetic_bound} = arith.addi "
+                                 f"{match['ub']}, {match['lb']} : {match['ty']}")
+                line = (f"{match['indent']}scf.for {match['iv']} = {match['lb']} "
+                        f"to {arithmetic_bound} step {match['step']}{match['tail']}")
                 rewritten_loops += 1
             rewritten.append(line)
         assert rewritten_loops >= 2
@@ -3071,14 +3065,14 @@ def _compile_invalid_pipeline(
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         for pass_name in (
-            "add_tle_optimize_local_pointer_async_stores",
-            "add_tle_early_assign_memory_space",
-            "add_tle_select_encodings",
-            "add_tle_lower_exclusive_cumsum",
-            "add_tle_insert_local_pointer_barriers",
-            "add_tle_optimize_local_pointer_loads",
-            "add_tle_optimize_local_pointer_stores",
-            "add_tle_lower_sqmma",
+                "add_tle_optimize_local_pointer_async_stores",
+                "add_tle_early_assign_memory_space",
+                "add_tle_select_encodings",
+                "add_tle_lower_exclusive_cumsum",
+                "add_tle_insert_local_pointer_barriers",
+                "add_tle_optimize_local_pointer_loads",
+                "add_tle_optimize_local_pointer_stores",
+                "add_tle_lower_sqmma",
         ):
             if hasattr(mthreads_passes, pass_name):
                 getattr(mthreads_passes, pass_name)(pm)
@@ -3615,16 +3609,14 @@ def test_musa_ws_implicit_readers_use_partition_endpoints_runtime(stages):
     iterations = 2 * stages + 1
     half_m, half_n = 16, 32
     float_m, float_n = 8, 16
-    half_source = torch.arange(
-        iterations * half_m * half_n, dtype=torch.float16, device="musa"
-    ).reshape(iterations * half_m, half_n)
-    float_source = torch.arange(
-        iterations * float_m * float_n, dtype=torch.float32, device="musa"
-    ).reshape(iterations * float_m, float_n)
+    half_source = torch.arange(iterations * half_m * half_n, dtype=torch.float16,
+                               device="musa").reshape(iterations * half_m, half_n)
+    float_source = torch.arange(iterations * float_m * float_n, dtype=torch.float32,
+                                device="musa").reshape(iterations * float_m, float_n)
     half_output = torch.empty_like(half_source)
     float_output = torch.empty_like(float_source)
-    idle_marker = torch.full((1,), -1, dtype=torch.int32, device="musa")
-    flags = torch.empty((2 * iterations,), dtype=torch.int32, device="musa")
+    idle_marker = torch.full((1, ), -1, dtype=torch.int32, device="musa")
+    flags = torch.empty((2 * iterations, ), dtype=torch.int32, device="musa")
     half_source_desc = TensorDescriptor.from_tensor(half_source, [half_m, half_n])
     float_source_desc = TensorDescriptor.from_tensor(float_source, [float_m, float_n])
     float_destination_desc = TensorDescriptor.from_tensor(float_output, [float_m, float_n])
@@ -3642,7 +3634,7 @@ def test_musa_ws_implicit_readers_use_partition_endpoints_runtime(stages):
         HALF_N=half_n,
         FLOAT_M=float_m,
         FLOAT_N=float_n,
-        grid=(1,),
+        grid=(1, ),
         num_warps=16,
         num_stages=1,
     )
@@ -3653,7 +3645,7 @@ def test_musa_ws_implicit_readers_use_partition_endpoints_runtime(stages):
         float_output.fill_(float("nan"))
         idle_marker.fill_(-1)
         flags.fill_(-1)
-        _ws_implicit_partition_worker1_writer_kernel[(1,)](
+        _ws_implicit_partition_worker1_writer_kernel[(1, )](
             half_source_desc,
             float_source_desc,
             half_output,

@@ -574,15 +574,16 @@ struct ResolvedSharedOperand {
   SmallVector<int64_t> physicalShape;
 };
 
-inline Value resolveMUSASharedAffineBase(
-    const LLVM::SharedMemoryObject &sharedMemObj, ttg::MemDescType memDescTy,
-    Location loc, ConversionPatternRewriter &rewriter) {
+inline Value
+resolveMUSASharedAffineBase(const LLVM::SharedMemoryObject &sharedMemObj,
+                            ttg::MemDescType memDescTy, Location loc,
+                            ConversionPatternRewriter &rewriter) {
   if (!LLVM::SharedMemoryObject::isAffineSharedMemoryAccess(memDescTy))
     return sharedMemObj.getBase();
 
   LinearLayout layout = getMUSASharedLinearLayoutOrGeneric(memDescTy);
-  auto dimNames = triton::standardOutDimNames(
-      memDescTy.getContext(), sharedMemObj.getOffsets().size());
+  auto dimNames = triton::standardOutDimNames(memDescTy.getContext(),
+                                              sharedMemObj.getOffsets().size());
   SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
   for (auto [dim, offset] : llvm::zip(dimNames, sharedMemObj.getOffsets()))
     logicalOffsets.push_back({dim, offset});

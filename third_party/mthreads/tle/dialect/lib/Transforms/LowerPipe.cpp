@@ -414,11 +414,9 @@ class LowerPipePass
                                           builder.getUnitAttr());
       }
       SmallVector<Value> fullBases{fullBase};
-      for (const musa_tle::PipeBarrierRingPlan &segment :
-           plan.additionalFull) {
+      for (const musa_tle::PipeBarrierRingPlan &segment : plan.additionalFull) {
         if (!segment.transactionBytes ||
-            segment.storageOwner !=
-                musa_tle::PipeBarrierStorageOwner::Pipe ||
+            segment.storageOwner != musa_tle::PipeBarrierStorageOwner::Pipe ||
             segment.externalStorage || segment.capacity != plan.full.capacity ||
             segment.arrivalCount != plan.full.arrivalCount)
           return create.emitOpError(
@@ -426,8 +424,7 @@ class LowerPipePass
               "full-barrier plans");
         IntegerAttr segmentBytes;
         if (*segment.transactionBytes > 0)
-          segmentBytes =
-              builder.getI32IntegerAttr(*segment.transactionBytes);
+          segmentBytes = builder.getI32IntegerAttr(*segment.transactionBytes);
         Value segmentBase = musa_tle::BarrierAllocOp::create(
             builder, loc, builder.getI32IntegerAttr(segment.capacity),
             builder.getI32IntegerAttr(segment.arrivalCount), pending,
@@ -510,8 +507,7 @@ class LowerPipePass
                       bool isLocalStoreTransport =
                           source.kind ==
                               musa_tle::PipeTransportKind::LocalStore ||
-                          source.kind ==
-                              musa_tle::PipeTransportKind::AsyncCopy;
+                          source.kind == musa_tle::PipeTransportKind::AsyncCopy;
                       return isLocalStoreTransport &&
                              source.destinationField == field.index &&
                              region.exact && region.byteOffset == 0 &&
@@ -697,10 +693,9 @@ class LowerPipePass
 
         if (group->segmentTransactionBytes.size() !=
             pipeArtifacts.fullBases.size())
-          return commit.emitOpError(
-              "lost analyzed full-barrier segmentation");
-        for (unsigned segment = 0;
-             segment < pipeArtifacts.fullBases.size(); ++segment) {
+          return commit.emitOpError("lost analyzed full-barrier segmentation");
+        for (unsigned segment = 0; segment < pipeArtifacts.fullBases.size();
+             ++segment) {
           SmallVector<const musa_tle::PipeCompletionSource *> tmeSources;
           for (const auto &source : group->completionSources)
             if (source.kind == musa_tle::PipeTransportKind::TME &&
@@ -734,20 +729,18 @@ class LowerPipePass
               continue;
             auto copy = cast<ttg::TMACopyOp>(source.operation);
             OpBuilder copyBuilder(copy);
-            Value barrier =
-                commonBarrier
-                    ? commonBarrier
-                    : createIndex(copyBuilder, copy.getLoc(), copy,
-                                  pipeArtifacts.fullBases[segment],
-                                  source.stage);
+            Value barrier = commonBarrier
+                                ? commonBarrier
+                                : createIndex(copyBuilder, copy.getLoc(), copy,
+                                              pipeArtifacts.fullBases[segment],
+                                              source.stage);
             auto replacement = ttg::TMACopyOp::create(
                 copyBuilder, copy.getLoc(), copy.getSrc(), copy.getDst(),
                 copy.getIndices(), barrier);
             replacement->setDiscardableAttrs(
                 copy->getDiscardableAttrDictionary());
-            replacement->setAttr(
-                "expect_bytes",
-                copyBuilder.getI32IntegerAttr(source.transactionBytes));
+            replacement->setAttr("expect_bytes", copyBuilder.getI32IntegerAttr(
+                                                     source.transactionBytes));
             // Each executed copy adds its transaction bytes.  The commit,
             // not the last syntactic copy, supplies the control arrival.
             replacement->setAttr(ttmg::kTLEPipeDeferredArrivalAttr,
@@ -761,11 +754,10 @@ class LowerPipePass
             copy.erase();
           }
           if (group->tmeGroupArrivalCount) {
-            Value barrier = createIndex(builder, loc, op,
-                                        pipeArtifacts.fullBases[segment],
-                                        group->stage);
-            Value predicate =
-                arith::ConstantIntOp::create(builder, loc, 1, 1);
+            Value barrier =
+                createIndex(builder, loc, op, pipeArtifacts.fullBases[segment],
+                            group->stage);
+            Value predicate = arith::ConstantIntOp::create(builder, loc, 1, 1);
             auto arrival = ttmg::ArriveBarrierNoRetOp::create(
                 builder, loc, barrier, predicate);
             int32_t issueThread = 0;

@@ -364,9 +364,7 @@ def _tool_output(stdout: Optional[str], stderr: Optional[str]) -> str:
     return "\n".join(chunks)
 
 
-def _is_known_mtgpu_register_failure(
-    tool_name: str, output: str, returncode: Optional[int] = None
-) -> bool:
+def _is_known_mtgpu_register_failure(tool_name: str, output: str, returncode: Optional[int] = None) -> bool:
     """Recognize recoverable register-allocation failures from MTT ``llc``.
 
     The MTGPU backend aborts instead of returning a regular diagnostic for a
@@ -384,9 +382,7 @@ def _is_known_mtgpu_register_failure(
     # signal. Require both the pass name and an explicit crash indication.
     post_ra = "mtgpu post-ra internal registers related optimization" in text
     crash_markers = ("segmentation fault", "sigsegv", "signal 11", "exit code 139")
-    return post_ra and (
-        returncode in (-11, 139) or any(marker in text for marker in crash_markers)
-    )
+    return post_ra and (returncode in (-11, 139) or any(marker in text for marker in crash_markers))
 
 
 def _run_tool_command(tool_name: str, cmd: list[str], *, repro_dir: Path, dump_log: bool = False) -> None:
@@ -398,12 +394,10 @@ def _run_tool_command(tool_name: str, cmd: list[str], *, repro_dir: Path, dump_l
     if proc.returncode == 0:
         return
     if _is_known_mtgpu_register_failure(tool_name, output, proc.returncode):
-        raise PTXASError(
-            "MTGPU register allocation rejected this candidate.\n"
-            f"{output or '<empty>'}\n"
-            f"Repro command: {shlex.join(cmd)}\n"
-            f"Artifacts kept in: {repro_dir}"
-        )
+        raise PTXASError("MTGPU register allocation rejected this candidate.\n"
+                         f"{output or '<empty>'}\n"
+                         f"Repro command: {shlex.join(cmd)}\n"
+                         f"Artifacts kept in: {repro_dir}")
     error = (f"`{tool_name}` failed with error code {proc.returncode}\n"
              f"`{tool_name}` output:\n{output or '<empty>'}\n"
              f"Repro command: {shlex.join(cmd)}\n"
@@ -845,9 +839,7 @@ class MUSAOptions:
         hash_dict["llc_tool_signature"] = _tool_version_signature(llc_path)
         hash_dict["lld_tool_signature"] = _tool_version_signature(lld_path)
         hash_dict["llc_asm_tool_signature"] = _tool_version_signature(llc_asm_path or "")
-        hash_dict["musa_k128_sqmma_opt_in_live"] = os.getenv(
-            "TRITON_MUSA_ENABLE_K128_SQMMA", ""
-        )
+        hash_dict["musa_k128_sqmma_opt_in_live"] = os.getenv("TRITON_MUSA_ENABLE_K128_SQMMA", "")
         if hash_dict["extern_libs"]:
             hash_dict["extern_libs"] = tuple((k, file_hash(v)) for k, v in sorted(hash_dict["extern_libs"]))
         key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
@@ -984,10 +976,8 @@ class MUSABackend(BaseBackend):
         # mp_32. Reject future numeric capabilities here rather than letting
         # instruction selection terminate the compiler process.
         if capability > 32:
-            raise ValueError(
-                f"Unsupported MUSA arch {args['arch']}: "
-                "this FlagTree toolchain supports capabilities up to 32"
-            )
+            raise ValueError(f"Unsupported MUSA arch {args['arch']}: "
+                             "this FlagTree toolchain supports capabilities up to 32")
         if opts.get("num_ctas", 1) > 1 and capability == 31:
             raise ValueError("num_ctas > 1 requires MUSA cluster launch support. "
                              f"Current target is {args['arch']} (capability {capability}).")
@@ -1033,9 +1023,7 @@ class MUSABackend(BaseBackend):
         if "enable_llvm_compat" not in opts:
             args["enable_llvm_compat"] = knobs.musa.enable_llvm_compat
         if "k128_sqmma_opt_in" not in opts:
-            args["k128_sqmma_opt_in"] = os.getenv(
-                "TRITON_MUSA_ENABLE_K128_SQMMA", ""
-            )
+            args["k128_sqmma_opt_in"] = os.getenv("TRITON_MUSA_ENABLE_K128_SQMMA", "")
         maxnreg = opts.get("maxnreg", None)
         if maxnreg is not None and (not isinstance(maxnreg, int) or maxnreg <= 0):
             raise ValueError(f"maxnreg must be a positive integer, got {maxnreg!r}")
