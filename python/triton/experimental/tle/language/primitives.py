@@ -72,6 +72,7 @@ TLE_PRIMITIVES = frozenset({
     "gpu.wgmma_wait",
     "gpu.buffered_tensor.reshape",
     "gpu.buffered_tensor.slot",
+    "gpu.buffered_tensor.subslice",
     "gpu.range",  # TODO: del
     "gpu.pipeline",  # TODO: del
 
@@ -94,6 +95,14 @@ TLE_PRIMITIVES = frozenset({
     "dsa.tsingmicro.randgen",
     "dsa.tsingmicro.rand",
     "dsa.tsingmicro.randn",
+
+    ## TLE-Struct DSA (thrive): inter-die RMA and synchronization
+    "dsa.thrive.putmem",
+    "dsa.thrive.getmem",
+    "dsa.thrive.wait",
+    "dsa.thrive.notify",
+    "dsa.thrive.fence",
+    "dsa.thrive.sync",
 })
 
 __all__ = ["TLE_PRIMITIVES"]
