@@ -1,20 +1,22 @@
-"""smt_rvisa svector-level mv (feishu 3.3 示例).
+"""smt_rvisa svector-level mv (feishu 3.3 example).
 
 C = B @ A   with  B: [N, K] f16 row-major,  A: [K] f16,  C: [N] f32.
 
-style2 (纯 svector): vconfig/vzero/vload/vmacc/vreduce_sum/vstore, no packing.
+style2 (pure svector): vconfig/vzero/vload/vmacc/vreduce_sum/vstore, no packing.
 style3 (svector + pack): the same, but B's 4-row block is pre-packed into a
         contiguous scratch buffer via srv.alloc + srv.pack before the K loop.
 
-(矩阵单元 mv/mm 走 srv.vmadot → vector_ext.cross_batch_matmul,见
- test_raw_mm_cbm.py / test_raw_mv_cbm.py。)
+(Matrix-unit mv/mm goes through srv.vmadot -> vector_ext.cross_batch_matmul;
+ see test_raw_mm_cbm.py / test_raw_mv_cbm.py.)
 
 Fixed VL (f16 -> 64) this round: no dynamic vsetvl tail handling, so the tests
 constrain K % 64 == 0 and N % 4 == 0 (full tiles only).
 
-访存按 SPEC §6.2 规格:vload(ptr, index)/vstore(ptr, index, value),index 为扁平
-标量元素偏移,二维坐标由用户自行压平(如 B 的行 ni 列 ki 写作 ni*K + ki)。对
-alloc 出的 ranked scratch(packed_B),index 仍是逐维下标元组(ranked 自然寻址)。
+Memory access follows SPEC §6.2: vload(ptr, index)/vstore(ptr, index, value),
+where index is a flat scalar element offset and 2D coordinates are flattened
+by the user (e.g. B row ni column ki is written ni*K + ki). For ranked scratch
+allocated via alloc (packed_B), the index is still a per-dimension index tuple
+(natural ranked addressing).
 """
 
 import torch
@@ -32,24 +34,29 @@ f32 = srv.f32
 
 
 # ---------------------------------------------------------------------------
-# 写法2 — 纯 svector
+# style2 — pure svector
 # ---------------------------------------------------------------------------
 @srv.raw_kernel
 def mv_block_style2(B: srv.mem(f16), A: srv.mem(f16), C: srv.mem(f32, out=True), K: srv.index, row_base: srv.index,
                     row_end: srv.index):
-    # grid 并发:host 按 program_id 把 N 行切块,本 program 只算 [row_base, row_end) 行。
+    # Grid parallelism: the host splits the N rows by program_id; this program
+    # computes only rows [row_base, row_end).
     nvl = srv.vconfig(-1, 1)  # lmul=1 → VLMAX=64 (f16, SPEC §6.1)
-    # strip-mine:K 循环分裂成主循环(满 tile)+尾循环(K%VL 那块)。要不要 pad 由 codegen 编译期
-    # 按「是否设了 vconfig 收窄」决定(纯 Python if, 不往 IR 塞运行期 scf.if):主循环不收窄 →
-    # vload 走快路直读, 零 pad 零分支;尾循环设 vconfig(K-ki) → vload fill-0 pad。尾循环
-    # scf.for 天然跑 0 次(K%VL==0, 整除 shape)或 1 次, 用迭代次数代替分支。
-    Kfloor = (K // nvl) * nvl  # 满 tile 覆盖的 K 区间(VL 整数倍)
+    # strip-mine: the K loop is split into a main loop (full tiles) + a tail
+    # loop (the K%VL remainder). Whether to pad is decided by codegen at
+    # compile time based on "whether a narrowing vconfig was set" (plain
+    # Python if; no runtime scf.if is emitted into the IR): the main loop sets
+    # no narrowing → vload takes the fast direct-read path with zero padding
+    # and zero branches; the tail loop sets vconfig(K-ki) → vload fill-0 pad.
+    # The tail scf.for naturally runs 0 iterations (K%VL==0, evenly divisible
+    # shape) or 1, replacing a branch with iteration count.
+    Kfloor = (K // nvl) * nvl  # K range covered by full tiles (multiple of VL)
     for ni in srv.range(row_base, row_end, 4):
         acc0 = srv.vzero(f32)
         acc1 = srv.vzero(f32)
         acc2 = srv.vzero(f32)
         acc3 = srv.vzero(f32)
-        for ki in srv.range(0, Kfloor, nvl):  # 主循环:满 tile, 快路直读(不设收窄)
+        for ki in srv.range(0, Kfloor, nvl):  # main loop: full tiles, fast direct read (no narrowing set)
             va = srv.vload(A, ki)
             vb0 = srv.vload(B, ni * K + ki)
             vb1 = srv.vload(B, (ni + 1) * K + ki)
@@ -59,11 +66,14 @@ def mv_block_style2(B: srv.mem(f16), A: srv.mem(f16), C: srv.mem(f32, out=True),
             acc1 = srv.vmacc(acc1, vb1, va)
             acc2 = srv.vmacc(acc2, vb2, va)
             acc3 = srv.vmacc(acc3, vb3, va)
-        for ki in srv.range(Kfloor, K, nvl):  # 尾循环:跑 0/1 次, 收窄 → codegen 走 fill-0 pad
+        for ki in srv.range(Kfloor, K, nvl):  # tail loop: runs 0/1 times, narrowed → codegen uses fill-0 pad
             nvl = srv.vconfig(K - ki, 1)
-            # 用独立临时名(ta/tb*):与主循环的 va/vb* 不同名, 否则它们泄漏到外层作用域,
-            # 尾循环的 iter_arg 检测(_find_reassigned)会误把这些纯临时当成循环携带值 →
-            # 生成引用主循环已出作用域 SSA 的坏 iter_args。
+            # Use distinct temporary names (ta/tb*): if they shared names with
+            # the main loop's va/vb*, those would leak to the outer scope and
+            # the tail loop's iter_arg detection (_find_reassigned) would
+            # mistake these pure temporaries for loop-carried values →
+            # generating bad iter_args that reference main-loop SSA values
+            # already out of scope.
             ta = srv.vload(A, ki)
             tb0 = srv.vload(B, ni * K + ki)
             tb1 = srv.vload(B, (ni + 1) * K + ki)
@@ -83,26 +93,31 @@ def mv_block_style2(B: srv.mem(f16), A: srv.mem(f16), C: srv.mem(f32, out=True),
 def _mv_sv_host_style2(B, A, C, K, N, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     row_base = pid * BLOCK
-    row_end = min(row_base + BLOCK, N)  # 限行:末 program 不越 N, 避免读 phantom 行 B
+    row_end = min(row_base + BLOCK, N)  # clamp rows: last program stays within N, no phantom B-row reads
     srv_call(mv_block_style2, outputs=[], inputs=[B, A, C, K, row_base, row_end])
 
 
 # ---------------------------------------------------------------------------
-# 写法3 — svector + srv.alloc/srv.pack 预打包 B
+# style3 — svector + srv.alloc/srv.pack pre-packing B
 # ---------------------------------------------------------------------------
 @srv.raw_kernel
 def mv_block_style3(B: srv.mem(f16), A: srv.mem(f16), C: srv.mem(f32, out=True), K: srv.index, row_base: srv.index,
                     row_end: srv.index):
-    # grid 并发:本 program 只算 [row_base, row_end) 行。
+    # Grid parallelism: this program computes only rows [row_base, row_end).
     nvl = srv.vconfig(-1, 1)  # lmul=1 → VLMAX=64 (f16, SPEC §6.1)
-    # tile 数须 ceil(K/nvl):pack 的 kb 循环跑 0..K step nvl = ceil(K/nvl) 个 tile,
-    # alloc 用 floor(K//nvl)在 K%64≠0 时欠分配 → pack 写 dst[0,ceil-1,..] 越界 dim-1
-    # → 堆缓冲区溢出(跨-kernel 污染, NaN)。用 ceil 匹配 pack 实际写的 tile 数。
+    # The tile count must be ceil(K/nvl): pack's kb loop runs 0..K step nvl =
+    # ceil(K/nvl) tiles; using floor(K//nvl) for alloc under-allocates when
+    # K%64!=0 → pack writes dst[0,ceil-1,..] out of bounds on dim-1 → heap
+    # buffer overflow (cross-kernel corruption, NaN). Use ceil to match the
+    # number of tiles pack actually writes.
     kct = (K + nvl - 1) // nvl
     packed_B = srv.alloc((1, kct, 4, nvl), f16)
-    # strip-mine(同 style2):主循环满 tile 走 vload 快路(不设收窄)、尾循环 K%VL 那块设
-    # vconfig(K-ki)→codegen 编译期走 fill-0 pad。要不要 pad 由 codegen 按是否收窄编译期定,
-    # 不塞运行期 scf.if;尾循环 scf.for 跑 0/1 次代替分支。packed_B 尾 tile 由 pack 已补 0。
+    # strip-mine (same as style2): the main loop reads full tiles via the
+    # vload fast path (no narrowing set); the tail loop (the K%VL remainder)
+    # sets vconfig(K-ki) → codegen uses fill-0 pad at compile time. Whether to
+    # pad is decided by codegen based on narrowing, no runtime scf.if; the
+    # tail scf.for runs 0/1 times instead of a branch. packed_B's tail tile is
+    # already zero-padded by pack.
     Kfloor = (K // nvl) * nvl
     for ni in srv.range(row_base, row_end, 4):
         acc0 = srv.vzero(f32)
@@ -110,7 +125,7 @@ def mv_block_style3(B: srv.mem(f16), A: srv.mem(f16), C: srv.mem(f32, out=True),
         acc2 = srv.vzero(f32)
         acc3 = srv.vzero(f32)
         srv.pack(B, (ni, 0), packed_B, (1, kct, 4, nvl), K)
-        for ki in srv.range(0, Kfloor, nvl):  # 主循环:满 tile 快路
+        for ki in srv.range(0, Kfloor, nvl):  # main loop: full tiles, fast path
             vb0 = srv.vload(packed_B, (0, ki // nvl, 0, 0))
             vb1 = srv.vload(packed_B, (0, ki // nvl, 1, 0))
             vb2 = srv.vload(packed_B, (0, ki // nvl, 2, 0))
@@ -120,7 +135,7 @@ def mv_block_style3(B: srv.mem(f16), A: srv.mem(f16), C: srv.mem(f32, out=True),
             acc1 = srv.vmacc(acc1, vb1, va)
             acc2 = srv.vmacc(acc2, vb2, va)
             acc3 = srv.vmacc(acc3, vb3, va)
-        for ki in srv.range(Kfloor, K, nvl):  # 尾循环:跑 0/1 次, 收窄→fill-0(独立临时名 tb*/ta)
+        for ki in srv.range(Kfloor, K, nvl):  # tail loop: runs 0/1 times, narrowed → fill-0 (distinct temporaries tb*/ta)
             nvl = srv.vconfig(K - ki, 1)
             tb0 = srv.vload(packed_B, (0, ki // nvl, 0, 0))
             tb1 = srv.vload(packed_B, (0, ki // nvl, 1, 0))
@@ -141,15 +156,19 @@ def mv_block_style3(B: srv.mem(f16), A: srv.mem(f16), C: srv.mem(f32, out=True),
 def _mv_sv_host_style3(B, A, C, K, N, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     row_base = pid * BLOCK
-    row_end = min(row_base + BLOCK, N)  # 限行:末 program 不越 N, pack 不读 phantom 行 B
+    row_end = min(row_base + BLOCK, N)  # clamp rows: last program stays within N, pack reads no phantom B rows
     srv_call(mv_block_style3, outputs=[], inputs=[B, A, C, K, row_base, row_end])
 
 
 def _run(host, N, K, BLOCK=4):
-    # grid 并发:N 行按 BLOCK 切成 ceil(N/BLOCK) 个 program(每个算 BLOCK 行,内层 4 行一组)。
-    # N%BLOCK≠0 时末 program 的 row_end 会超过 N,内层无条件 vstore(C, ni..ni+3) 会写
-    # phantom 行 C[N..Np-1]。C 须分配到 Np=ceil(N/BLOCK)*BLOCK 行吸收这些写(仅多分配,
-    # 无 data copy),否则写越界 → 堆损坏(fix:N 尾 phantom 行越界)。取结果切 C[:N]。
+    # Grid parallelism: the N rows are split into ceil(N/BLOCK) programs (each
+    # computes BLOCK rows, 4 rows per inner group). When N%BLOCK!=0 the last
+    # program's row_end exceeds N and the inner unconditional vstore(C,
+    # ni..ni+3) writes phantom rows C[N..Np-1]. C must be allocated with
+    # Np=ceil(N/BLOCK)*BLOCK rows to absorb these writes (extra allocation
+    # only, no data copy), otherwise the writes go out of bounds → heap
+    # corruption (fix: N-tail phantom-row overflow). Slice C[:N] for the
+    # result.
     Np = ((N + BLOCK - 1) // BLOCK) * BLOCK
     B = torch.randn(N, K, dtype=torch.float16)
     A = torch.randn(K, dtype=torch.float16)
@@ -177,15 +196,20 @@ def test_raw_mv_svector_style3(N, K):
 
 
 # ---------------------------------------------------------------------------
-# 任意 shape — 全 kernel 内 padding(零 host copy)
+# Arbitrary shapes — all padding inside the kernel (zero host copy)
 # ---------------------------------------------------------------------------
-# 两个约束都在 kernel/host 封装内解决,B/A 不做任何 host copy:
-#   ① K%64:K 尾块 vload 由 vconfig(K-ki,1) 降级为 fill-0 scratch,尾 lane 补 0
-#      (probe_svpad_fill 坐实),vmacc/vreduce_sum 补 0 无害。
-#   ② N%BLOCK:grid=ceil(N/BLOCK),末 program row_end>N,内层无条件写 phantom 行
-#      C[N..Np-1];C 分配到 Np=ceil(N/BLOCK)*BLOCK 吸收(仅分配无 copy),切 C[:N]。
-# _run 已同时处理 ①②,故任意 shape 直接复用 _run。
-# 任意 shape:K 非 64 倍数 / N 非 BLOCK 倍数 / 二者都非整除
+# Both constraints are resolved inside the kernel/host wrapper with no host
+# copy of B/A:
+#   (1) K%64: the K-tail vload is demoted by vconfig(K-ki,1) to a fill-0
+#       scratch, tail lanes padded with 0 (confirmed by probe_svpad_fill);
+#       vmacc/vreduce_sum are unaffected by the zero padding.
+#   (2) N%BLOCK: grid=ceil(N/BLOCK), the last program's row_end>N and the
+#       inner unconditional store writes phantom rows C[N..Np-1]; C is
+#       allocated to Np=ceil(N/BLOCK)*BLOCK to absorb them (allocation only,
+#       no copy), then sliced C[:N].
+# _run already handles both (1) and (2), so arbitrary shapes reuse _run
+# directly.
+# Arbitrary shapes: K not a multiple of 64 / N not a multiple of BLOCK / both
 _SHAPES_ARB = [(4, 60), (4, 100), (8, 65), (4, 63), (8, 127), (4, 200), (16, 130), (12, 50), (7, 64), (33, 65),
                (50, 130), (100, 100), (6, 60), (13, 200), (37, 130)]
 

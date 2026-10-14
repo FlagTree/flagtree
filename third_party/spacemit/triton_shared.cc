@@ -347,7 +347,7 @@ void init_triton_spacemit_tle_ir(py::module &&m) {
 
 // ============================================================================
 // Spine Raw IR Builder Bindings
-// 为 smt_rvisa codegen 提供标准的 MLIR builder API，替代字符串拼接
+// Provides the standard MLIR builder API for smt_rvisa codegen, replacing string concatenation
 // ============================================================================
 
 // Helper: parse MLIR type string
@@ -568,7 +568,7 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
           py::arg("type"))
 
       // ========================================================================
-      // Arith dialect - 常量
+      // Arith dialect - constants
       // ========================================================================
       .def(
           "create_arith_constant_index",
@@ -594,7 +594,7 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
           py::arg("value"), py::arg("float_type"))
 
       // ========================================================================
-      // Arith dialect - 整数运算
+      // Arith dialect - integer ops
       // ========================================================================
       .def(
           "create_arith_addi",
@@ -632,7 +632,7 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
            })
 
       // ========================================================================
-      // Arith dialect - 浮点运算
+      // Arith dialect - float ops
       // ========================================================================
       .def("create_arith_addf",
            [](TritonOpBuilder &self, Value lhs, Value rhs) -> Value {
@@ -664,7 +664,7 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
            })
 
       // ========================================================================
-      // Arith dialect - 类型转换
+      // Arith dialect - type conversion
       // ========================================================================
       .def(
           "create_arith_extf",
@@ -699,7 +699,7 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
            })
 
       // ========================================================================
-      // Arith dialect - 比较
+      // Arith dialect - comparison
       // ========================================================================
       .def(
           "create_arith_cmpi",
@@ -752,7 +752,7 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
            })
 
       // ========================================================================
-      // Arith dialect - 位运算
+      // Arith dialect - bitwise ops
       // ========================================================================
       .def("create_arith_andi",
            [](TritonOpBuilder &self, Value lhs, Value rhs) -> Value {
@@ -818,12 +818,12 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
            })
 
       // ========================================================================
-      // Vector dialect - 基础操作
+      // Vector dialect - basics
       // ========================================================================
       .def(
           "create_vector_splat",
           [](TritonOpBuilder &self, Value input, Type vectorType) -> Value {
-            // splat = broadcast a scalar to all lanes (SplatOp 已废弃, 用
+            // splat = broadcast a scalar to all lanes (SplatOp is deprecated; use
             // BroadcastOp)
             return self.create<vector::BroadcastOp>(vectorType, input)
                 .getResult();
@@ -877,7 +877,7 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
               inBoundsVec =
                   SmallVector<bool>(inBounds->begin(), inBounds->end());
             } else {
-              // 默认全部 in_bounds=true
+              // all in_bounds=true by default
               auto vecTy = cast<VectorType>(vectorType);
               inBoundsVec = SmallVector<bool>(vecTy.getRank(), true);
             }
@@ -932,33 +932,35 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
           py::arg("kind"), py::arg("source"))
 
       // ========================================================================
-      // SCF dialect - 控制流
+      // SCF dialect - control flow
       // ========================================================================
       .def(
           "create_scf_for",
           [](TritonOpBuilder &self, Value lb, Value ub, Value step,
              std::vector<Value> iterArgs,
              py::function bodyBuilder) -> std::vector<Value> {
-            // 创建 scf.for
+            // create scf.for
             ValueRange iterArgsRange(iterArgs);
             auto forOp = self.create<scf::ForOp>(lb, ub, step, iterArgsRange);
 
-            // 设置 body builder 的插入点
+            // set the body builder's insertion point
             OpBuilder::InsertionGuard guard(self.getBuilder());
             Block *bodyBlock = forOp.getBody();
 
-            // ForOp::build 在 initArgs 为空且无 bodyBuilder 时会自动
-            // ensureTerminator 塞一个空 scf.yield;若不清除,后面我们再
-            // create<YieldOp> 会得到两个 yield (触发 'scf.yield must be the
-            // last operation')。统一由本函数负责 yield, 先擦掉自动终结符。
+            // ForOp::build with empty initArgs and no bodyBuilder
+            // auto-inserts an empty scf.yield via ensureTerminator; if not
+            // erased, our later create<YieldOp> would produce two yields
+            // (triggering 'scf.yield must be the last operation'). This
+            // function owns the yield, so erase the auto-inserted terminator
+            // first.
             if (!bodyBlock->empty() &&
                 bodyBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
               bodyBlock->back().erase();
 
             self.getBuilder().setInsertionPointToEnd(bodyBlock);
 
-            // 调用 Python 传入的 body builder
-            // Python 侧需要返回 yield 的值列表
+            // invoke the Python-provided body builder
+            // the Python side must return the list of values to yield
             Value iv = forOp.getInductionVar();
             std::vector<Value> regionIterArgs(
                 bodyBlock->getArguments().begin() + 1,
@@ -969,11 +971,11 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
             std::vector<Value> yieldVals =
                 yieldValsObj.cast<std::vector<Value>>();
 
-            // 创建 scf.yield(本函数唯一 yield 来源)
+            // create scf.yield (the sole yield source in this function)
             self.getBuilder().setInsertionPointToEnd(bodyBlock);
             self.create<scf::YieldOp>(yieldVals);
 
-            // 返回 for 的结果
+            // return the for's results
             return std::vector<Value>(forOp.getResults().begin(),
                                       forOp.getResults().end());
           },
@@ -997,11 +999,12 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
               dynSizes = SmallVector<Value>(dynamicSizes->begin(),
                                             dynamicSizes->end());
             }
-            // 必须 cast<MemRefType>:参数是 Type,若直接传给 create<AllocOp>
-            // 会匹配 泛型 build(TypeRange, ValueRange, attrs) 重载,不设
+            // Must cast<MemRefType>: the parameter is a Type; passing it
+            // directly to create<AllocOp> would match the generic
+            // build(TypeRange, ValueRange, attrs) overload, which does not set
             // operandSegmentSizes → 'operand count does not match total size in
-            // operandSegmentSizes'。 cast 后命中 AllocOp::build(MemRefType,
-            // ValueRange dynamicSizes, ...)。
+            // operandSegmentSizes'. After the cast it hits
+            // AllocOp::build(MemRefType, ValueRange dynamicSizes, ...).
             auto op = self.create<memref::AllocOp>(cast<MemRefType>(memrefType),
                                                    dynSizes);
             if (alignment.has_value()) {
@@ -1027,8 +1030,8 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
           [](TritonOpBuilder &self, Type resultType, Value source,
              std::vector<Value> offsets, std::vector<Value> sizes,
              std::vector<Value> strides) -> Value {
-            // ReinterpretCastOp 需要 OpFoldResult（Value 或 静态 int）。
-            // 全部动态时，static 数组用 ShapedType::kDynamic 占位。
+            // ReinterpretCastOp needs OpFoldResult (Value or static int).
+            // When all-dynamic, the static arrays use ShapedType::kDynamic placeholders.
             auto toOFR = [](const std::vector<Value> &vals)
                 -> SmallVector<OpFoldResult> {
               SmallVector<OpFoldResult> result;
@@ -1048,10 +1051,12 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
           "create_memref_reinterpret_cast_mixed",
           [](TritonOpBuilder &self, Type resultType, Value source,
              py::list offsets, py::list sizes, py::list strides) -> Value {
-            // 混合 static/dynamic 版本:py::list 每个元素是 int(静态,进 static_*
-            // 数组)或 Value(动态,static 位填 kDynamic)。用于结果类型含静态维
-            // (如 memref<?x64xf16>)时,static_sizes 必须与结果类型逐维一致,
-            // 否则报 'expected result type with size = dynamic instead of N'。
+            // Mixed static/dynamic version: each py::list element is an
+            // int (static, goes into the static_* arrays) or a Value
+            // (dynamic, static slot filled with kDynamic). For result types
+            // with static dims (e.g. memref<?x64xf16>), static_sizes must
+            // match the result type dim-by-dim, otherwise 'expected result
+            // type with size = dynamic instead of N'.
             auto &b = self.getBuilder();
             auto toOFR = [&b](py::list items) -> SmallVector<OpFoldResult> {
               SmallVector<OpFoldResult> result;
@@ -1118,9 +1123,10 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
       .def("create_tensor_insert_slice_mixed",
            [](TritonOpBuilder &self, Value source, Value dest, py::list offsets,
               py::list sizes, py::list strides) -> Value {
-             // 混合 static/dynamic:int→static OFR, Value→dynamic。source
-             // 含静态维 (如 tensor<?x64xf16>)时,insert_slice static_sizes
-             // 须逐维匹配 source, 否则报 'expected type to be tensor<?x?xf16>'
+             // Mixed static/dynamic: int→static OFR, Value→dynamic. When
+             // the source has static dims (e.g. tensor<?x64xf16>),
+             // insert_slice static_sizes must match the source dim-by-dim,
+             // otherwise 'expected type to be tensor<?x?xf16>'
              // rank/size mismatch。
              auto &b = self.getBuilder();
              auto toOFR = [&b](py::list items) -> SmallVector<OpFoldResult> {
@@ -1163,14 +1169,14 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
              Value paddingValue, const std::vector<int64_t> &innerTiles,
              const std::vector<int64_t> &outerDimsPerm,
              const std::vector<int64_t> &innerDimsPos) -> Value {
-            // 根据 MLIR 签名: create(builder, loc, type, source, dest,
+            // Per the MLIR signature: create(builder, loc, type, source, dest,
             // padding_value,
             //                        outer_dims_perm, inner_dims_pos,
             //                        inner_tiles, static_inner_tiles)
             auto &builder = self.getBuilder();
             SmallVector<int64_t> staticInnerTiles(innerTiles.begin(),
                                                   innerTiles.end());
-            SmallVector<Value> innerTilesValues; // 空的动态 tiles
+            SmallVector<Value> innerTilesValues; // empty dynamic tiles
 
             return self
                 .create<linalg::PackOp>(
@@ -1195,8 +1201,8 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
            })
       .def("create_bufferization_to_memref",
            [](TritonOpBuilder &self, Value tensor, Type memrefType) -> Value {
-             // ToMemrefOp 已改名 ToBufferOp（新版 MLIR），需显式给出 memref
-             // 结果类型
+             // ToMemrefOp was renamed ToBufferOp (newer MLIR); the memref
+             // result type must be passed explicitly
              return self.create<bufferization::ToBufferOp>(memrefType, tensor)
                  .getResult();
            })

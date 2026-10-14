@@ -43,20 +43,20 @@ proton_mark = _SmtRvisaBuiltin("proton_mark")  # proton_mark(name, is_start) →
 range = _SmtRvisaRange()  # range(n) / range(start, stop, step) → scf.for bounds
 
 # ---------------------------------------------------------------------------
-# svector-level markers (feishu 3.3 mv 示例). Fixed-VL eDSL that maps document
-# names to already-verified vector/arith/memref primitives.
+# svector-level markers (feishu 3.3 mv example). Fixed-VL eDSL that maps
+# document names to already-verified vector/arith/memref primitives.
 #   vconfig  : vconfig(avl, lmul) → VLMAX const (SEW from dtype); avl deferred
 #   vzero    : vector.broadcast 0.0 -> vector<VL x dtype>
 #   vload    : transfer_read a VL-length vector (1D idx, or 2D idx + row stride)
 #   vmacc    : widening multiply-accumulate  acc += extf(x) * extf(y)
 #   vreduce_sum : vector.reduction <add> -> scalar
 #   vstore   : store a scalar to memref[idx]
-#   alloc    : memref.alloc N-D scratch (写法3 packed_B)
-#   pack     : pack a B row-block into the packed_B scratch layout (写法3)
-#   vpack    : vpack(v, group_len) → vector_ext.group_interleave → 多条 smt.vpack.vv (cube 交织)
-#   vmadot   : vmadot(acc, x, y) → vector_ext.cross_batch_matmul → 多条 smt.vfwmadot (批量 cube 叉乘)
+#   alloc    : memref.alloc N-D scratch (style3 packed_B)
+#   pack     : pack a B row-block into the packed_B scratch layout (style3)
+#   vpack    : vpack(v, group_len) → vector_ext.group_interleave → many smt.vpack.vv (cube interleave)
+#   vmadot   : vmadot(acc, x, y) → vector_ext.cross_batch_matmul → many smt.vfwmadot (batched cube matmul)
 #   vshape   : vshape(v, shape) → vector.shape_cast (reshape)
-#   vbroadcast: vbroadcast(v, n) → vector.broadcast (广播维)
+#   vbroadcast: vbroadcast(v, n) → vector.broadcast (broadcast dim)
 # ---------------------------------------------------------------------------
 vconfig = _SmtRvisaBuiltin(
     "vconfig")  # vconfig(avl, lmul) → VL = min(avl, VLMAX), VLMAX = lmul × VLEN / SEW (SPEC §6.1)
@@ -70,18 +70,18 @@ vreduce_mul = _SmtRvisaBuiltin("vreduce_mul")  # vreduce_mul(vec) → scalar  (v
 vstore = _SmtRvisaBuiltin(
     "vstore")  # vstore(ptr, idx, vec) → transfer_write (vector only, width = VL; use sstore for scalars)
 alloc = _SmtRvisaBuiltin("alloc")  # alloc(shape_tuple, dtype) → memref.alloc
-pack = _SmtRvisaBuiltin("pack")  # pack(src, src_idx, dst, dst_shape) → pack rows (写法3)
+pack = _SmtRvisaBuiltin("pack")  # pack(src, src_idx, dst, dst_shape) → pack rows (style3)
 vpack = _SmtRvisaBuiltin(
-    "vpack")  # vpack(v, group_len) → vector_ext.group_interleave → 多条 smt.vpack.vv (cube 交织, vector<b×N>→<(b/2)×2N>)
-vmadot = _SmtRvisaBuiltin("vmadot")  # vmadot(acc, x, y) → vector_ext.cross_batch_matmul → 多条 smt.vfwmadot (批量 cube 叉乘)
-vshape = _SmtRvisaBuiltin("vshape")  # vshape(v, shape) → vector.shape_cast (同 numel reshape)
-vbroadcast = _SmtRvisaBuiltin("vbroadcast")  # vbroadcast(v, n) → vector.broadcast: vector<64> → vector<n×64> (广播维)
+    "vpack")  # vpack(v, group_len) → vector_ext.group_interleave → many smt.vpack.vv (cube interleave, vector<b×N>→<(b/2)×2N>)
+vmadot = _SmtRvisaBuiltin("vmadot")  # vmadot(acc, x, y) → vector_ext.cross_batch_matmul → many smt.vfwmadot (batched cube matmul)
+vshape = _SmtRvisaBuiltin("vshape")  # vshape(v, shape) → vector.shape_cast (same-numel reshape)
+vbroadcast = _SmtRvisaBuiltin("vbroadcast")  # vbroadcast(v, n) → vector.broadcast: vector<64> → vector<n×64> (broadcast dim)
 spread = _SmtRvisaBuiltin(
-    "spread")  # spread(src, cube_shape=(kc,n,k)) → scf.for 标量广播 pack → memref<kc×(n*k)>(A 的 n 广播, 绕开 vscale)
+    "spread")  # spread(src, cube_shape=(kc,n,k)) → scf.for scalar-broadcast pack → memref<kc×(n*k)> (broadcasts A's n dim, bypassing vscale)
 imin = _SmtRvisaBuiltin("imin")  # imin(a, b) → arith.minsi on index(valid_rows = imin(MB, M-row_base))
-# §6.4 逐元素具名函数(算术运算符直接用 Python 操作符, 无需 marker)
-vmin = _SmtRvisaBuiltin("vmin")  # vmin(a, b) → 逐元素 min → arith.minimumf / minsi
-vmax = _SmtRvisaBuiltin("vmax")  # vmax(a, b) → 逐元素 max → arith.maximumf / maxsi
+# §6.4 element-wise named functions (arithmetic operators use Python operators directly, no marker needed)
+vmin = _SmtRvisaBuiltin("vmin")  # vmin(a, b) → element-wise min → arith.minimumf / minsi
+vmax = _SmtRvisaBuiltin("vmax")  # vmax(a, b) → element-wise max → arith.maximumf / maxsi
 sqrt = _SmtRvisaBuiltin("sqrt")  # sqrt(a) → √a → math.sqrt
 rsqrt = _SmtRvisaBuiltin("rsqrt")  # rsqrt(a) → 1/√a → math.rsqrt
 vexp = _SmtRvisaBuiltin("vexp")  # vexp(a)  → eˣ  → math.exp  (vector or scalar)
@@ -90,8 +90,8 @@ sload = _SmtRvisaBuiltin("sload")  # sload(ptr, idx, dtype=f32) → scalar load 
 sstore = _SmtRvisaBuiltin("sstore")  # sstore(ptr, idx, scalar) → scalar store to ptr[idx] (s-prefix = scalar, no VL)
 viota = _SmtRvisaBuiltin("viota")  # viota() → vector<VLxindex> [0,1,..,VL-1] (vector.step), for argmax index tracking
 abs = _SmtRvisaBuiltin("abs")  # abs(a) → |a| → math.absf / absi  # noqa: A001 (shadows builtin intentionally)
-cast = _SmtRvisaBuiltin("cast")  # cast(a, dtype) → 类型转换 → arith.extf/truncf/sitofp/fptosi/extsi/trunci
-select = _SmtRvisaBuiltin("select")  # select(m, a, b) → a if m else b → arith.select (§6.8 回退)
+cast = _SmtRvisaBuiltin("cast")  # cast(a, dtype) → type conversion → arith.extf/truncf/sitofp/fptosi/extsi/trunci
+select = _SmtRvisaBuiltin("select")  # select(m, a, b) → a if m else b → arith.select (§6.8 fallback)
 
 # ── LLVM-dialect llvm-direct primitives (full call_intrinsic kernel, all scalable) ──
 call_intrinsic = _SmtRvisaBuiltin(

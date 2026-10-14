@@ -110,9 +110,9 @@ _BINOP_ARITH = {
     ast.Add: ("addf", "addi"),
     ast.Sub: ("subf", "subi"),
     ast.Mult: ("mulf", "muli"),
-    ast.Div: ("divf", None),  # a / b  真除(浮点) → vfdiv
-    ast.FloorDiv: (None, "divsi"),  # a // b 整数向下取整除 → vdiv
-    ast.Mod: ("remf", "remsi"),  # a % b  取余 → vrem
+    ast.Div: ("divf", None),  # a / b  true division (float) → vfdiv
+    ast.FloorDiv: (None, "divsi"),  # a // b integer floor division → vdiv
+    ast.Mod: ("remf", "remsi"),  # a % b remainder → vrem
     ast.BitAnd: (None, "andi"),
     ast.BitOr: (None, "ori"),
     ast.BitXor: (None, "xori"),
@@ -1172,7 +1172,8 @@ class SmtMLIRBuilderCodegen:
             elem = val_t.elem
             off_v, _ = self._gen_expr(idx_node)
             m2t = MemTy((R, C), elem, StridedLayout((C, 1), True), BRIDGE)
-            # 结果类型两维全静态 RxC:mixed 传 int,否则 static_sizes 全 dynamic 冲突。
+            # Result type fully static RxC in both dims: pass int to mixed,
+            # otherwise static_sizes being all-dynamic conflicts.
             r2 = self._b.create_memref_reinterpret_cast_mixed(self._tt(m2t), ptr_v, [off_v], [R, C], [C, 1])
             c0 = self._const_int(0)
             self._b.create_vector_transfer_write(val_v, r2, [c0, c0], [False, False])
@@ -1248,25 +1249,30 @@ class SmtMLIRBuilderCodegen:
             if vr_node is not None:
                 vr_v = self._gen_expr(vr_node)[0]
                 mr_t = MemTy((None, K), et, StridedLayout((K, 1), True), BRIDGE)
-                # dim0 动态(vr_v), dim1 静态 K:必须用 mixed,否则 static_sizes 把
-                # K 也标成 dynamic → 'expected result type with size = dynamic instead of K'。
+                # dim0 dynamic (vr_v), dim1 static K: must use mixed, otherwise
+                # static_sizes marks K dynamic too → 'expected result type with
+                # size = dynamic instead of K'.
                 r2 = self._b.create_memref_reinterpret_cast_mixed(self._tt(mr_t), first_v, [off_v], [vr_v, K], [K, 1])
                 tsrc = self._b.create_bufferization_to_tensor(r2, self._tt(TensorTy((None, K), et)))
                 dyn_rows_v = vr_v
             else:
-                # 有 offset 时 layout 带 offset: ?(off_v 生效);否则省略 offset 段。
+                # With an offset the layout carries offset: ? (off_v takes
+                # effect); otherwise the offset segment is omitted.
                 layout = StridedLayout((K, 1), True) if off_node is not None else StridedLayout((K, 1))
                 mr_t = MemTy((rows, K), et, layout, BRIDGE)
-                # 两维全静态:mixed 传 int 保持 static_sizes=[rows, K] 与结果类型一致。
+                # Both dims fully static: pass int to mixed to keep
+                # static_sizes=[rows, K] consistent with the result type.
                 r2 = self._b.create_memref_reinterpret_cast_mixed(self._tt(mr_t), first_v, [off_v], [rows, K], [K, 1])
                 tsrc = self._b.create_bufferization_to_tensor(r2, self._tt(TensorTy((rows, K), et)))
                 dyn_rows_v = None
             if need_pad:
                 ep = self._b.create_tensor_empty(self._tt(TensorTy((Mp, Kp), et)))
                 fp = self._b.create_linalg_fill(cst, ep)
-                # source tsrc 是 tensor<?xKx> 或 tensor<rowsxKx>:dim1=K 静态,
-                # insert_slice sizes 须 mixed(dim1 传 int K),否则 static_sizes 全 dynamic
-                # 与 source 静态维冲突 → 'expected type tensor<?x?xf16>' rank/size mismatch。
+                # source tsrc is tensor<?xKx> or tensor<rowsxKx>: dim1=K is
+                # static; insert_slice sizes must be mixed (dim1 passed as int
+                # K), otherwise static_sizes are all dynamic and conflict with
+                # the source's static dim → 'expected type tensor<?x?xf16>'
+                # rank/size mismatch.
                 if dyn_rows_v is not None:
                     ins = self._b.create_tensor_insert_slice_mixed(tsrc, fp, [0, 0], [dyn_rows_v, K], [1, 1])
                 else:
@@ -1313,9 +1319,9 @@ class SmtMLIRBuilderCodegen:
         k_real = self._try_const_int(kwargs["k_real"]) if "k_real" in kwargs else total
         assert k_real is not None and k_real <= total
         pad_k = k_real < total
-        # src → 1D <k_real>
-        # src → 1D <k_real>:dim0 静态 k_real(mixed 传 int),但 stride 是 strided<[?]>
-        # 动态(earlier strided fix 为满足 to_tensor),故 stride 仍传 Value;offset 静态 0。
+        # src → 1D <k_real>: dim0 is static k_real (mixed passes int), but the
+        # stride is strided<[?]> dynamic (earlier strided fix to satisfy
+        # to_tensor), so the stride still passes a Value; offset is static 0.
         src1d_t = MemTy((k_real, ), et, StridedLayout((None, ), False), BRIDGE)
         rsrc = self._b.create_memref_reinterpret_cast_mixed(self._tt(src1d_t), src_v, [0], [k_real],
                                                             [self._const_int(1)])
@@ -1398,8 +1404,9 @@ class SmtMLIRBuilderCodegen:
                 filled = b.create_tensor_insert_slice(tsrc, fscr, [c0], [valid], [self._const_int(1)])
                 vec = b.create_vector_transfer_read(self._tt(vt), filled, [c0], pad, [True])
                 cr_idx = self._const_int(r)
-                # 1D vector<VL> 写入 rank-4 memref:permutation_map 只 1 个 result(d3),
-                # in_bounds 须与 map results 同 rank(=1),不是索引数(4)。
+                # 1D vector<VL> written into a rank-4 memref: the
+                # permutation_map has only 1 result (d3); in_bounds must match
+                # the map results' rank (=1), not the index count (4).
                 b.create_vector_transfer_write(vec, dst_v, [c0, kb, cr_idx, c0], [True])
             return []
 

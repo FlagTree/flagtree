@@ -558,7 +558,7 @@ def MBarrierSubviewOp : XSMT_Op<"mbarrier_subview", [Pure]> {
 
   let arguments = (ins
     XSMT_MBarrierType:$mbarrier,
-    AnyTypeOf<[I32, I64, Index]>:$index  // 支持动态索引
+    AnyTypeOf<[I32, I64, Index]>:$index  // supports dynamic indices
   );
 
   let results = (outs I64:$result);

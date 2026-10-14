@@ -253,5 +253,6 @@ if __name__ == "__main__":
         except Exception as e:
             failures += 1
             print(f"  N={N:4d} K={K:4d}  FAIL: {type(e).__name__}: {str(e)[:200]}")
-    # 失败必须显式暴露: 非零退出, 否则 CI/脚本调用方会误判为通过
+    # Failures must be surfaced explicitly: exit non-zero, otherwise CI/script
+    # callers misread the run as passed.
     sys.exit(1 if failures else 0)

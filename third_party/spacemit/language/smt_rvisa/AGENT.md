@@ -6,7 +6,7 @@ are written in a restricted Python subset, lowered through the C++ builder API
 
 > All examples below are verified on K3 (riscv64). See `python/tests/raw/` for
 > 25 working operator families (231 tests). For the full language spec, see
-> `SPEC.md` (smt_rvisa raw eDSL 规格说明书).
+> `SPEC.md` (the smt_rvisa raw eDSL specification).
 
 ---
 
@@ -275,7 +275,7 @@ mv/mm kernels; you rarely need them for reduce/elementwise ops.
 | `vmadot(acc, x, y)` | batched cube matmul | `vector_ext.cross_batch_matmul` → many `smt.vfwmadot`. `acc` rows must equal `b1·b2` of the operands. |
 | `vpack(v, group_len)` | cube interleave | `vector_ext.group_interleave` → `smt.vpack.vv`. Interleaves `vector<b×N>` → `vector<(b/2)×2N>` for cube layout. |
 | `spread(src, cube_shape=(kc,n,k))` | scalar-broadcast pack | `scf.for` scalar pack → `memref<kc×(n·k)>`. Broadcasts A's n dim, bypassing vscale. |
-| `pack(src, src_idx, dst, dst_shape)` | row pack | pack rows into a cube-shaped scratch buffer (写法3). |
+| `pack(src, src_idx, dst, dst_shape)` | row pack | pack rows into a cube-shaped scratch buffer (style3). |
 
 ---
 
