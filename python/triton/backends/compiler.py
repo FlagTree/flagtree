@@ -85,6 +85,7 @@ class BaseBackend(metaclass=ABCMeta):
         """Return an optional module contributing symbols to ``triton.language.ext``."""
         return None
 
+    # flagtree: allow backends to customize initial IR generation.
     def make_ir(self, src, options, codegen_fns, module_map, context):
         """Create the initial IR module for this backend."""
         return src.make_ir(self.target, options, codegen_fns, module_map, context)
