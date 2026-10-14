@@ -47,16 +47,16 @@ A raw kernel is you making four choices explicitly (SPEC §2):
   `vstore` writes a vector back; `sstore` writes a single scalar. Scratch
   memory via `alloc`.
 - **Loops carry state via iter_args**: a variable reassigned inside a
-  `sr.range` loop becomes a loop-carried value (like `acc` in a reduction).
+  `srv.range` loop becomes a loop-carried value (like `acc` in a reduction).
   This is why tail loops need distinct temp names — see §3.
 
 ### raw kernel vs host kernel (the boundary)
-- **raw kernel** (`@sr.raw_kernel`): the vector-level body. Runs on the vector
+- **raw kernel** (`@srv.raw_kernel`): the vector-level body. Runs on the vector
   unit. Every parameter is type-annotated (`mem`/`index`). Emitted as a
   `tle.dsl_region` op, lowered `tle→linalg→memref→llvm` through the C++ builder
   API (no MLIR text).
 - **host kernel** (`@triton.jit`): ordinary Triton. Computes `program_id`,
-  slices per-program work, and calls `_sr_call(raw_kernel, inputs=[...])`. The
+  slices per-program work, and calls `srv_call(raw_kernel, inputs=[...])`. The
   grid (`[(G,)]`) decides how many programs run.
 - The boundary: host picks *which slice* each program handles (row, block);
   raw kernel says *how* to compute that slice on the vector unit.
@@ -65,7 +65,7 @@ A raw kernel is you making four choices explicitly (SPEC §2):
 
 **Default path** (high-level primitives: `vload`/`vstore`/`vmacc`/...):
 ```
-@sr.raw_kernel Python
+@srv.raw_kernel Python
   → AST walk (codegen.py, builder API)   # no MLIR text
   → tle.dsl_region op in TTIR
   → --triton-to-linalg-experimental      # tle → linalg/memref
@@ -75,7 +75,7 @@ A raw kernel is you making four choices explicitly (SPEC §2):
 
 **LLVM-direct path** (`llvm_*` / `call_intrinsic` only, detected automatically):
 ```
-@sr.raw_kernel Python
+@srv.raw_kernel Python
   → AST walk (llvm_direct.py)            # MLIR Python bindings emitter, no text
   → top-level llvm.func module (text)
   → mlir-translate --mlir-to-llvmir      # skip spine-opt, only translate
@@ -100,26 +100,26 @@ import triton.language as tl
 from triton.backends.spine_triton.driver import CPUDriver
 triton.runtime.driver.set_active(CPUDriver())
 
-import triton.language.extra.smt_rvisa as sr           # MUST import from here
-from triton.language.extra.smt_rvisa import call as _sr_call
+import triton.language.extra.smt_rvisa as srv           # MUST import from here
+from triton.language.extra.smt_rvisa import call as srv_call
 
-f16 = sr.f16
-f32 = sr.f32
+f16 = srv.f16
+f32 = srv.f32
 
 # ── PART 1: the raw kernel (runs on the vector unit) ─────────────────────
-@sr.raw_kernel
-def my_kernel(X: sr.mem(f32), out: sr.mem(f32, out=True), N: sr.index):
-    nvl = sr.vconfig(-1, 1)                 # set VL (VLMAX for f32 = 64)
-    acc = sr.vzero(f32)
-    for i in sr.range(0, N, nvl):
-        vx = sr.vload(X, i, dtype=f32)
+@srv.raw_kernel
+def my_kernel(X: srv.mem(f32), out: srv.mem(f32, out=True), N: srv.index):
+    nvl = srv.vconfig(-1, 1)                 # set VL (VLMAX for f32 = 64)
+    acc = srv.vzero(f32)
+    for i in srv.range(0, N, nvl):
+        vx = srv.vload(X, i, dtype=f32)
         acc = acc + vx
-    sr.sstore(out, 0, sr.vreduce_sum(acc))
+    srv.sstore(out, 0, srv.vreduce_sum(acc))
 
 # ── PART 2: the @triton.jit host wrapper (dispatches the kernel) ─────────
 @triton.jit
 def my_host(X, out, N):
-    _sr_call(my_kernel, outputs=[], inputs=[X, out, N])
+    srv_call(my_kernel, outputs=[], inputs=[X, out, N])
 
 # ── PART 3: the Python launcher ──────────────────────────────────────────
 X = torch.randn(256, dtype=torch.float32)
@@ -128,10 +128,10 @@ my_host[(1,)](X, out, 256)                   # grid=(1,)
 ```
 
 **Rules:**
-- Import `sr` ONLY from `triton.language.extra.smt_rvisa` (never a standalone path).
-- Kernel params are annotated: `sr.mem(dtype)` (read), `sr.mem(dtype, out=True)`
-  (write), `sr.index` (scalar loop bound / offset).
-- The host is a normal `@triton.jit` function; it calls `_sr_call(kernel, outputs=[], inputs=[...])`.
+- Import `srv` ONLY from `triton.language.extra.smt_rvisa` (never a standalone path).
+- Kernel params are annotated: `srv.mem(dtype)` (read), `srv.mem(dtype, out=True)`
+  (write), `srv.index` (scalar loop bound / offset).
+- The host is a normal `@triton.jit` function; it calls `srv_call(kernel, outputs=[], inputs=[...])`.
 - `grid=(G,)` launches G programs; use `tl.program_id(0)` in the host to get the
   row/group index and pass it into `inputs`.
 
@@ -286,15 +286,15 @@ plus a narrowed tail loop. **Use distinct temp names in the tail** or they leak
 into the outer scope and corrupt iter-arg detection.
 
 ```python
-nvl = sr.vconfig(-1, 1)
+nvl = srv.vconfig(-1, 1)
 Nfloor = (N // nvl) * nvl                     # largest multiple of VL ≤ N
-acc = sr.vzero(f32)
-for i in sr.range(0, Nfloor, nvl):           # main: full VL tiles, fast path
-    vx = sr.vload(X, i, dtype=f32)
+acc = srv.vzero(f32)
+for i in srv.range(0, Nfloor, nvl):           # main: full VL tiles, fast path
+    vx = srv.vload(X, i, dtype=f32)
     acc = acc + vx
-for i in sr.range(Nfloor, N, nvl):           # tail: runs 0 or 1 times
-    nvl_t = sr.vconfig(N - i, 1)             # narrow VL to remaining elements
-    tx = sr.vload(X, i, dtype=f32)           # DISTINCT name (tx, not vx)
+for i in srv.range(Nfloor, N, nvl):           # tail: runs 0 or 1 times
+    nvl_t = srv.vconfig(N - i, 1)             # narrow VL to remaining elements
+    tx = srv.vload(X, i, dtype=f32)           # DISTINCT name (tx, not vx)
     acc = acc + tx
 ```
 
@@ -309,46 +309,46 @@ Padded lanes in the tail read as `fill` (default 0.0). For ops where 0 is wrong
 
 ### 4.1 Reduce to scalar
 ```python
-@sr.raw_kernel
-def sum_kernel(X: sr.mem(f32), out: sr.mem(f32, out=True), N: sr.index):
-    nvl = sr.vconfig(-1, 1); Nf = (N // nvl) * nvl
-    acc = sr.vzero(f32)
-    for i in sr.range(0, Nf, nvl):
-        acc = acc + sr.vload(X, i, dtype=f32)
-    for i in sr.range(Nf, N, nvl):
-        nvl_t = sr.vconfig(N - i, 1)
-        acc = acc + sr.vload(X, i, dtype=f32)
-    sr.sstore(out, 0, sr.vreduce_sum(acc))
+@srv.raw_kernel
+def sum_kernel(X: srv.mem(f32), out: srv.mem(f32, out=True), N: srv.index):
+    nvl = srv.vconfig(-1, 1); Nf = (N // nvl) * nvl
+    acc = srv.vzero(f32)
+    for i in srv.range(0, Nf, nvl):
+        acc = acc + srv.vload(X, i, dtype=f32)
+    for i in srv.range(Nf, N, nvl):
+        nvl_t = srv.vconfig(N - i, 1)
+        acc = acc + srv.vload(X, i, dtype=f32)
+    srv.sstore(out, 0, srv.vreduce_sum(acc))
 ```
 
 ### 4.2 Mean / variance — use E[x²]-mean², NOT E[(x-mean)²]
 > **Critical**: with fill-0 tail padding, `(0-mean)²=mean²` inflates variance.
 > `E[x²]-mean²` is padding-safe because `0²=0`.
 ```python
-acc_sum = sr.vzero(f32); acc_sq = sr.vzero(f32)
-for i in sr.range(0, Nf, nvl):
-    vx = sr.vload(X, i, dtype=f32)
+acc_sum = srv.vzero(f32); acc_sq = srv.vzero(f32)
+for i in srv.range(0, Nf, nvl):
+    vx = srv.vload(X, i, dtype=f32)
     acc_sum = acc_sum + vx
     acc_sq  = acc_sq  + vx * vx
 # (tail loop analogous)
-mean = sr.vreduce_sum(acc_sum) / N
-var  = sr.vreduce_sum(acc_sq) / N - mean * mean
+mean = srv.vreduce_sum(acc_sum) / N
+var  = srv.vreduce_sum(acc_sq) / N - mean * mean
 ```
 
 ### 4.3 Normalize (reduce → scalar → broadcast back to vector)
 ```python
-inv = sr.rsqrt(sr.vreduce_sum(acc_sq))       # 1/||x||, scalar
-for i in sr.range(0, Nf, nvl):
-    nx = sr.vload(X, i, dtype=f32)
-    sr.vstore(out, i, nx * inv)               # vec * scalar → auto-broadcast
+inv = srv.rsqrt(srv.vreduce_sum(acc_sq))       # 1/||x||, scalar
+for i in srv.range(0, Nf, nvl):
+    nx = srv.vload(X, i, dtype=f32)
+    srv.vstore(out, i, nx * inv)               # vec * scalar → auto-broadcast
 ```
 
 ### 4.4 Per-row 2D op (grid parallelism)
 ```python
-@sr.raw_kernel
-def row_kernel(X: sr.mem(f32), out: sr.mem(f32, out=True),
-               M: sr.index, N: sr.index, row: sr.index):
-    nvl = sr.vconfig(-1, 1)
+@srv.raw_kernel
+def row_kernel(X: srv.mem(f32), out: srv.mem(f32, out=True),
+               M: srv.index, N: srv.index, row: srv.index):
+    nvl = srv.vconfig(-1, 1)
     base = row * N                             # row offset into flat buffer
     # ... reduce X[base : base+N] ...
 
@@ -356,33 +356,33 @@ def row_kernel(X: sr.mem(f32), out: sr.mem(f32, out=True),
 def row_host(X, out, M, N):
     row = tl.program_id(0)
     if row < M:
-        _sr_call(row_kernel, outputs=[], inputs=[X, out, M, N, row])
+        srv_call(row_kernel, outputs=[], inputs=[X, out, M, N, row])
 
 # launch: row_host[(M,)](X.reshape(-1), out, M, N)   # grid=(M,)
 ```
 
 ### 4.5 Index-tracking reduce (argmax)
 ```python
-lane = sr.viota()                             # [0,1,..,VL-1] as f32
-best_val = sr.vload(X, 0, dtype=f32); best_idx = lane
-for i in sr.range(0, Nf, nvl):
-    vx = sr.vload(X, i, dtype=f32)
-    idx = lane + sr.cast(i, f32)              # global indices this tile
+lane = srv.viota()                             # [0,1,..,VL-1] as f32
+best_val = srv.vload(X, 0, dtype=f32); best_idx = lane
+for i in srv.range(0, Nf, nvl):
+    vx = srv.vload(X, i, dtype=f32)
+    idx = lane + srv.cast(i, f32)              # global indices this tile
     gt = vx > best_val
-    best_val = sr.select(gt, vx, best_val)
-    best_idx = sr.select(gt, idx, best_idx)
-gmax = sr.vreduce_max(best_val)
-masked = sr.select(best_val >= gmax, best_idx, sr.vzero(f32) + 1e30)
-argmax = sr.vreduce_min(masked)               # first index achieving max
-sr.sstore(out, 0, argmax)
+    best_val = srv.select(gt, vx, best_val)
+    best_idx = srv.select(gt, idx, best_idx)
+gmax = srv.vreduce_max(best_val)
+masked = srv.select(best_val >= gmax, best_idx, srv.vzero(f32) + 1e30)
+argmax = srv.vreduce_min(masked)               # first index achieving max
+srv.sstore(out, 0, argmax)
 ```
 
 ### 4.6 Activation (elementwise transcendental)
 ```python
-for i in sr.range(0, Nf, nvl):
-    vx = sr.vload(X, i, dtype=f32)
-    sig = 1.0 / (1.0 + sr.vexp(-vx))          # sigmoid
-    sr.vstore(out, i, vx * sig)               # silu = x*sigmoid(x)
+for i in srv.range(0, Nf, nvl):
+    vx = srv.vload(X, i, dtype=f32)
+    sig = 1.0 / (1.0 + srv.vexp(-vx))          # sigmoid
+    srv.vstore(out, i, vx * sig)               # silu = x*sigmoid(x)
 ```
 
 ---
@@ -490,31 +490,31 @@ The **LLVM-direct path** is a second compilation route for kernels that use *onl
 ### Example: MV with vle/vse
 
 ```python
-import triton.language.extra.smt_rvisa as sr
-from triton.language.extra.smt_rvisa import call as _sr_call
+import triton.language.extra.smt_rvisa as srv
+from triton.language.extra.smt_rvisa import call as srv_call
 
-@sr.raw_kernel
-def llvm_direct_mv(A: sr.mem("f32"), B: sr.mem("f32"),
-                   C: sr.mem("f32", out=True), K: sr.index):
-    vl = sr.llvm_const(8, "i64")
-    acc = sr.llvm_const("0.000000e+00", "vector<[8]xf32>")
-    zero = sr.llvm_const(0, "i64")
+@srv.raw_kernel
+def llvm_direct_mv(A: srv.mem("f32"), B: srv.mem("f32"),
+                   C: srv.mem("f32", out=True), K: srv.index):
+    vl = srv.llvm_const(8, "i64")
+    acc = srv.llvm_const("0.000000e+00", "vector<[8]xf32>")
+    zero = srv.llvm_const(0, "i64")
     # Loop bound comes from the scalar K param (llvm_size unavailable in LLVM-direct ABI)
-    for k in sr.range(zero, K, vl):
-        pa = sr.llvm_poison("vector<[8]xf32>")
-        pb = sr.llvm_poison("vector<[8]xf32>")
-        ga = sr.llvm_gep(sr.llvm_base_ptr(A), k, "f32")
-        gb = sr.llvm_gep(sr.llvm_base_ptr(B), k, "f32")
-        va = sr.call_intrinsic("llvm.riscv.vle", [pa, ga, vl], result_type="vector<[8]xf32>")
-        vb = sr.call_intrinsic("llvm.riscv.vle", [pb, gb, vl], result_type="vector<[8]xf32>")
-        prod = sr.call_intrinsic("llvm.fmul", [va, vb], result_type="vector<[8]xf32>")
-        acc = sr.call_intrinsic("llvm.fadd", [acc, prod], result_type="vector<[8]xf32>")
-    gc = sr.llvm_base_ptr(C)
-    sr.call_intrinsic("llvm.riscv.vse", [acc, gc, vl], result_type="()")
+    for k in srv.range(zero, K, vl):
+        pa = srv.llvm_poison("vector<[8]xf32>")
+        pb = srv.llvm_poison("vector<[8]xf32>")
+        ga = srv.llvm_gep(srv.llvm_base_ptr(A), k, "f32")
+        gb = srv.llvm_gep(srv.llvm_base_ptr(B), k, "f32")
+        va = srv.call_intrinsic("llvm.riscv.vle", [pa, ga, vl], result_type="vector<[8]xf32>")
+        vb = srv.call_intrinsic("llvm.riscv.vle", [pb, gb, vl], result_type="vector<[8]xf32>")
+        prod = srv.call_intrinsic("llvm.fmul", [va, vb], result_type="vector<[8]xf32>")
+        acc = srv.call_intrinsic("llvm.fadd", [acc, prod], result_type="vector<[8]xf32>")
+    gc = srv.llvm_base_ptr(C)
+    srv.call_intrinsic("llvm.riscv.vse", [acc, gc, vl], result_type="()")
 
 @triton.jit
 def llvm_direct_mv_host(A, B, C, K):
-    _sr_call(llvm_direct_mv, outputs=[], inputs=[A, B, C, K])
+    srv_call(llvm_direct_mv, outputs=[], inputs=[A, B, C, K])
 
 # Launch
 A = torch.arange(64, dtype=torch.float32)
@@ -539,10 +539,10 @@ The driver (`backend/driver.py:192`) passes each memref as a **rank-0** `Strided
 
 ### 8.1 The SPMD contract — offsets live INSIDE the kernel, not in `inputs`
 
-`_sr_call` looks like a runtime function call, but in LLVM-direct mode it is **not**.
+`srv_call` looks like a runtime function call, but in LLVM-direct mode it is **not**.
 Understanding why is the difference between correct code and a silent wrong answer.
 
-**What actually happens.** `_sr_call(fn, inputs=[...])` does *not* thread `inputs`
+**What actually happens.** `srv_call(fn, inputs=[...])` does *not* thread `inputs`
 into the callee. It emits `fn` as a standalone top-level `llvm.func` and stashes the
 text; `make_ttir` then **discards the entire host `@triton.jit` body** and swaps in
 that module. At launch, the driver calls the emitted symbol with the **host kernel's
@@ -553,7 +553,7 @@ launch arguments**, positionally, each memref as a rank-0 descriptor with `offse
   mirrors the launch args, nothing more. `call_registry.py` enforces the arity and
   raises `ValueError` on mismatch (fail-loud, not silent garbage).
 - A **per-program offset cannot be passed from the host.** Writing
-  `_sr_call(fn, inputs=[A + row*K, ...])` does **not** work — `A + row*K` is a
+  `srv_call(fn, inputs=[A + row*K, ...])` does **not** work — `A + row*K` is a
   `tt.addptr` in the host body, which is thrown away. Every program would read `A[0]`.
 
 **Why this is not a limitation.** This is exactly the CUDA/SPMD model: you pass the
@@ -565,27 +565,27 @@ the emitter lowers `*` / `+` / `-` to `llvm.mul` / `llvm.add` / `llvm.sub`, so n
 `call_intrinsic` boilerplate is needed:
 
 ```python
-@sr.raw_kernel
-def gemv(A: sr.mem("f32"), B: sr.mem("f32"),
-         C: sr.mem("f32", out=True), M: sr.index, K: sr.index):
-    vl = sr.llvm_const(8, "i64"); eight = sr.llvm_const(8, "i64")
-    zero = sr.llvm_const(0, "i64")
-    row = sr.program_id(0)                 # ← per-program identity, the ONLY thing that varies
-    acc = sr.llvm_const("0.000000e+00", "vector<[8]xf32>")
-    for k in sr.range(zero, K, vl):
-        ga = sr.llvm_gep(sr.llvm_base_ptr(A), row * K + k, "f32")   # natural arithmetic
-        gb = sr.llvm_gep(sr.llvm_base_ptr(B), k, "f32")
-        pa = sr.llvm_poison("vector<[8]xf32>"); pb = sr.llvm_poison("vector<[8]xf32>")
-        va = sr.call_intrinsic("llvm.riscv.vle", [pa, ga, vl], result_type="vector<[8]xf32>")
-        vb = sr.call_intrinsic("llvm.riscv.vle", [pb, gb, vl], result_type="vector<[8]xf32>")
-        prod = sr.call_intrinsic("llvm.fmul", [va, vb], result_type="vector<[8]xf32>")
-        acc = sr.call_intrinsic("llvm.fadd", [acc, prod], result_type="vector<[8]xf32>")
-    gc = sr.llvm_gep(sr.llvm_base_ptr(C), row * eight, "f32")       # natural arithmetic
-    sr.call_intrinsic("llvm.riscv.vse", [acc, gc, vl], result_type="()")
+@srv.raw_kernel
+def gemv(A: srv.mem("f32"), B: srv.mem("f32"),
+         C: srv.mem("f32", out=True), M: srv.index, K: srv.index):
+    vl = srv.llvm_const(8, "i64"); eight = srv.llvm_const(8, "i64")
+    zero = srv.llvm_const(0, "i64")
+    row = srv.program_id(0)                 # ← per-program identity, the ONLY thing that varies
+    acc = srv.llvm_const("0.000000e+00", "vector<[8]xf32>")
+    for k in srv.range(zero, K, vl):
+        ga = srv.llvm_gep(srv.llvm_base_ptr(A), row * K + k, "f32")   # natural arithmetic
+        gb = srv.llvm_gep(srv.llvm_base_ptr(B), k, "f32")
+        pa = srv.llvm_poison("vector<[8]xf32>"); pb = srv.llvm_poison("vector<[8]xf32>")
+        va = srv.call_intrinsic("llvm.riscv.vle", [pa, ga, vl], result_type="vector<[8]xf32>")
+        vb = srv.call_intrinsic("llvm.riscv.vle", [pb, gb, vl], result_type="vector<[8]xf32>")
+        prod = srv.call_intrinsic("llvm.fmul", [va, vb], result_type="vector<[8]xf32>")
+        acc = srv.call_intrinsic("llvm.fadd", [acc, prod], result_type="vector<[8]xf32>")
+    gc = srv.llvm_gep(srv.llvm_base_ptr(C), row * eight, "f32")       # natural arithmetic
+    srv.call_intrinsic("llvm.riscv.vse", [acc, gc, vl], result_type="()")
 
 @triton.jit
 def gemv_host(A, B, C, M, K):
-    _sr_call(gemv, outputs=[], inputs=[A, B, C, M, K])   # bare params, 1:1 — no A+offset
+    srv_call(gemv, outputs=[], inputs=[A, B, C, M, K])   # bare params, 1:1 — no A+offset
 
 gemv_host[(M,)](A.flatten(), B, C, M, K)                 # grid=(M,): one program per row
 ```
