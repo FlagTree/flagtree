@@ -22,7 +22,7 @@
 #include "incubated/Conversion/TritonToLinalgIncubated/Passes.h"
 #include "incubated/Conversion/TritonToStructuredIncubated/Passes.h"
 #include "incubated/Conversion/TritonToUnstructureIncubated/Passes.h"
-#include "triton-shared/Transforms/LaneVectorize/Passes.h"
+#include "mlir-ext/Dialect/CommonIR/Transforms/LaneVectorize/Passes.h"
 
 #include "ascend/include/DynamicCVPipeline/Common/BufferCountManager.h"
 #include "ascend/include/DynamicCVPipeline/Passes.h"
