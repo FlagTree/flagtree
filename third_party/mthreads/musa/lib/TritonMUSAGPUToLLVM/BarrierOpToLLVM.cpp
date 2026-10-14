@@ -26,6 +26,20 @@ struct TTGBarrierOpConversion
       auto call = LLVM::createLLVMIntrinsicCallOp(
           rewriter, op.getLoc(), "llvm.musa.syncthreads.lm", TypeRange{}, {});
       call->setAttr("musa_tle.consumer_epoch_sync", group);
+    } else if (op->hasAttr("musa_tle.pipe_tme_reuse_sync")) {
+      if (op.getAddrSpace() != triton::gpu::AddrSpace::Local)
+        return op.emitOpError(
+            "MThreads TLE pipe TME reuse sync must target local memory");
+      auto call = LLVM::createLLVMIntrinsicCallOp(
+          rewriter, op.getLoc(), "llvm.musa.syncthreads.lm", TypeRange{}, {});
+      call->setAttr("musa_tle.pipe_tme_reuse_sync", rewriter.getUnitAttr());
+    } else if (op->hasAttr("musa_tle.explicit_cta_sync")) {
+      if (op.getAddrSpace() != triton::gpu::AddrSpace::Local)
+        return op.emitOpError(
+            "MThreads TLE explicit CTA sync must target local memory");
+      auto call = LLVM::createLLVMIntrinsicCallOp(
+          rewriter, op.getLoc(), "llvm.musa.syncthreads.lm", TypeRange{}, {});
+      call->setAttr("musa_tle.explicit_cta_sync", rewriter.getUnitAttr());
     } else {
       targetInfo.barrier(op.getLoc(), rewriter, op.getAddrSpace());
     }

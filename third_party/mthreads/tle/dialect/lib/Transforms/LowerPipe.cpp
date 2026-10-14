@@ -40,6 +40,8 @@ constexpr StringLiteral kPipeLocalStoreWaitGroupsAttr =
 constexpr StringLiteral kPipeLocalStoreGroupAttr =
     "musa_tle.pipe_local_store_group";
 constexpr StringLiteral kPipeBarrierRingAttr = "musa_tle.pipe_barrier_ring";
+constexpr StringLiteral kConsumerEpochRequiredAttr =
+    "musa_tle.consumer_epoch_rendezvous_required";
 static bool isPipeOp(Operation *op) {
   return isa<musa_tle::PipeCreateOp, musa_tle::PipeWriterAcquireOp,
              musa_tle::PipeWriterCommitOp, musa_tle::PipeWriterCloseOp,
@@ -367,6 +369,32 @@ class LowerPipePass
         return create.emitOpError(
             "internal MUSA TLE pipe lowering requires a valid full "
             "barrier plan");
+
+      // A persistent named-reader pipe can release its final K token before
+      // every consumer has completed the output-tile epilogue. Record the
+      // static layout as a candidate for an outer-epoch rendezvous; the later
+      // warp-specialize pass inserts one only when it can prove matching
+      // canonical SQMMA/store epoch loops in every consumer.
+      if (state->lifecycle.mode == musa_tle::PipeLifecycleMode::Cyclic &&
+          state->staticWarpSpecialize && plan.writerParticipant) {
+        ttg::WarpSpecializeOp ws = state->staticWarpSpecialize;
+        unsigned expectedConsumers = ws.getPartitionRegions().size();
+        llvm::DenseSet<unsigned> readerPartitions;
+        for (const musa_tle::PipeBarrierParticipant &reader :
+             plan.readerParticipants)
+          readerPartitions.insert(reader.partitionIndex);
+        bool coversEveryConsumer =
+            expectedConsumers > 1 &&
+            plan.readerParticipants.size() == expectedConsumers &&
+            readerPartitions.size() == expectedConsumers &&
+            plan.writerParticipant->partition ==
+                musa_tle::PipePartitionKind::WarpSpecializeWorker &&
+            plan.writerParticipant->partitionIndex == expectedConsumers;
+        for (unsigned index = 0; index < expectedConsumers; ++index)
+          coversEveryConsumer &= readerPartitions.contains(index);
+        if (coversEveryConsumer)
+          ws->setAttr(kConsumerEpochRequiredAttr, builder.getUnitAttr());
+      }
 
       auto capacity = builder.getI32IntegerAttr(plan.full.capacity);
       auto fullArrivals = builder.getI32IntegerAttr(plan.full.arrivalCount);

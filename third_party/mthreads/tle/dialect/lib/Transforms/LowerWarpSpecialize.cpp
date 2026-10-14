@@ -1,9 +1,13 @@
 #ifdef __TLE__
 
+#include "Dialect/MTGPU/IR/Dialect.h"
+#include "Dialect/MUSA/IR/Dialect.h"
 #include "TritonMUSAGPUTransforms/Passes.h"
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -12,6 +16,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include <tuple>
 
 namespace mlir {
 
@@ -24,6 +30,127 @@ namespace ttg = triton::gpu;
 
 static constexpr StringLiteral kStaticWarpSpecializeAttr =
     "musa_tle.static_warp_specialize";
+static constexpr StringLiteral kDefaultProducerAttr =
+    "musa_tle.default_producer";
+static constexpr StringLiteral kConsumerEpochSyncAttr =
+    "musa_tle.consumer_epoch_sync";
+static constexpr StringLiteral kConsumerEpochRequiredAttr =
+    "musa_tle.consumer_epoch_rendezvous_required";
+
+static bool containsAsyncSqmmaAndGlobalStore(scf::ForOp loop) {
+  bool hasAsyncSqmma = false;
+  bool hasGlobalStore = false;
+  loop.walk([&](Operation *op) {
+    if (auto squadDot = dyn_cast<triton::musa::SquadDotOp>(op))
+      hasAsyncSqmma |= squadDot.getIsAsync();
+    else if (auto sqmma = dyn_cast<triton::mtgpu::SqmmaOp>(op))
+      hasAsyncSqmma |= sqmma.getIsAsync();
+    hasGlobalStore |= isa<triton::StoreOp>(op);
+  });
+  return hasAsyncSqmma && hasGlobalStore;
+}
+
+static FailureOr<std::tuple<int64_t, int64_t, int64_t>>
+getConstantLoopBounds(scf::ForOp loop) {
+  APInt lower;
+  APInt upper;
+  APInt step;
+  if (!matchPattern(loop.getLowerBound(), m_ConstantInt(&lower)) ||
+      !matchPattern(loop.getUpperBound(), m_ConstantInt(&upper)) ||
+      !matchPattern(loop.getStep(), m_ConstantInt(&step)))
+    return failure();
+  return std::make_tuple(lower.getSExtValue(), upper.getSExtValue(),
+                         step.getSExtValue());
+}
+
+// SQMMA wait-all retires one partition's work, but it is not a completion
+// edge between independent consumer partitions.  Persistent kernels that
+// reuse a warp-specialized CTA across output tiles therefore need one shared
+// rendezvous at each consumer outer-loop latch.  Mark only the canonical,
+// constant-bound shape used by the persistent GEMM schedule; late lowering
+// merges equal markers into one hardware barrier.
+static LogicalResult markConsumerEpochRendezvous(
+    ttg::WarpSpecializeOp ws, IRRewriter &rewriter) {
+  if (ws->hasAttr(kDefaultProducerAttr) ||
+      !ws->hasAttr(kConsumerEpochRequiredAttr))
+    return success();
+  auto skipInference = [&]() {
+    ws->removeAttr(kConsumerEpochRequiredAttr);
+    return success();
+  };
+
+  SmallVector<Region *> consumers{&ws.getDefaultRegion()};
+  SmallVector<Region *> partitions(ws.getPartitionRegions().begin(),
+                                   ws.getPartitionRegions().end());
+  // The regular static layout places the producer in the final worker
+  // partition.  The default region and preceding workers are consumers.
+  for (unsigned index = 0; index + 1 < partitions.size(); ++index)
+    consumers.push_back(partitions[index]);
+  if (consumers.size() < 2)
+    return skipInference();
+
+  SmallVector<SmallVector<scf::ForOp>> candidatesByConsumer;
+  candidatesByConsumer.reserve(consumers.size());
+  bool hasPersistentCandidate = false;
+  for (Region *consumer : consumers) {
+    auto &candidates = candidatesByConsumer.emplace_back();
+    consumer->walk([&](scf::ForOp loop) {
+      if (containsAsyncSqmmaAndGlobalStore(loop))
+        candidates.push_back(loop);
+    });
+    hasPersistentCandidate |= !candidates.empty();
+  }
+  if (!hasPersistentCandidate)
+    return skipInference();
+
+  SmallVector<scf::ForOp> epochLoops;
+  std::optional<std::tuple<int64_t, int64_t, int64_t>> commonBounds;
+  for (const SmallVector<scf::ForOp> &candidates : candidatesByConsumer) {
+    // Nested K loops contain SQMMA but no output store.  Requiring exactly
+    // one SQMMA+store loop keeps this inference deliberately conservative.
+    if (candidates.size() != 1) {
+      ws.emitOpError(
+          "MUSA TLE persistent named-reader rendezvous requires exactly one "
+          "SQMMA/store epoch loop in every consumer partition");
+      return failure();
+    }
+    FailureOr<std::tuple<int64_t, int64_t, int64_t>> bounds =
+        getConstantLoopBounds(candidates.front());
+    if (failed(bounds)) {
+      ws.emitOpError(
+          "MUSA TLE persistent named-reader rendezvous requires constant "
+          "consumer epoch loop bounds");
+      return failure();
+    }
+    auto [lower, upper, step] = *bounds;
+    if (lower != 0 || step != 1 || upper <= 1) {
+      ws.emitOpError(
+          "MUSA TLE persistent named-reader rendezvous requires a zero-based "
+          "unit-step consumer epoch loop with at least two iterations");
+      return failure();
+    }
+    if (commonBounds && *commonBounds != *bounds) {
+      ws.emitOpError(
+          "MUSA TLE persistent named-reader rendezvous requires identical "
+          "consumer epoch loop bounds");
+      return failure();
+    }
+    commonBounds = *bounds;
+    epochLoops.push_back(candidates.front());
+  }
+
+  for (scf::ForOp loop : epochLoops) {
+    auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+    rewriter.setInsertionPoint(yield);
+    auto barrier = ttg::BarrierOp::create(rewriter, yield.getLoc(),
+                                          ttg::AddrSpace::Local);
+    barrier->setAttr(kConsumerEpochSyncAttr,
+                     rewriter.getI32IntegerAttr(0));
+  }
+  ws->removeAttr(kConsumerEpochRequiredAttr);
+  return success();
+}
+
 class PrepareWarpSpecializePass
     : public impl::TritonMUSAGPUTLEPrepareWarpSpecializeBase<
           PrepareWarpSpecializePass> {
@@ -58,6 +185,10 @@ class PrepareWarpSpecializePass
       return ws.emitOpError(
           "MUSA TLE static warp_specialize worker region and warp-count "
           "sizes must match");
+    if (ws->hasAttr(kDefaultProducerAttr) && workerRegions.size() != 1)
+      return ws.emitOpError(
+          "MUSA TLE default producer requires exactly one consumer worker "
+          "partition");
     if (auto requestedRegisters = ws.getRequestedRegisters()) {
       if (requestedRegisters->size() != workerRegions.size())
         return ws.emitOpError(
@@ -163,6 +294,9 @@ class PrepareWarpSpecializePass
       mod->setAttr("ttg.total-num-warps",
                    rewriter.getI32IntegerAttr(totalNumWarps));
     }
+
+    if (failed(markConsumerEpochRendezvous(ws, rewriter)))
+      return failure();
 
     return success();
   }

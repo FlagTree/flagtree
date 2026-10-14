@@ -510,7 +510,33 @@ void init_triton_musa_tle_ir(py::module m) {
     throw std::runtime_error("triton IR builder class is not initialized");
 
   auto &builderCls = *builderClsPtr;
+  // Native markers keep newer Python packages paired with older libtriton
+  // builds on the safe fallback path.
+  builderCls.attr("mthreads_tle_pipe_sqmma_version") = py::int_(2);
+  builderCls.attr("mthreads_tle_multifield_pipe_version") = py::int_(3);
+  builderCls.attr("mthreads_tle_one_shot_pipe_version") = py::int_(1);
+  builderCls.attr("mthreads_tle_spmc_pipe_version") = py::int_(2);
+  builderCls.attr("mthreads_tle_dynamic_loops_version") = py::int_(1);
+  builderCls.attr("mthreads_tle_split_m_sqmma_version") = py::int_(1);
+  builderCls.attr("mthreads_tle_split128_sqmma_version") = py::int_(1);
+  builderCls.attr("mthreads_tle_local_barrier_version") = py::int_(1);
+  builderCls.attr("mthreads_tle_persistent_ordered_sqmma_version") =
+      py::int_(1);
+  builderCls.attr("mthreads_tle_dynamic_partition_sync_version") =
+      py::int_(1);
+  builderCls.attr("mthreads_tle_grouped_completion_version") = py::int_(1);
+  builderCls.attr("mthreads_tle_16_warp_persistent_version") = py::int_(1);
+  builderCls.attr("mthreads_tle_fused_pipe_consumer_version") = py::int_(1);
+  builderCls.attr("mthreads_tle_default_producer_version") = py::int_(1);
   builderCls
+      .def("create_mthreads_local_barrier", [](TritonOpBuilder &self) {
+        auto barrier = self.create<ttg::BarrierOp>(ttg::AddrSpace::Local);
+        // Automatic SQMMA synchronization uses the same TTG operation. Keep
+        // an explicit frontend barrier distinguishable until late static warp
+        // specialization decides which barriers remain CTA-wide.
+        barrier->setAttr("musa_tle.explicit_cta_sync",
+                         self.getBuilder().getUnitAttr());
+      })
       .def("ensure_ttg_layout_attrs",
            [](TritonOpBuilder &self, int numWarps, int threadsPerWarp,
               int numCtas) {
@@ -980,14 +1006,19 @@ void init_triton_musa_tle_ir(py::module m) {
            })
       .def("create_warp_specialize",
            [](TritonOpBuilder &self, std::vector<mlir::Type> resultTypes,
-              std::vector<int32_t> partitionNumWarps) -> TLEWarpSpecializeOp {
+              std::vector<int32_t> partitionNumWarps,
+              bool defaultIsProducer) -> TLEWarpSpecializeOp {
              auto &builder = self.getBuilder();
              auto op = self.create<ttg::WarpSpecializeOp>(resultTypes,
                                                           partitionNumWarps);
              op->setAttr("musa_tle.static_warp_specialize",
                          builder.getUnitAttr());
+             if (defaultIsProducer)
+               op->setAttr("musa_tle.default_producer", builder.getUnitAttr());
              return TLEWarpSpecializeOp(op);
-           })
+           },
+           py::arg("result_types"), py::arg("partition_num_warps"),
+           py::arg("default_is_producer") = false)
       .def("create_exclusive_cumsum",
            [](TritonOpBuilder &self, mlir::Type exclusiveTy, mlir::Type totalTy,
               mlir::Value src, int axis, bool reverse) -> mlir::OpState {

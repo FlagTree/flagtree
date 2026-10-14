@@ -19,6 +19,17 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
+static constexpr llvm::StringLiteral kLayoutConversionSyncAttr =
+    "musa_tle.layout_conversion_sync";
+
+static void emitLayoutConversionBarrier(
+    Location loc, ConversionPatternRewriter &rewriter) {
+  auto sync = LLVM::createLLVMIntrinsicCallOp(
+      rewriter, loc, "llvm.musa.syncthreads.lm", TypeRange{}, {});
+  sync->setAttr(kLayoutConversionSyncAttr,
+                UnitAttr::get(rewriter.getContext()));
+}
+
 static bool hasOnlyStorageLikeUsers(Value value) {
   SmallVector<Value> worklist{value};
   llvm::SmallPtrSet<Operation *, 16> visited;
@@ -226,7 +237,7 @@ private:
         if (isWarpSync)
           targetInfo.warpSync(loc, rewriter);
         else
-          targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+          emitLayoutConversionBarrier(loc, rewriter);
       }
 
       auto tileInVals =
@@ -241,7 +252,7 @@ private:
       if (isWarpSync)
         targetInfo.warpSync(loc, rewriter);
       else
-        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+        emitLayoutConversionBarrier(loc, rewriter);
 
       SmallVector<Value> tileOutVals = lowerLdStShared(
           loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
@@ -312,7 +323,7 @@ private:
     auto inVals = ::mlir::unpackLLElements(loc, adaptor.getSrc(), rewriter);
 
     if (musa::isMusaSqmmaLike(srcTy.getEncoding()))
-      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      emitLayoutConversionBarrier(loc, rewriter);
 
     auto outVals = transferWithinBlockSwizzlingImpl(
         loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase,
@@ -392,10 +403,10 @@ private:
 
     unsigned numTotalReps = product<unsigned>(numReplicates);
     if (numTotalReps != 0 && musa::isMusaSqmmaLike(srcLayout))
-      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      emitLayoutConversionBarrier(loc, rewriter);
     for (unsigned repId = 0; repId < numTotalReps; ++repId) {
       if (repId != 0)
-        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+        emitLayoutConversionBarrier(loc, rewriter);
 
       auto multiDimRepId = delinearize(repId, numReplicates, order);
       SmallVector<Value> repBase(rank);
@@ -420,7 +431,7 @@ private:
         LLVM::MUSA::llStore(rewriter, loc, ptr, inVals[i], inRep);
       }
 
-      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      emitLayoutConversionBarrier(loc, rewriter);
 
       for (unsigned i = 0; i < dstIndices.size(); ++i) {
         Value inRep = b.true_val();

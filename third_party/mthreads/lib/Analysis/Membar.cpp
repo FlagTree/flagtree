@@ -264,10 +264,15 @@ void MembarOrFenceAnalysis::visitTerminator(
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
+void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
+                                   bool pipeTMEReuseSync) {
   OpBuilder::InsertionGuard g(*builder);
-  triton::gpu::BarrierOp::create(*builder, op->getLoc(),
-                                 triton::gpu::AddrSpace::Local);
+  auto barrier = triton::gpu::BarrierOp::create(
+      *builder, op->getLoc(), triton::gpu::AddrSpace::Local);
+#ifdef __TLE__
+  if (pipeTMEReuseSync)
+    barrier->setAttr("musa_tle.pipe_tme_reuse_sync", builder->getUnitAttr());
+#endif
 }
 
 #ifdef __TLE__
@@ -318,6 +323,58 @@ static bool syncPipeLocalStoreGroups(Operation *wait, BlockInfo *blockInfo,
     }
   });
   return matchedAllocation;
+}
+
+// A cyclic TME pipe intentionally writes the same ring slot again after every
+// reader has released that generation. Membar cannot recover the dynamic slot
+// index, so the loop-carried WAW looks like an ordinary overlap. Narrow only
+// that exact case: every active conflict must be WAW between pipe-managed TME
+// copies. Any read, alias, or non-pipe writer keeps the full CTA barrier.
+static bool hasOnlyPipeTMEReuseHazard(Operation *op,
+                                      const BlockInfo &previous,
+                                      const BlockInfo &current,
+                                      MembarFilterFn filter,
+                                      Allocation *allocation) {
+  if (!op->hasAttr("musa_tle.pipe_payload_copy"))
+    return false;
+
+  auto hasActiveIntersection = [&](const BlockInfo::SliceMapT &lhs,
+                                   const BlockInfo::SliceMapT &rhs,
+                                   bool requirePipeCopies,
+                                   bool &sawIntersection) {
+    for (const auto &[lhsSlice, lhsOps] : lhs) {
+      for (const auto &[rhsSlice, rhsOps] : rhs) {
+        if (!lhsSlice.intersects(rhsSlice))
+          continue;
+        for (Operation *lhsOp : lhsOps) {
+          for (Operation *rhsOp : rhsOps) {
+            if (filter && filter(lhsOp, rhsOp, allocation))
+              continue;
+            sawIntersection = true;
+            if (requirePipeCopies &&
+                (!lhsOp->hasAttr("musa_tle.pipe_payload_copy") ||
+                 !rhsOp->hasAttr("musa_tle.pipe_payload_copy")))
+              return false;
+          }
+        }
+      }
+    }
+    return true;
+  };
+
+  bool sawReadHazard = false;
+  if (!hasActiveIntersection(previous.syncWriteSlices,
+                             current.syncReadSlices, false, sawReadHazard) ||
+      !hasActiveIntersection(previous.syncReadSlices,
+                             current.syncWriteSlices, false, sawReadHazard) ||
+      sawReadHazard)
+    return false;
+
+  bool sawPipeWAW = false;
+  if (!hasActiveIntersection(previous.syncWriteSlices,
+                             current.syncWriteSlices, true, sawPipeWAW))
+    return false;
+  return sawPipeWAW;
 }
 #endif
 
@@ -466,7 +523,13 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   } else if (blockInfo->isIntersected(curBlockInfo, filter, allocation)) {
     builder->setInsertionPoint(op);
+#ifdef __TLE__
+    bool pipeTMEReuseSync = hasOnlyPipeTMEReuseHazard(
+        op, *blockInfo, curBlockInfo, filter, allocation);
+    insertBarrier(op, builder, pipeTMEReuseSync);
+#else
     insertBarrier(op, builder);
+#endif
     blockInfo->sync();
   }
   // Update the region info, even if barrier is inserted, we have to maintain

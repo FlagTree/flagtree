@@ -7,6 +7,9 @@ import torch
 import triton
 import triton.language as tl
 import triton.experimental.tle.language as tle
+from triton.experimental.tle.language.gpu.mthreads import (
+    warp_specialize as mthreads_warp_specialize,
+)
 from triton._C import libtriton
 from triton._C.libtriton import ir
 from triton.backends.compiler import Language
@@ -57,6 +60,16 @@ def _ws_simple_default(out):
 @triton.jit
 def _ws_simple_worker(out):
     tl.store(out + 1, 2)
+
+
+@triton.jit
+def _ws_default_producer_kernel(out):
+    tle.gpu.warp_specialize(
+        [(_ws_simple_default, (out, )), (_ws_simple_worker, (out, ))],
+        worker_num_warps=[16],
+        worker_num_regs=[160],
+        default_is_producer=True,
+    )
 
 
 @triton.jit
@@ -276,6 +289,7 @@ def _compile_ws_ir(
     signature=None,
     constexprs=None,
     consumer_warps=16,
+    include_late=False,
 ):
     target, backend = mthreads_backend()
     options = backend.parse_options({"num_warps": consumer_warps, "num_stages": 1})
@@ -302,6 +316,16 @@ def _compile_ws_ir(
     ttir = module.str_nodebug()
     module = stages["ttgir"](module, metadata)
     ttgir = module.str_nodebug()
+    if include_late:
+        pm = ir.pass_manager(context)
+        libtriton.passes.convert.add_scf_to_cf(pm)
+        libtriton.passes.convert.add_index_to_llvmir(pm)
+        libtriton.mthreads.passes.ttgpuir.add_allocate_shared_memory(pm, 31)
+        libtriton.mthreads.passes.ttgpuir.add_mtgpu_to_llvm(pm, 31)
+        libtriton.mthreads.passes.ttgpuir.add_to_llvmir(pm, 31)
+        libtriton.mthreads.passes.ttgpuir.add_tle_lower_warp_specialize(pm)
+        pm.run(module, "lower_static_ws_to_llvm_cfg")
+        return ttir, ttgir, module.str_nodebug()
     return ttir, ttgir
 
 
@@ -350,7 +374,26 @@ def test_tle_warp_specialize_multi_worker_barrier_runtime():
 
 def test_tle_warp_specialize_musa_container_contract():
     builder = libtriton.ir.builder
+    expected_capabilities = {
+        "mthreads_tle_pipe_sqmma_version": 2,
+        "mthreads_tle_multifield_pipe_version": 3,
+        "mthreads_tle_one_shot_pipe_version": 1,
+        "mthreads_tle_spmc_pipe_version": 2,
+        "mthreads_tle_dynamic_loops_version": 1,
+        "mthreads_tle_split_m_sqmma_version": 1,
+        "mthreads_tle_split128_sqmma_version": 1,
+        "mthreads_tle_local_barrier_version": 1,
+        "mthreads_tle_persistent_ordered_sqmma_version": 1,
+        "mthreads_tle_dynamic_partition_sync_version": 1,
+        "mthreads_tle_grouped_completion_version": 1,
+        "mthreads_tle_16_warp_persistent_version": 1,
+        "mthreads_tle_fused_pipe_consumer_version": 1,
+        "mthreads_tle_default_producer_version": 1,
+    }
+    for capability, minimum in expected_capabilities.items():
+        assert getattr(builder, capability, 0) >= minimum
     for method in (
+            "create_mthreads_local_barrier",
             "create_warp_specialize",
             "create_warp_specialize_partitions",
             "create_warp_yield",
@@ -370,6 +413,71 @@ def test_tle_warp_specialize_musa_container_contract():
         compiled[(1, 1, 1)](out, value, 7)
         torch.musa.synchronize()
         torch.testing.assert_close(out.cpu(), torch.tensor([value + 1, value + 7, value + 8], dtype=torch.int32))
+
+
+def test_tle_warp_specialize_keeps_old_builder_call_compatible():
+    class OldBuilder:
+        def create_warp_specialize(self, result_types, worker_num_warps):
+            return result_types, worker_num_warps
+
+    builder = OldBuilder()
+    assert mthreads_warp_specialize.create_op(builder, ["result"], [4]) == (
+        ["result"],
+        [4],
+    )
+    with pytest.raises(RuntimeError, match="default-producer"):
+        mthreads_warp_specialize.create_op(
+            builder,
+            ["result"],
+            [4],
+            default_is_producer=True,
+        )
+
+
+def test_tle_warp_specialize_default_producer_contract():
+    ttir, ttgir, late_ir = _compile_ws_ir(
+        _ws_default_producer_kernel,
+        {"out": "*i32"},
+        constexprs={},
+        consumer_warps=4,
+        include_late=True,
+    )
+    for ir_text in (ttir, ttgir):
+        assert "musa_tle.default_producer" in ir_text, ir_text
+        assert "num_warps(16)" in ir_text, ir_text
+        assert re.search(
+            r"requestedRegisters\s*=\s*array<i32:\s*160>", ir_text
+        ), ir_text
+
+    assert '"ttg.total-num-warps" = 20 : i32' in ttgir, ttgir
+    assert "warpGroupStartIds = array<i32: 4>" in ttgir, ttgir
+    assert "ttg.warp_specialize" not in late_ir, late_ir
+    assert "arith.constant 128 : i32" in late_ir, late_ir
+    assert late_ir.count("arith.cmpi ult") == 1, late_ir
+    assert late_ir.count("arith.cmpi uge") == 1, late_ir
+    assert late_ir.index("arith.cmpi ult") < late_ir.index("arith.cmpi uge"), late_ir
+
+
+def test_tle_warp_specialize_default_producer_runtime():
+    out = torch.full((2, ), -1, dtype=torch.int32, device="musa")
+    compiled = _ws_default_producer_kernel.warmup(
+        out,
+        grid=(1, ),
+        num_warps=4,
+        num_stages=1,
+    )
+    assert compiled.metadata.num_warps == 20
+    for _ in range(10):
+        out.fill_(-1)
+        _ws_default_producer_kernel[(1, )](
+            out,
+            num_warps=4,
+            num_stages=1,
+        )
+        torch.musa.synchronize()
+        torch.testing.assert_close(
+            out.cpu(), torch.tensor([1, 2], dtype=torch.int32)
+        )
 
 
 @pytest.mark.parametrize(

@@ -378,6 +378,16 @@ class InsertLocalPointerBarriersPass
         // redundant back-to-back barriers for consecutive loads from different
         // tracked groups.
         dirtyGroups.clear();
+      } else if (auto acquire =
+                     dyn_cast<triton::musa_tle::PipeWriterAcquireOp>(&op)) {
+        // Acquiring a writer slot is the reuse edge for its payload fields:
+        // every reader of the previous epoch has released that slot. Do not
+        // carry a local-pointer dirty bit across this protocol boundary and
+        // manufacture a second, partition-local barrier for the same reuse.
+        for (Value field : acquire.getFields()) {
+          if (std::optional<int64_t> group = lookupMemDescGroup(field))
+            dirtyGroups.erase(*group);
+        }
       } else if (auto wait =
                      dyn_cast<triton::musa_tle::PipeReaderWaitOp>(&op)) {
         // A pipe full-barrier wait is the acquire edge for its payload fields.

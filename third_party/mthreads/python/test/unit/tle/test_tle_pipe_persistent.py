@@ -1,5 +1,7 @@
 """Runtime regressions for persistent MThreads TLE pipe reuse."""
 
+import re
+
 import pytest
 import torch
 import triton
@@ -168,7 +170,6 @@ def _persistent_multi_writer(
 @triton.jit
 def _persistent_main_reader(
     reader,
-    consumer_epoch,
     out,
     outer_tiles: tl.constexpr,
     k_tiles: tl.constexpr,
@@ -177,7 +178,6 @@ def _persistent_main_reader(
     block_n: tl.constexpr = 320
     half_n: tl.constexpr = 128
     for tile in range(outer_tiles):
-        tle.gpu.barrier_wait(consumer_epoch, phaseIdx=(tile + 1) & 1)
         acc_lo = tl.zeros((block_m, half_n), tl.float32)
         acc_hi = tl.zeros((block_m, half_n), tl.float32)
         for k_iter in range(k_tiles):
@@ -201,13 +201,11 @@ def _persistent_main_reader(
             out + rows[:, None] * block_n + half_n + cols[None, :],
             acc_hi.to(out.dtype.element_ty),
         )
-        tle.gpu.barrier_arrive(consumer_epoch, phaseIdx=tile & 1)
 
 
 @triton.jit
 def _persistent_tail_reader(
     reader,
-    consumer_epoch,
     out,
     outer_tiles: tl.constexpr,
     k_tiles: tl.constexpr,
@@ -217,7 +215,6 @@ def _persistent_tail_reader(
     main_n: tl.constexpr = 256
     tail_n: tl.constexpr = 64
     for tile in range(outer_tiles):
-        tle.gpu.barrier_wait(consumer_epoch, phaseIdx=(tile + 1) & 1)
         acc = tl.zeros((block_m, tail_n), tl.float32)
         for k_iter in range(k_tiles):
             token = tile * k_tiles + k_iter
@@ -232,7 +229,6 @@ def _persistent_tail_reader(
             out + rows[:, None] * block_n + cols[None, :],
             acc.to(out.dtype.element_ty),
         )
-        tle.gpu.barrier_arrive(consumer_epoch, phaseIdx=tile & 1)
 
 
 @triton.jit
@@ -276,14 +272,12 @@ def _persistent_multi_reader_kernel(
         b_main=b_main,
         b_tail=b_tail,
     )
-    consumer_epoch = tle.gpu.alloc_barrier(arrive_count=20, init=tle.gpu.PENDING)
     tle.gpu.warp_specialize(
         [
             (
                 _persistent_tail_reader,
                 (
                     pipe.reader("tail"),
-                    consumer_epoch,
                     out,
                     OUTER_TILES,
                     K_TILES,
@@ -293,7 +287,6 @@ def _persistent_multi_reader_kernel(
                 _persistent_main_reader,
                 (
                     pipe.reader("main"),
-                    consumer_epoch,
                     out,
                     OUTER_TILES,
                     K_TILES,
@@ -372,11 +365,23 @@ def test_persistent_single_reader_pipe_reuses_ring_across_output_tiles():
     llir = compiled.asm["llir"]
     assert "llvm.musa.async.init.arrival" in llir
     assert "llvm.musa.async.arrive.none.phaseid" in llir
+    # Three full and three empty pipe barriers are sufficient.  A local
+    # pointer dependency in the producer must not be lowered into a seventh
+    # per-K private barrier; the pipe acquire already supplies that edge.
+    assert "llvm.musa.async.bar.record(i32 6)" in llir
+    assert "call void @llvm.musa.lma.wait()" in llir
+    init_calls = re.findall(
+        r"(?:tail )?call void @llvm\.musa\.async\.init\.arrival\(", llir
+    )
+    assert len(init_calls) == 6
 
 
 @pytest.mark.skipif(not torch.musa.is_available(), reason="MUSA device is not available")
 def test_persistent_named_readers_release_every_epoch_before_ring_reuse():
-    m, n, k = 768, 320, 256
+    # Exercise enough outer epochs to wrap the alternating barrier phase more
+    # than once.  Keeping a nested K loop also verifies that late lowering
+    # derives the phase from the outer tile loop rather than the K loop.
+    m, n, k = 1792, 320, 256
     outer_tiles, k_tiles = m // 256, k // 64
     a_cpu, b_cpu, a, b = _make_inputs(m, n, k)
     out = torch.empty((m, n), device="musa", dtype=torch.bfloat16)
@@ -385,7 +390,7 @@ def test_persistent_named_readers_release_every_epoch_before_ring_reuse():
     b_tail_desc = TensorDescriptor.from_tensor(b, [64, 64])
     expected = a_cpu.float() @ b_cpu.float()
 
-    for _ in range(3):
+    for _ in range(10):
         out.fill_(float("nan"))
         compiled = _persistent_multi_reader_kernel[(1,)](
             a_desc,
@@ -403,3 +408,18 @@ def test_persistent_named_readers_release_every_epoch_before_ring_reuse():
     llir = compiled.asm["llir"]
     assert llir.count("llvm.musa.async.init.arrival") >= 4
     assert "llvm.musa.async.arrive.none.phaseid" in llir
+    # The two-stage named-reader pipe already owns two arrival-count-20 empty
+    # barriers.  The compiler-inferred consumer epoch rendezvous must add a
+    # third one, shared by tail(4) + main(16) warps.
+    epoch_barrier_ids = re.findall(
+        r"call void @llvm\.musa\.async\.init\.arrival\(i32 (\d+), i32 20, i32 0\)",
+        llir,
+    )
+    assert len(epoch_barrier_ids) == 3
+    epoch_barrier_id = epoch_barrier_ids[-1]
+    assert llir.count(
+        f"call void @llvm.musa.async.arrive.none.phaseid(i32 {epoch_barrier_id})"
+    ) == 2
+    assert llir.count(
+        f"call void @llvm.musa.async.wait(i32 {epoch_barrier_id},"
+    ) == 2

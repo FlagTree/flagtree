@@ -58,9 +58,20 @@ def partition_function_caller(generator):
     return generator.inline_JitFunction
 
 
-def create_op(builder, result_types, worker_num_warps):
+def create_op(builder, result_types, worker_num_warps, default_is_producer=False):
     # MUSA keeps explicit captures on the isolated partitions holder rather
     # than on the outer ttg.warp_specialize operation.
+    if default_is_producer:
+        if getattr(builder, "mthreads_tle_default_producer_version", 0) < 1:
+            raise RuntimeError(
+                "MUSA TLE default-producer warp specialization requires "
+                "MTHREADS_TLE_DEFAULT_PRODUCER_VERSION >= 1"
+            )
+        return builder.create_warp_specialize(
+            result_types, worker_num_warps, True
+        )
+    # Keep the established two-argument call for compatibility with an older
+    # libtriton paired with newer Python sources.
     return builder.create_warp_specialize(result_types, worker_num_warps)
 
 
