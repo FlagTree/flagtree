@@ -36,9 +36,6 @@ Usage
     python bench_mhc_pre_lane_vectorize.py --B 2 --S 1024 --D 3584 \
         --iter-times 20 --clamp-min 0 --clamp-max 1 --mode kernel
 
-    # choose the Sinkhorn IR shape (constexpr kernel knobs)
-    python bench_mhc_pre_lane_vectorize.py --sinkhorn-loop range --eps off --norm-order col_first
-
     # sweep a set of shapes, verifying outputs
     python bench_mhc_pre_lane_vectorize.py --sweep --check
 """
@@ -107,9 +104,6 @@ def _kernel_kwargs(args):
         clamp_max=args.clamp_max,
         iter_times=args.iter_times,
         need_backward=args.need_backward,
-        use_static_range=(args.sinkhorn_loop == "static_range"),
-        apply_eps=(args.eps == "on"),
-        norm_order=(0 if args.norm_order == "row_first" else 1),
     )
 
 
@@ -121,8 +115,6 @@ def _ref_kwargs(args):
         clamp_min=args.clamp_min,
         clamp_max=args.clamp_max,
         iter_times=args.iter_times,
-        apply_eps=(args.eps == "on"),
-        norm_order=(0 if args.norm_order == "row_first" else 1),
     )
 
 
@@ -279,7 +271,6 @@ def _run_kernel(args, kernel) -> bool:
     else:
         print(f"Options : iter_times={args.iter_times}   clamp=({args.clamp_min},{args.clamp_max})   "
               f"need_backward={args.need_backward}")
-        print(f"Sinkhorn : loop={args.sinkhorn_loop}   eps={args.eps}   norm_order={args.norm_order}")
     print(f"Warmup : {args.warmup}   Rep/Active: {args.rep}")
     print()
 
@@ -344,11 +335,6 @@ def _parse_args():
     p.add_argument("--mode", choices=["wall", "kernel"], default="wall",
                    help="wall: perf_counter+sync; kernel: do_bench_npu (mspti/profiler)")
     p.add_argument("--iter-times", type=int, default=20, help="sinkhorn iteration count")
-    p.add_argument("--sinkhorn-loop", choices=["static_range", "range"], default="static_range",
-                   help="unrolled tl.static_range vs looped tl.range Sinkhorn body")
-    p.add_argument("--eps", choices=["on", "off"], default="on", help="emit/omit the Sinkhorn HC_EPS adds")
-    p.add_argument("--norm-order", choices=["row_first", "col_first"], default="row_first",
-                   help="row-first (0) vs col-first (1) initial norm and iteration order")
     p.add_argument("--norm-eps", type=float, default=1e-6, help="RMSNorm epsilon")
     p.add_argument("--hc-eps", type=float, default=1e-6, help="sinkhorn epsilon")
     p.add_argument("--clamp-min", type=float, default=0.0, help="logits clamp min (0 = disabled)")
