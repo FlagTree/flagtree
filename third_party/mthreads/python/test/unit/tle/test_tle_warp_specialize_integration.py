@@ -572,7 +572,9 @@ def test_mthreads_tle_warp_specialize_integration_contract(stages, k_tiles):
 @pytest.mark.parametrize("stages", [1, 2])
 def test_mthreads_tle_warp_specialize_dot_pipeline_resources(stages):
     _, ttgir, allocated, late = _compile_ws_dot_integration(stages)
-    assert "ttmg.squad_dot" in ttgir
+    # Loop-carried accumulators may already use the native carrier form at
+    # this stage; non-carried paths can still retain the higher-level op.
+    assert "ttmg.squad_dot" in ttgir or "mtgpu.sqmma" in ttgir
     assert "ttg.warp_specialize" not in late
     assert "llvm.musa.sqmma." in late
     assert "llvm.musa.barrier0" not in late
