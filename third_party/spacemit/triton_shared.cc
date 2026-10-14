@@ -35,8 +35,8 @@ using namespace ir;
 using namespace mlir;
 namespace xsmt = mlir::xsmt;
 namespace xsmt_async = mlir::xsmt_async;
-// Generic third_party/tle dialect (Tle_Dialect, cppNamespace mlir::triton::tle)
-// replaced the vendored xtle dialect; the alias keeps call sites unchanged.
+// Alias onto the generic third_party/tle dialect namespace so the
+// original call sites read unchanged.
 namespace tle = ::mlir::triton::tle;
 
 void init_triton_xsmt_ir(py::module &&m) {
@@ -295,7 +295,7 @@ void init_triton_xsmt_ir(py::module &&m) {
 // ============================================================================
 // TLE (Triton Language Extension) IR bindings
 // ============================================================================
-void init_triton_xtle_ir(py::module &&m) {
+void init_triton_spacemit_tle_ir(py::module &&m) {
   auto *builder_cls = ir::getBuilderClass();
   builder_cls->def(
           "create_tle_dsl_region_direct",
@@ -1293,6 +1293,6 @@ void init_triton_spacemit(py::module &&m) {
   });
 
   init_triton_xsmt_ir(m.def_submodule("xsmt_ir"));
-  init_triton_xtle_ir(m.def_submodule("tle_ir"));
+  init_triton_spacemit_tle_ir(m.def_submodule("tle_ir"));
   init_triton_smt_rvisa_ir(m.def_submodule("smt_rvisa_ir"));
 }

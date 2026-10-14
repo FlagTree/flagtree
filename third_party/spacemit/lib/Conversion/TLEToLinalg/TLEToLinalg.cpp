@@ -23,8 +23,8 @@
 #define DEBUG_TYPE "tle-to-linalg"
 
 using namespace mlir;
-// Generic third_party/tle dialect (cppNamespace mlir::triton::tle) replaced
-// the vendored xtle dialect; the alias keeps the pattern code unchanged.
+// Alias onto the generic third_party/tle dialect namespace so the
+// pattern code reads unchanged.
 namespace tle = ::mlir::triton::tle;
 
 namespace {
