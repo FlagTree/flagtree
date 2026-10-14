@@ -46,7 +46,7 @@ jobs:
       backend: tsingmicro
       gpu-env-var: TXDA_VISIBLE_DEVICES
       flaggems-tag: 'v5.3.5'
-      flagtree-build-command: |
+      flagtree-build-command: |-
         source ~/env.sh
         set -x
         export FLAGTREE_BACKEND=tsingmicro
@@ -58,5 +58,16 @@ jobs:
         export LD_LIBRARY_PATH=$TX8_DEPS_ROOT/lib:$LD_LIBRARY_PATH
         export PATH=${LLVM_BINARY_DIR}:${PATH}
         python3 -m pip install . --no-build-isolation -v
+      flaggems-pre-command: |-
+        source ~/env.sh
+        set -x
+        export FLAGTREE_BACKEND=tsingmicro
+        export TRITON_APPEND_CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
+        export TX8_DEPS_ROOT=~/.flagtree/tsingmicro/tx8_deps
+        export LLVM_SYSPATH=~/.flagtree/tsingmicro/tsingmicro-llvm22
+        export LLVM_BINARY_DIR=${LLVM_SYSPATH}/bin
+        export PYTHONPATH=${LLVM_SYSPATH}/python_packages/mlir_core:$PYTHONPATH
+        export LD_LIBRARY_PATH=$TX8_DEPS_ROOT/lib:$LD_LIBRARY_PATH
+        export PATH=${LLVM_BINARY_DIR}:${PATH}
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
