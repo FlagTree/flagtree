@@ -22,7 +22,7 @@
 #include "incubated/Conversion/TritonToLinalgIncubated/Passes.h"
 #include "incubated/Conversion/TritonToStructuredIncubated/Passes.h"
 #include "incubated/Conversion/TritonToUnstructureIncubated/Passes.h"
-#include "mlir-ext/Dialect/CommonIR/Transforms/LaneVectorize/Passes.h"
+#include "mlir-ext/Dialect/CommonIR/Transforms/Passes.h"
 
 #include "ascend/include/DynamicCVPipeline/Common/BufferCountManager.h"
 #include "ascend/include/DynamicCVPipeline/Passes.h"
@@ -341,7 +341,7 @@ void init_triton_ascend_ir(py::module &&m) {
 
 void init_triton_ascend_passes_ttir(py::module &&m) {
   m.def("add_lane_vectorize", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::createTritonLaneVectorize());
+    pm.addPass(mlir::triton::tile::createTritonLaneVectorize());
   });
 
   m.def("add_auto_blockify", [](mlir::PassManager &pm, int autoBlockifySize) {

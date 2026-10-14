@@ -50,7 +50,6 @@ add_triton_plugin(TritonAscend
   ${CMAKE_CURRENT_SOURCE_DIR}/ascend_ir.cc
   LINK_LIBS
   TritonToLinalgIncubated
-  LaneVectorize
   BiShengIRScopeDialect
   BiShengIRHIVMDialect
   ${_MLIRMeshDialect_LIB}
