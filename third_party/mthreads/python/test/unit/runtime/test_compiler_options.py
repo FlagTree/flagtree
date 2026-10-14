@@ -57,6 +57,113 @@ def test_mthreads_disable_max_ilp_scheduler_does_not_change_non_sqmma_options():
     assert disabled_args == enabled_args
 
 
+def test_mthreads_user_scheduler_and_opt_level_replace_backend_defaults():
+    from triton.backends.mthreads.compiler import _llc_extra_options
+
+    backend = _get_mthreads_backend()
+    options = backend.parse_options(
+        {
+            "enable_backend_opt": True,
+            "llc_options": "-misched=mtgpu-max-occupancy -mtgpu-opt-level=2",
+        }
+    )
+    args = _llc_extra_options({"uses_sqmma": True}, options, capability=31)
+
+    assert args.count("-misched=mtgpu-max-occupancy") == 1
+    assert "-misched=mtgpu-max-ilp" not in args
+    assert args.count("-mtgpu-opt-level=2") == 1
+    assert "-mtgpu-opt-level=1" not in args
+
+
+def test_mthreads_user_llc_pass_manager_level_replaces_default():
+    from triton.backends.mthreads.compiler import _llc_extra_options, _llc_opt_level
+
+    backend = _get_mthreads_backend()
+    default = backend.parse_options({})
+    assert _llc_opt_level(default) == "-O2"
+
+    options = backend.parse_options({"llc_options": "-O3 -O1"})
+    assert _llc_opt_level(options) == "-O1"
+    args = _llc_extra_options({"uses_sqmma": True}, options, capability=31)
+    assert not any(arg in ("-O0", "-O1", "-O2", "-O3") for arg in args)
+
+
+def test_mthreads_known_llc_register_failure_is_recoverable(monkeypatch, tmp_path):
+    from triton.backends.mthreads import compiler as musa_compiler
+    from triton.runtime.errors import PTXASError
+
+    assert musa_compiler.MTHREADS_REGISTER_FAILURE_RECOVERY_VERSION >= 1
+
+    class FailedProcess:
+        returncode = 134
+        stdout = ""
+        stderr = "LLVM ERROR: no registers from class available to allocate"
+
+    monkeypatch.setattr(musa_compiler.subprocess, "run", lambda *args, **kwargs: FailedProcess())
+    with pytest.raises(PTXASError, match="MTGPU register allocation"):
+        musa_compiler._run_tool_command(
+            "llc", ["llc", "kernel.ll", "-O2"], repro_dir=tmp_path
+        )
+
+
+def test_mthreads_unknown_llc_failure_is_not_swallowed(monkeypatch, tmp_path):
+    from triton.backends.mthreads import compiler as musa_compiler
+
+    class FailedProcess:
+        returncode = 134
+        stdout = ""
+        stderr = "LLVM ERROR: unexpected backend failure"
+
+    monkeypatch.setattr(musa_compiler.subprocess, "run", lambda *args, **kwargs: FailedProcess())
+    with pytest.raises(RuntimeError, match="`llc` failed with error code 134"):
+        musa_compiler._run_tool_command(
+            "llc", ["llc", "kernel.ll", "-O2"], repro_dir=tmp_path
+        )
+
+
+def test_mthreads_post_ra_register_crash_is_recoverable(monkeypatch, tmp_path):
+    from triton.backends.mthreads import compiler as musa_compiler
+    from triton.runtime.errors import PTXASError
+
+    class FailedProcess:
+        returncode = 139
+        stdout = ""
+        stderr = "MTGPU Post-RA Internal Registers Related Optimization"
+
+    monkeypatch.setattr(musa_compiler.subprocess, "run", lambda *args, **kwargs: FailedProcess())
+    with pytest.raises(PTXASError, match="MTGPU register allocation"):
+        musa_compiler._run_tool_command(
+            "llc", ["llc", "kernel.ll", "-O0"], repro_dir=tmp_path
+        )
+
+
+@pytest.mark.parametrize(
+    ("arch", "expected"),
+    [
+        ("ph1", 31),
+        ("ph1s", 32),
+        ("mp31", 31),
+        ("mp_31", 31),
+        ("mp32", 32),
+        ("mp_32", 32),
+    ],
+)
+def test_mthreads_arch_alias_capability(arch, expected):
+    from triton.backends.mthreads._musa_arch import musa_capability_from_arch
+    from triton.backends.mthreads.compiler import _capability_from_arch
+    from triton.backends.mthreads.driver import _arch_to_musa_capability
+
+    assert musa_capability_from_arch(arch) == expected
+    assert _capability_from_arch(arch) == expected
+    assert _arch_to_musa_capability(arch) == expected
+
+
+def test_mthreads_rejects_unavailable_future_architecture():
+    backend = _get_mthreads_backend()
+    with pytest.raises(ValueError, match="supports capabilities up to 32"):
+        backend.parse_options({"arch": "33"})
+
+
 def test_mthreads_can_disable_sqmma_m_split_preference():
     assert MTHREADS_GEMM_COMPILER_OPTIONS_VERSION >= 2
     backend = _get_mthreads_backend()

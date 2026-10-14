@@ -11,6 +11,14 @@ def normalize_musa_arch(arch: object) -> str:
 
 def musa_capability_from_arch(arch: object) -> int | None:
     arch_str = normalize_musa_arch(arch)
+    if arch_str in {"mp31", "mp_31"}:
+        return 31
+    if arch_str in {"mp32", "mp_32"}:
+        return 32
+    # PH1S is the mp_32 ISA generation, not a PH1/mp_31 alias. Check the
+    # longer product name before the PH1 prefix.
+    if arch_str.startswith("ph1s"):
+        return 32
     if arch_str.startswith("ph1"):
         return 31
     if arch_str.isdecimal():
