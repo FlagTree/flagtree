@@ -22,7 +22,6 @@
  */
 
 #include "tle/dialect/include/IR/Dialect.h"
-#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "tle/dialect/include/IR/Dialect.cpp.inc"
@@ -42,45 +41,13 @@
 
 namespace mlir::triton::tle {
 namespace {
-static bool isWarpSpecializeBody(Region *region) {
-  Operation *parent = region ? region->getParentOp() : nullptr;
-  if (isa_and_nonnull<gpu::WarpSpecializePartitionsOp>(parent))
-    return true;
-  if (auto warpSpecialize = dyn_cast_or_null<gpu::WarpSpecializeOp>(parent))
-    return region == &warpSpecialize.getDefaultRegion();
-  return false;
-}
-
-static bool isInsideWarpSpecializeBody(Region *region) {
-  while (region) {
-    if (isWarpSpecializeBody(region))
-      return true;
-    Operation *parent = region->getParentOp();
-    if (!parent || isa<FunctionOpInterface>(parent))
-      return false;
-    region = parent->getParentRegion();
-  }
-  return false;
-}
-
 struct TleInlinerInterface final : public DialectInlinerInterface {
   using DialectInlinerInterface::DialectInlinerInterface;
 
-  bool isLegalToInline(Operation *op, Region *dest, bool,
-                       IRMapping &) const final {
-    // Warp-specialize bodies must be visible to later partition lowering. Clone
-    // a DSL region into those bodies as one opaque operation; its nested
-    // operations remain owned by TLE and are handled by TleDSLRegionInline.
-    if (isa<DSLRegionOp>(op))
-      return isInsideWarpSpecializeBody(dest);
-
+  bool isLegalToInline(Operation *op, Region *, bool, IRMapping &) const final {
     // TLE regions and terminators have their own semantics. Only allow
     // ordinary operations to be cloned with a containing Triton function.
     return op->getNumRegions() == 0 && !op->hasTrait<OpTrait::IsTerminator>();
-  }
-
-  bool shouldAnalyzeRecursively(Operation *op) const final {
-    return !isa<DSLRegionOp>(op);
   }
 };
 } // namespace
