@@ -42,12 +42,21 @@ try:
 except ImportError:
     pass
 
+try:
+    from .cann import CANNJITFunction
+    registry["cann"] = CANNJITFunction
+except ImportError:
+    pass
+
 
 def dialect(
     *,
     name: str,
     **kwargs,
 ):
+
+    if name not in registry:
+        raise ValueError(f"unknown or unavailable dialect {name!r}; available: {sorted(registry)}")
 
     def decorator(fn):
         edsl = registry[name](fn, **kwargs)
