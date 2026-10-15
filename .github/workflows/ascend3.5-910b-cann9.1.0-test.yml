@@ -82,18 +82,24 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           backend: ascend
 
-      - name: TLE-Distributed Test
+      - name: TLE Test
         if: steps.check_backend.outputs.should_skip != 'true'
         shell: bash
         run: |
           set -x
           source /usr/local/Ascend/ascend-toolkit/set_env.sh
           source ~/env.sh
+
           ## flagtree tle-distributed tutorial
+          host="$(hostname)"
+          if ! getent hosts "${host}" >/dev/null 2>&1; then
+              echo "127.0.0.1 ${host}" >> /etc/hosts
+          fi
           pushd python/tutorials/tle/dsa
           PATH=/usr/local/Ascend/cann-9.1.0-shmem/bin:$PATH torchrun --nproc_per_node=2 09-ascend-allgather-gemm.py
           PATH=/usr/local/Ascend/cann-9.1.0-shmem/bin:$PATH torchrun --nproc_per_node=2 10-tle-d2d-barrier.py
           popd
+
           ## flagtree tle custom-op tutorial
           pushd python/tutorials/tle/custom
           python3 test_custom_ops.py
