@@ -290,7 +290,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
-        # Plan logical roots after TTIR cleanup and before assigning register layouts.
+        # flagtree: Plan logical roots after TTIR cleanup and before assigning register layouts.
         if hasattr(tle.passes, "add_plan_logical_domains"):
             # Logical copy planning needs the CTA warp count before TTGPU conversion.
             mod.set_attr("ttg.num-warps", ir.builder(mod.context).get_int32_attr(opt.num_warps))

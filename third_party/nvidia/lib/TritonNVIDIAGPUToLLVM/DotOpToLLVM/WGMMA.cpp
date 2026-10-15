@@ -742,7 +742,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                              useCOperand, loadedA, loadedB, loadedC, allowTF32,
                              needsPartialAccumulator, maxNumImpreciseAcc, sync,
                              thread);
-#endif
+#endif // __TLE__
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
