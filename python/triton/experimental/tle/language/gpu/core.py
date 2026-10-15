@@ -1007,6 +1007,7 @@ def copy(
     offsets: Sequence[constexpr | tensor] = None,
     barrier=None,
     mask=None,
+    cache_policy=None,
     _semantic: TLESemantic | None = None,
 ) -> None:
     """
@@ -1043,6 +1044,11 @@ def copy(
             global-to-local copies, masked elements are written to local memory
             as zero. For local-to-global copies, masked elements are not stored.
             TMA descriptor copies do not accept a mask.
+        cache_policy: Optional compile-time pair ``(inner, outer)`` of TME cache
+            persistence hints. Each entry is ``"none"``, ``"once"``, ``"normal"``,
+            or ``"persist"``. Supported only for MUSA descriptor-to-shared copies.
+            Omission preserves the default ``("normal", "normal")`` behavior.
+            Hints apply to this copy only and do not change synchronization.
         _semantic: Internal semantic analyzer for validation and compilation (user-provided)
 
     Raises:
@@ -1064,9 +1070,16 @@ def copy(
 
         Masked global -> local copy with zero fill:
             tle.copy(global_ptrs, local_buf, [64, 128], mask=valid)
+
+        MUSA TME load with per-copy cache persistence:
+            tle.gpu.copy(tma_desc, local_buf, [64, 64], [x_offset, y_offset],
+                         barrier=bar, cache_policy=("once", "none"))
     """
     mthreads_enabled = mthreads_common.enabled()
     iluvatar_enabled = iluvatar_copy.enabled()
+    cache_policy = tl._unwrap_if_constexpr(cache_policy)
+    if cache_policy is not None and (not mthreads_enabled or tle_semantic.COMMON_IR_ENABLED):
+        raise ValueError("copy cache_policy is only supported by the MUSA TLE backend")
 
     def normcopy(
         src: tl.tensor,
@@ -1219,6 +1232,9 @@ def copy(
             f"Invalid copy combination: src={type(src).__name__}, dst={type(dst).__name__}. "
             "One operand must be tl.tensor (global memory) and the other must be tle.buffered_tensor (local memory)")
 
+    if cache_policy is not None and (is_normcopy or direction != CopyDirection.GM_TO_LOCAL):
+        raise ValueError("copy cache_policy is only supported for descriptor-to-shared copies")
+
     if not isinstance(shape, (tuple, list)):
         # Try to handle Triton tuple-like objects
         if hasattr(shape, '__iter__'):
@@ -1268,7 +1284,8 @@ def copy(
             if direction != CopyDirection.GM_TO_LOCAL:
                 raise ValueError("TMA copy barrier is only supported for global-to-shared TMA copy")
             barrier_slot = _tma_completion_barrier_slot(barrier, _semantic)
-        return mthreads_copy.tmacopy(src, dst, direction, shape, offsets, barrier_slot, _semantic)
+        return mthreads_copy.tmacopy(src, dst, direction, shape, offsets, barrier_slot, cache_policy=cache_policy,
+                                     _semantic=_semantic)
     else:
         return tmacopy(src, dst, direction, shape, offsets, barrier, _semantic)
 
