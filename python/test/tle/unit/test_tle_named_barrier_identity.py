@@ -1,12 +1,24 @@
 import re
 
+import pytest
 import triton
 import triton.experimental.tle.language as tle
 from triton._C.libtriton import ir
 from triton.backends.compiler import GPUTarget
-from triton.compiler.compiler import ASTSource, make_backend
+from triton.compiler.compiler import ASTSource, get_backend, make_backend
 
 _HOPPER_TARGET = GPUTarget("cuda", 90, 32)
+
+
+def _cuda_backend_available():
+    try:
+        get_backend(_HOPPER_TARGET)
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(not _cuda_backend_available(), reason="requires cuda backend")
 
 
 def _make_ttir(kernel):
