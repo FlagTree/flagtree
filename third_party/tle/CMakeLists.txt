@@ -1,10 +1,13 @@
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# [metax+CommonIR] 瘦身路径：只编 triton_tle_commonir.cc（CommonIR builder 方法），
-# 只链 flir 的 CommonIRIR，跳过整套 TLE-raw/Lite（dialect/utils/Transforms/Analysis/TleToLLVM/raw）。
-if((("$ENV{FLAGTREE_BACKEND}" STREQUAL "metax") OR ("$ENV{FLAGTREE_BACKEND}" STREQUAL "mthreads")) AND (NOT "$ENV{FLAGTREE_COMMON_IR}" STREQUAL "") AND TRITON_BUILD_PYTHON_MODULE)
-  message(STATUS "[tle] metax+CommonIR: building CommonIR-only tle binding")
+# Slim path: compile only triton_tle_commonir.cc and link flir CommonIRIR.
+# Skip the full TLE dialect stack, which mthreads already adds under the same
+# binary directories. CommonIR defaults to ON, so an unset FLAGTREE_COMMON_IR
+# must take this path. Key off FLAGTREE_COMMON_IR_ENABLED, not a non-empty
+# environment variable; only an explicit 0/OFF opts out.
+if((("$ENV{FLAGTREE_BACKEND}" STREQUAL "metax") OR ("$ENV{FLAGTREE_BACKEND}" STREQUAL "mthreads")) AND FLAGTREE_COMMON_IR_ENABLED AND TRITON_BUILD_PYTHON_MODULE)
+  message(STATUS "[tle] ${FLAGTREE_BACKEND} CommonIR: building CommonIR-only tle binding")
   set(_slim_common_ir_libs "")
   if(TARGET CommonIRIR)
     list(APPEND _slim_common_ir_libs CommonIRIR)
