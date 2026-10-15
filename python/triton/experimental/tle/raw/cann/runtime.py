@@ -1,4 +1,6 @@
+# Copyright 2026- FlagOS Contributors
 # Copyright 2026- Xcoresigma Technology Co., Ltd
+
 from __future__ import annotations
 
 import functools

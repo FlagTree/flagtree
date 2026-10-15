@@ -500,37 +500,36 @@ region）；Ascend 上 ccec 产物是私有 aicore target 的 bitcode，无法�
 from triton.experimental.tle.raw import dialect
 import triton.experimental.tle.language.raw as tle_raw
 
-# 方式一：format="bitcode"，直接引用预编译 custom_ops.bc
+# 方式一：format="bitcode"，直接引用预编译 bc 文件
 @dialect(
     name="cann",
     format="bitcode",                                    # 省略则默认输入为源码
-    file=CUSTOM_OPS_DIR / "custom_ops.bc",               # bitcode 文件路径
+    file=CUSTOM_OPS_DIR / "custom_add.bc",               # 假设已手动编译出目标算子的 bc 文件
     extern_func_name="custom_gather_gm_to_ub_half",      # .bc 内的导出符号名
     pipeline={"core": "vector", "pipe": "PIPE_MTE2"},    # 结构化 pipeline 元数据
 )
 def gather_gm_to_ub_bc(*args, **kwargs):
     ...
 
-# 方式二：省略 format，同一算子改由 AscendC 源码接入，首次调用时由 ccec
-# JIT 编译为 bitcode 并缓存在 ~/.triton/cache 下；vector core 对应 ccec
-# 目标 dav-c220-vec
+# 方式二：省略 format，输入为用户自备的 AscendC 源码
+# 首次调用时由 ccec JIT 编译为 bitcode 并缓存在 ~/.triton/cache 下；
+# 完整示例见 python/tutorials/tle/custom/test_dialect_custom_ops.py
 @dialect(
     name="cann",
-    file=CUSTOM_OPS_DIR / "mem_ops" / "gather_gm_to_ub.cpp",
-    extern_func_name="custom_gather_gm_to_ub_half",
-    pipeline={"core": "vector", "pipe": "PIPE_MTE2"},
+    file="add.cpp",
+    extern_func_name="custom_add_int32",
+    pipeline={"core": "vector", "pipe": "PIPE_V"},
 )
-def gather_gm_to_ub(*args, **kwargs):
+def add_int32(*args, **kwargs):
     ...
 
 @triton.jit
-def gather_kernel(src, src_index, dst, TILE_SIZE: tl.constexpr, D: tl.constexpr):
+def custom_add_kernel(a, b, out, N_ELEMENTS: tl.constexpr):
     ...
-    # 导出函数 ABI 为 (src, index, tile_size, D, dst)，输出参数殿后，
-    # dst 对应 output_indices=[4]；传 gather_gm_to_ub_bc 或 gather_gm_to_ub
-    # 均可，二者生成相同的 custom op IR
-    dst = tle_raw.call(gather_gm_to_ub, [src, src_index, TILE_SIZE, D, dst],
-                       output_indices=[4])
+    
+    out_t = tle_raw.call(add_int32,
+                         [tle.dsa.to_tensor(a_ub), tle.dsa.to_tensor(b_ub), out_t],
+                         output_indices=[2])
 ```
 
 ## Toolchain requirement
