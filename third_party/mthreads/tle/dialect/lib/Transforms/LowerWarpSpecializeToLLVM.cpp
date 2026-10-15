@@ -1,6 +1,7 @@
 #ifdef __TLE__
 
 #include "Dialect/MUSA/IR/Dialect.h"
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #include "TritonMUSACommon/BarrierUtils.h"
 #include "TritonMUSAGPUTransforms/Passes.h"
 
@@ -32,20 +33,11 @@ namespace {
 
 namespace ttg = triton::gpu;
 namespace ttmg = triton::musa;
+namespace musa_tle = triton::musa_tle;
 
-static constexpr StringLiteral kStaticWarpSpecializeAttr =
-    "musa_tle.static_warp_specialize";
 static constexpr StringLiteral kLocalSyncIntrinsic = "llvm.musa.syncthreads.lm";
-static constexpr StringLiteral kExplicitCtaSyncAttr =
-    "musa_tle.explicit_cta_sync";
-static constexpr StringLiteral kConsumerEpochSyncAttr =
-    "musa_tle.consumer_epoch_sync";
-static constexpr StringLiteral kPipeTMEReuseSyncAttr =
-    "musa_tle.pipe_tme_reuse_sync";
 static constexpr StringLiteral kBarRecordIntrinsic =
     "llvm.musa.async.bar.record";
-static constexpr StringLiteral kDefaultProducerAttr =
-    "musa_tle.default_producer";
 
 struct PartitionSync {
   LLVM::CallIntrinsicOp op;
@@ -83,26 +75,44 @@ static bool isConstant(Value value, int64_t expected) {
   return integer && integer.getInt() == expected;
 }
 
-static bool isUnitIncrement(Value value, Value induction) {
-  auto matches = [&](Value lhs, Value rhs) {
-    return (lhs == induction && isConstant(rhs, 1)) ||
-           (rhs == induction && isConstant(lhs, 1));
+static FailureOr<std::pair<Value, int64_t>>
+getPositiveConstantIncrement(Value value, Value induction) {
+  auto match = [&](Value lhs,
+                   Value rhs) -> FailureOr<std::pair<Value, int64_t>> {
+    Value increment;
+    if (lhs == induction)
+      increment = rhs;
+    else if (rhs == induction)
+      increment = lhs;
+    else
+      return failure();
+
+    APInt constant;
+    if (!matchPattern(increment, m_ConstantInt(&constant)) ||
+        constant.getSExtValue() <= 0)
+      return failure();
+    return std::make_pair(increment, constant.getSExtValue());
   };
   if (auto add = value.getDefiningOp<arith::AddIOp>())
-    return matches(add.getLhs(), add.getRhs());
+    return match(add.getLhs(), add.getRhs());
   if (auto add = value.getDefiningOp<LLVM::AddOp>())
-    return matches(add.getLhs(), add.getRhs());
-  return false;
+    return match(add.getLhs(), add.getRhs());
+  return failure();
 }
 
 // scf.for has become CFG by late warp-specialize lowering.  Recover the
-// canonical zero-based, unit-step induction variable so every consumer in a
-// shared epoch group waits on the same alternating hardware phase.
+// canonical induction variable, lower bound, and positive constant step so
+// every consumer in a shared epoch group waits on the same alternating
+// hardware phase.  In particular, a grid-stride persistent loop uses
+// ((tile - pid) / NUM_SMS) & 1 rather than tile & 1.
 static FailureOr<Value> resolvePartitionSyncPhase(LLVM::CallIntrinsicOp sync,
                                                   Region &partition,
                                                   DominanceInfo &dominance,
                                                   IRRewriter &rewriter) {
   Block *loopHeader = nullptr;
+  Value loopInitial;
+  Value loopStep;
+  int64_t loopStepValue = 0;
   for (Block &candidate : partition.getBlocks()) {
     if (candidate.getNumArguments() == 0 ||
         !dominance.dominates(&candidate, sync->getBlock()))
@@ -130,21 +140,36 @@ static FailureOr<Value> resolvePartitionSyncPhase(LLVM::CallIntrinsicOp sync,
     FailureOr<Value> initial =
         getForwardedBlockArgument(entries.front(), &candidate, 0);
     FailureOr<Value> next = getForwardedBlockArgument(backedge, &candidate, 0);
-    if (failed(initial) || failed(next) || !isConstant(*initial, 0) ||
-        !isUnitIncrement(*next, induction))
+    if (failed(initial) || failed(next))
+      continue;
+    FailureOr<std::pair<Value, int64_t>> increment =
+        getPositiveConstantIncrement(*next, induction);
+    if (failed(increment))
       continue;
 
     if (loopHeader)
       return failure();
     loopHeader = &candidate;
+    loopInitial = *initial;
+    loopStep = (*increment).first;
+    loopStepValue = (*increment).second;
   }
 
   if (!loopHeader)
     return failure();
   rewriter.setInsertionPoint(sync);
+  Value iteration = loopHeader->getArgument(0);
+  if (!isConstant(loopInitial, 0))
+    iteration =
+        arith::SubIOp::create(rewriter, sync.getLoc(), iteration, loopInitial)
+            .getResult();
+  if (loopStepValue != 1)
+    iteration =
+        arith::DivUIOp::create(rewriter, sync.getLoc(), iteration, loopStep)
+            .getResult();
+
   Value one = arith::ConstantIntOp::create(rewriter, sync.getLoc(), 1, 32);
-  return arith::AndIOp::create(rewriter, sync.getLoc(),
-                               loopHeader->getArgument(0), one)
+  return arith::AndIOp::create(rewriter, sync.getLoc(), iteration, one)
       .getResult();
 }
 
@@ -178,7 +203,7 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
         "MUSA TLE partition synchronization requires matching worker "
         "regions and warp counts");
 
-  bool defaultProducer = ws->hasAttr(kDefaultProducerAttr);
+  bool defaultProducer = ws->hasAttr(musa_tle::kMUSATLEDefaultProducerAttr);
   if (defaultProducer && workerRegions.size() != 1)
     return ws.emitOpError(
         "MUSA TLE default producer requires exactly one consumer worker "
@@ -196,9 +221,10 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
   SmallVector<LLVM::CallIntrinsicOp> tmeReuseSyncs;
   producerRegion.walk([&](LLVM::CallIntrinsicOp call) {
     if (call.getIntrin() != kLocalSyncIntrinsic ||
-        call->hasAttr(kExplicitCtaSyncAttr))
+        call->hasAttr(musa_tle::kMUSATLEExplicitCtaSyncAttr))
       return;
-    if (needsLmaCompletion && call->hasAttr(kPipeTMEReuseSyncAttr)) {
+    if (needsLmaCompletion &&
+        call->hasAttr(musa_tle::kMUSATLEPipeTMEReuseSyncAttr)) {
       tmeReuseSyncs.push_back(call);
       return;
     }
@@ -212,10 +238,10 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
       if (!call)
         return WalkResult::advance();
       if (call.getIntrin() != kLocalSyncIntrinsic ||
-          call->hasAttr(kExplicitCtaSyncAttr))
+          call->hasAttr(musa_tle::kMUSATLEExplicitCtaSyncAttr))
         return WalkResult::advance();
-      if (auto group =
-              call->getAttrOfType<IntegerAttr>(kConsumerEpochSyncAttr)) {
+      if (auto group = call->getAttrOfType<IntegerAttr>(
+              musa_tle::kMUSATLEConsumerEpochSyncAttr)) {
         if (group.getInt() < 0 ||
             group.getInt() > std::numeric_limits<int32_t>::max()) {
           invalidSharedGroup = true;
@@ -487,7 +513,7 @@ static LogicalResult lowerStaticWarpSpecialize(LLVM::LLVMFuncOp func,
                                                IRRewriter &rewriter) {
   auto workerRegions = ws.getPartitionRegions();
   ArrayRef<int32_t> workerWarps = ws.getPartitionNumWarps();
-  bool defaultProducer = ws->hasAttr(kDefaultProducerAttr);
+  bool defaultProducer = ws->hasAttr(musa_tle::kMUSATLEDefaultProducerAttr);
   if (ws.getNumResults() != 0 || workerRegions.empty() ||
       workerRegions.size() != workerWarps.size())
     return ws.emitOpError(
@@ -724,14 +750,14 @@ public:
     ModuleOp module = getOperation();
     auto stripInternalSyncMarkers = [&]() {
       module.walk([&](LLVM::CallIntrinsicOp call) {
-        call->removeAttr(kExplicitCtaSyncAttr);
-        call->removeAttr(kPipeTMEReuseSyncAttr);
-        call->removeAttr("musa_tle.layout_conversion_sync");
+        call->removeAttr(musa_tle::kMUSATLEExplicitCtaSyncAttr);
+        call->removeAttr(musa_tle::kMUSATLEPipeTMEReuseSyncAttr);
+        call->removeAttr(musa_tle::kMUSATLELayoutConversionSyncAttr);
       });
     };
     SmallVector<ttg::WarpSpecializeOp> marked;
     module.walk([&](ttg::WarpSpecializeOp ws) {
-      if (ws->hasAttr(kStaticWarpSpecializeAttr))
+      if (ws->hasAttr(musa_tle::kMUSATLEStaticWarpSpecializeAttr))
         marked.push_back(ws);
     });
     if (marked.empty()) {

@@ -2,6 +2,7 @@
 
 #include "Dialect/MUSATLE/IR/Dialect.h"
 #include "MUSATLE/Transforms/PipeAnalysis.h"
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #include "TritonMUSACommon/BarrierUtils.h"
 #include "TritonMUSACommon/TMEUtils.h"
 #include "TritonMUSAGPUTransforms/Passes.h"
@@ -35,13 +36,6 @@ namespace tle = triton::tle;
 namespace ttmg = triton::musa;
 namespace musa_tle = triton::musa_tle;
 
-constexpr StringLiteral kPipeLocalStoreWaitGroupsAttr =
-    "musa_tle.pipe_local_store_wait_groups";
-constexpr StringLiteral kPipeLocalStoreGroupAttr =
-    "musa_tle.pipe_local_store_group";
-constexpr StringLiteral kPipeBarrierRingAttr = "musa_tle.pipe_barrier_ring";
-constexpr StringLiteral kConsumerEpochRequiredAttr =
-    "musa_tle.consumer_epoch_rendezvous_required";
 static bool isPipeOp(Operation *op) {
   return isa<musa_tle::PipeCreateOp, musa_tle::PipeWriterAcquireOp,
              musa_tle::PipeWriterCommitOp, musa_tle::PipeWriterCloseOp,
@@ -174,7 +168,7 @@ getReaderLocalStoreGroups(const PipeLoweringArtifacts &artifacts,
 static void setLocalStoreWaitGroups(Operation *wait, OpBuilder &builder,
                                     ArrayRef<int64_t> groups) {
   if (!groups.empty())
-    wait->setAttr(kPipeLocalStoreWaitGroupsAttr,
+    wait->setAttr(musa_tle::kMUSATLEPipeLocalStoreWaitGroupsAttr,
                   builder.getDenseI64ArrayAttr(groups));
 }
 
@@ -393,7 +387,8 @@ class LowerPipePass
         for (unsigned index = 0; index < expectedConsumers; ++index)
           coversEveryConsumer &= readerPartitions.contains(index);
         if (coversEveryConsumer)
-          ws->setAttr(kConsumerEpochRequiredAttr, builder.getUnitAttr());
+          ws->setAttr(musa_tle::kMUSATLEConsumerEpochRendezvousRequiredAttr,
+                      builder.getUnitAttr());
       }
 
       auto capacity = builder.getI32IntegerAttr(plan.full.capacity);
@@ -410,7 +405,7 @@ class LowerPipePass
       } else {
         fullBase = musa_tle::BarrierAllocOp::create(
             builder, loc, capacity, fullArrivals, pending, bytes);
-        fullBase.getDefiningOp()->setAttr(kPipeBarrierRingAttr,
+        fullBase.getDefiningOp()->setAttr(musa_tle::kMUSATLEPipeBarrierRingAttr,
                                           builder.getUnitAttr());
       }
       SmallVector<Value> fullBases{fullBase};
@@ -429,8 +424,8 @@ class LowerPipePass
             builder, loc, builder.getI32IntegerAttr(segment.capacity),
             builder.getI32IntegerAttr(segment.arrivalCount), pending,
             segmentBytes);
-        segmentBase.getDefiningOp()->setAttr(kPipeBarrierRingAttr,
-                                             builder.getUnitAttr());
+        segmentBase.getDefiningOp()->setAttr(
+            musa_tle::kMUSATLEPipeBarrierRingAttr, builder.getUnitAttr());
         fullBases.push_back(segmentBase);
       }
       Value emptyBase;
@@ -439,8 +434,8 @@ class LowerPipePass
             builder, loc, builder.getI32IntegerAttr(plan.empty->capacity),
             builder.getI32IntegerAttr(plan.empty->arrivalCount), ready,
             IntegerAttr());
-        emptyBase.getDefiningOp()->setAttr(kPipeBarrierRingAttr,
-                                           builder.getUnitAttr());
+        emptyBase.getDefiningOp()->setAttr(
+            musa_tle::kMUSATLEPipeBarrierRingAttr, builder.getUnitAttr());
       }
 
       Value closeTags;
@@ -524,7 +519,7 @@ class LowerPipePass
             return create.emitOpError(
                 "local-store pipe field must have a materialized shared "
                 "allocation root");
-          root->setAttr(kPipeLocalStoreGroupAttr, groupAttr);
+          root->setAttr(musa_tle::kMUSATLEPipeLocalStoreGroupAttr, groupAttr);
         }
       }
 
@@ -682,7 +677,7 @@ class LowerPipePass
                prev = prev->getPrevNode()) {
             if (auto wait = dyn_cast<ttg::AsyncWaitOp>(prev)) {
               if (wait.getNum() == 0)
-                wait->setAttr("musa_tle.pipe_async_wait",
+                wait->setAttr(musa_tle::kMUSATLEPipeAsyncWaitAttr,
                               builder.getUnitAttr());
               break;
             }

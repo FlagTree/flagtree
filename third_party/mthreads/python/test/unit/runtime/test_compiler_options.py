@@ -82,7 +82,8 @@ def test_mthreads_user_llc_pass_manager_level_replaces_default():
     assert not any(arg in ("-O0", "-O1", "-O2", "-O3") for arg in args)
 
 
-def test_mthreads_known_llc_register_failure_is_recoverable(monkeypatch, tmp_path):
+@pytest.mark.parametrize("tool_name", ["llc", "llc-asm"])
+def test_mthreads_known_llc_register_failure_is_recoverable(monkeypatch, tmp_path, tool_name):
     from triton.backends.mthreads import compiler as musa_compiler
     from triton.runtime.errors import PTXASError
 
@@ -95,10 +96,11 @@ def test_mthreads_known_llc_register_failure_is_recoverable(monkeypatch, tmp_pat
 
     monkeypatch.setattr(musa_compiler.subprocess, "run", lambda *args, **kwargs: FailedProcess())
     with pytest.raises(PTXASError, match="MTGPU register allocation"):
-        musa_compiler._run_tool_command("llc", ["llc", "kernel.ll", "-O2"], repro_dir=tmp_path)
+        musa_compiler._run_tool_command(tool_name, [tool_name, "kernel.ll", "-O2"], repro_dir=tmp_path)
 
 
-def test_mthreads_unknown_llc_failure_is_not_swallowed(monkeypatch, tmp_path):
+@pytest.mark.parametrize("tool_name", ["llc", "llc-asm"])
+def test_mthreads_unknown_llc_failure_is_not_swallowed(monkeypatch, tmp_path, tool_name):
     from triton.backends.mthreads import compiler as musa_compiler
 
     class FailedProcess:
@@ -107,8 +109,8 @@ def test_mthreads_unknown_llc_failure_is_not_swallowed(monkeypatch, tmp_path):
         stderr = "LLVM ERROR: unexpected backend failure"
 
     monkeypatch.setattr(musa_compiler.subprocess, "run", lambda *args, **kwargs: FailedProcess())
-    with pytest.raises(RuntimeError, match="`llc` failed with error code 134"):
-        musa_compiler._run_tool_command("llc", ["llc", "kernel.ll", "-O2"], repro_dir=tmp_path)
+    with pytest.raises(RuntimeError, match=rf"`{tool_name}` failed with error code 134"):
+        musa_compiler._run_tool_command(tool_name, [tool_name, "kernel.ll", "-O2"], repro_dir=tmp_path)
 
 
 def test_mthreads_post_ra_register_crash_is_recoverable(monkeypatch, tmp_path):
@@ -126,24 +128,28 @@ def test_mthreads_post_ra_register_crash_is_recoverable(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("arch", "expected"),
+    ("arch", "expected_capability", "expected_arch"),
     [
-        ("ph1", 31),
-        ("ph1s", 32),
-        ("mp31", 31),
-        ("mp_31", 31),
-        ("mp32", 32),
-        ("mp_32", 32),
+        ("ph1", 31, "31"),
+        ("ph1s", 32, "32"),
+        ("mp31", 31, "31"),
+        ("mp_31", 31, "31"),
+        ("mp32", 32, "32"),
+        ("mp_32", 32, "32"),
     ],
 )
-def test_mthreads_arch_alias_capability(arch, expected):
-    from triton.backends.mthreads._musa_arch import musa_capability_from_arch
+def test_mthreads_arch_alias_capability(arch, expected_capability, expected_arch):
+    from triton.backends.mthreads._musa_arch import musa_capability_from_arch, normalize_musa_arch
     from triton.backends.mthreads.compiler import _capability_from_arch
     from triton.backends.mthreads.driver import _arch_to_musa_capability
 
-    assert musa_capability_from_arch(arch) == expected
-    assert _capability_from_arch(arch) == expected
-    assert _arch_to_musa_capability(arch) == expected
+    assert normalize_musa_arch(arch) == expected_arch
+    assert musa_capability_from_arch(arch) == expected_capability
+    assert _capability_from_arch(arch) == expected_capability
+    assert _arch_to_musa_capability(arch) == expected_capability
+
+    backend = _get_mthreads_backend()
+    assert backend.parse_options({"arch": arch}).arch == expected_arch
 
 
 def test_mthreads_rejects_unavailable_future_architecture():
@@ -163,13 +169,21 @@ def test_mthreads_can_disable_sqmma_m_split_preference():
     assert disabled.hash() != enabled.hash()
 
 
-def test_mthreads_k128_sqmma_opt_in_is_part_of_options_and_cache_key(monkeypatch, ):
+def test_mthreads_k128_sqmma_environment_is_part_of_cache_key(monkeypatch):
     backend = _get_mthreads_backend()
     monkeypatch.delenv("TRITON_MUSA_ENABLE_K128_SQMMA", raising=False)
-    disabled = backend.parse_options({})
+    disabled_hash = backend.parse_options({}).hash()
+    monkeypatch.setenv("TRITON_MUSA_ENABLE_K128_SQMMA", "10")
+    invalid_hash = backend.parse_options({}).hash()
     monkeypatch.setenv("TRITON_MUSA_ENABLE_K128_SQMMA", "1")
-    enabled = backend.parse_options({})
+    enabled_hash = backend.parse_options({}).hash()
 
-    assert disabled.k128_sqmma_opt_in == ""
-    assert enabled.k128_sqmma_opt_in == "1"
-    assert enabled.hash() != disabled.hash()
+    assert invalid_hash == disabled_hash
+    assert enabled_hash != disabled_hash
+
+
+def test_mthreads_rejects_ineffective_per_kernel_k128_option():
+    backend = _get_mthreads_backend()
+
+    with pytest.raises(ValueError, match="not a per-kernel MThreads option"):
+        backend.parse_options({"k128_sqmma_opt_in": "1"})

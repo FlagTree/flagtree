@@ -11,6 +11,7 @@
 #include "mlir/Support/LLVM.h"
 #ifdef __TLE__
 #include "Dialect/MUSATLE/IR/Dialect.h"
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #endif
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -20,9 +21,6 @@ using namespace mlir;
 using namespace mlir::triton::gpu;
 
 #ifdef __TLE__
-static constexpr llvm::StringLiteral kPartitionMaterializationAttr =
-    "musa_tle.partition_materialization";
-
 static bool hasExplicitValueEncoding(Value value) {
   if (getTleExplicitValueEncoding(value))
     return true;
@@ -31,7 +29,8 @@ static bool hasExplicitValueEncoding(Value value) {
     return false;
   auto convert =
       dyn_cast_or_null<triton::gpu::ConvertLayoutOp>(result.getOwner());
-  return convert && !convert->hasAttr(kPartitionMaterializationAttr);
+  return convert && !convert->hasAttr(
+                        triton::musa_tle::kMUSATLEPartitionMaterializationAttr);
 }
 #endif
 
@@ -130,7 +129,8 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
     // This marker distinguishes dialect-conversion plumbing from an explicit
     // user-authored convert_layout.  Partition-aware cleanup must never erase
     // or retarget an explicit layout conversion.
-    cast->setAttr(kPartitionMaterializationAttr, builder.getUnitAttr());
+    cast->setAttr(triton::musa_tle::kMUSATLEPartitionMaterializationAttr,
+                  builder.getUnitAttr());
 #endif
     return cast.getResult();
   });

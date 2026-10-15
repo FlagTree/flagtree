@@ -33,11 +33,10 @@ TENSOR_DESCRIPTOR_STRIDE_ALIGNMENT_VERSION = 1
 class TensorDescriptor:
     """Host-side tensor descriptor.
 
-    Descriptor strides remain 16-byte aligned by default.  Backends with a
-    verified looser contract may explicitly request a power-of-two alignment
-    of at least four bytes; the caller is responsible for selecting an
-    alignment supported by the target.  Four-byte alignment is validated by
-    the MThreads backend.
+    Descriptor strides remain 16-byte aligned by default.  Callers may relax
+    the host-side validation to a power-of-two alignment of at least four
+    bytes when the target supports it.  This field controls validation only;
+    it does not change a backend's descriptor encoding or hardware contract.
     """
     base: Any
     shape: List[int]

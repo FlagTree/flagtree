@@ -2,6 +2,7 @@
 
 #include "Dialect/MUSA/IR/Dialect.h"
 #include "Dialect/MUSATLE/IR/Dialect.h"
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #include "TritonMUSACommon/MMAContractUtils.h"
 #include "TritonMUSACommon/MMAOperandUtils.h"
 #include "TritonMUSACommon/SqmmaAttrUtils.h"
@@ -33,7 +34,6 @@ namespace {
 
 constexpr llvm::StringLiteral
     kAutoSharedLayoutAttr("musa_tle.auto_shared_layout");
-constexpr llvm::StringLiteral kExplicitSqmmaAttr("musa_tle.explicit_sqmma");
 constexpr llvm::StringLiteral kEnableEncodingRematerializationAttr(
     "tle.enable_encoding_rematerialization");
 constexpr llvm::StringLiteral
@@ -954,7 +954,8 @@ struct TritonMUSAGPUTLELowerSqmmaPass
             inferLayout(cast<ttg::MemDescType>(dot.getB().getType())), true,
             musa::SQMMAAccumulationMode::hardware,
             static_cast<int32_t>(dot.getInputPrecision()), 0);
-        nativeDot->setAttr(kExplicitSqmmaAttr, builder.getUnitAttr());
+        nativeDot->setAttr(musa_tle::kMUSATLEExplicitSqmmaAttr,
+                           builder.getUnitAttr());
         nativeAccumulators[dot.getD()] = nativeDot.getD();
 
         // A direct loop-carried dot has no source wait. Redirect its yield to
@@ -1005,18 +1006,25 @@ struct TritonMUSAGPUTLELowerSqmmaPass
       // without dependencies.
       auto nativeWait =
           musa::SquadDotWaitOp::create(builder, wait.getLoc(), nativeInputs);
-      nativeWait->setAttr(kExplicitSqmmaAttr, builder.getUnitAttr());
+      nativeWait->setAttr(musa_tle::kMUSATLEExplicitSqmmaAttr,
+                          builder.getUnitAttr());
       for (auto [nativeResult, adjacentWait] :
            llvm::zip_equal(nativeWait.getOutputs(), adjacentWaits)) {
-        Value released;
-        if (synchronousIfResults.contains(adjacentWait.getInput())) {
-          released = nativeResult;
-        } else {
+        Value released = nativeResult;
+        // Loop-carried SQMMA chains keep their accumulator in the native MMA
+        // layout across iterations.  A source wait after such a loop still
+        // promises its original result type to ordinary tensor consumers
+        // (for example tt.store).  Do not leak the native accumulator type
+        // merely because the loop result is already known to be synchronous.
+        if (nativeResult.getType() != adjacentWait.getOutput().getType()) {
           released = ttg::ConvertLayoutOp::create(
               builder, adjacentWait.getLoc(),
               adjacentWait.getOutput().getType(), nativeResult);
-          nativeAccumulators[released] = nativeResult;
         }
+        // Preserve the native form as well.  A later SQMMA or another explicit
+        // global wait may consume the released source value without forcing a
+        // spurious round trip through its blocked layout.
+        nativeAccumulators[released] = nativeResult;
         if (Attribute explicitEncoding =
                 getTleExplicitValueEncoding(adjacentWait.getOutput())) {
           auto releasedResult = dyn_cast<OpResult>(released);

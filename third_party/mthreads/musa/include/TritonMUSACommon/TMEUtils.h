@@ -40,8 +40,6 @@ inline constexpr llvm::StringLiteral kTLECompletionGroupAttr =
     "musa_tle.completion_group";
 inline constexpr llvm::StringLiteral kTLEPipeDeferredArrivalAttr =
     "musa_tle.pipe_deferred_arrival";
-inline constexpr llvm::StringLiteral kTLEPipePayloadCopyAttr =
-    "musa_tle.pipe_payload_copy";
 inline constexpr llvm::StringLiteral kTLEPipeReaderTMEStoreAttr =
     "musa_tle.pipe_reader_tme_store";
 #endif // __TLE__

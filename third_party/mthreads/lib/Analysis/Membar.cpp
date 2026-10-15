@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -277,19 +278,15 @@ Operation *MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 }
 
 #ifdef __TLE__
-static constexpr StringLiteral kPipePayloadCopyAttr =
-    "musa_tle.pipe_payload_copy";
 static constexpr StringLiteral kPipeTMEReuseCandidateAttr =
     "musa_tle.pipe_tme_reuse_candidate";
 static constexpr StringLiteral kPipeTMEReuseDisqualifiedAttr =
     "musa_tle.pipe_tme_reuse_disqualified";
-static constexpr StringLiteral kPipeTMEReuseSyncAttr =
-    "musa_tle.pipe_tme_reuse_sync";
 
 static bool syncPipeLocalStoreGroups(Operation *wait, BlockInfo *blockInfo,
                                      Allocation *allocation) {
   auto waitGroups = wait->getAttrOfType<DenseI64ArrayAttr>(
-      "musa_tle.pipe_local_store_wait_groups");
+      triton::musa_tle::kMUSATLEPipeLocalStoreWaitGroupsAttr);
   if (!waitGroups || waitGroups.empty())
     return false;
 
@@ -318,8 +315,8 @@ static bool syncPipeLocalStoreGroups(Operation *wait, BlockInfo *blockInfo,
 
   bool matchedAllocation = false;
   function->walk([&](triton::gpu::LocalAllocOp alloc) {
-    auto group =
-        alloc->getAttrOfType<IntegerAttr>("musa_tle.pipe_local_store_group");
+    auto group = alloc->getAttrOfType<IntegerAttr>(
+        triton::musa_tle::kMUSATLEPipeLocalStoreGroupAttr);
     if (!group || !selectedGroups.contains(group.getInt()))
       return;
     for (Value result : alloc->getResults()) {
@@ -344,31 +341,33 @@ static bool hasOnlyPipeTMEReuseHazard(Operation *op, const BlockInfo &previous,
                                       const BlockInfo &current,
                                       MembarFilterFn filter,
                                       Allocation *allocation) {
-  if (!op->hasAttr(kPipePayloadCopyAttr))
+  if (!op->hasAttr(triton::musa_tle::kMUSATLEPipePayloadCopyAttr))
     return false;
 
-  auto hasActiveIntersection = [&](const BlockInfo::SliceMapT &lhs,
-                                   const BlockInfo::SliceMapT &rhs,
-                                   bool requirePipeCopies,
-                                   bool &sawIntersection) {
-    for (const auto &[lhsSlice, lhsOps] : lhs) {
-      for (const auto &[rhsSlice, rhsOps] : rhs) {
-        if (!lhsSlice.intersects(rhsSlice))
-          continue;
-        for (Operation *lhsOp : lhsOps) {
-          for (Operation *rhsOp : rhsOps) {
-            if (filter && filter(lhsOp, rhsOp, allocation))
+  auto hasActiveIntersection =
+      [&](const BlockInfo::SliceMapT &lhs, const BlockInfo::SliceMapT &rhs,
+          bool requirePipeCopies, bool &sawIntersection) {
+        for (const auto &[lhsSlice, lhsOps] : lhs) {
+          for (const auto &[rhsSlice, rhsOps] : rhs) {
+            if (!lhsSlice.intersects(rhsSlice))
               continue;
-            sawIntersection = true;
-            if (requirePipeCopies && (!lhsOp->hasAttr(kPipePayloadCopyAttr) ||
-                                      !rhsOp->hasAttr(kPipePayloadCopyAttr)))
-              return false;
+            for (Operation *lhsOp : lhsOps) {
+              for (Operation *rhsOp : rhsOps) {
+                if (filter && filter(lhsOp, rhsOp, allocation))
+                  continue;
+                sawIntersection = true;
+                if (requirePipeCopies &&
+                    (!lhsOp->hasAttr(
+                         triton::musa_tle::kMUSATLEPipePayloadCopyAttr) ||
+                     !rhsOp->hasAttr(
+                         triton::musa_tle::kMUSATLEPipePayloadCopyAttr)))
+                  return false;
+              }
+            }
           }
         }
-      }
-    }
-    return true;
-  };
+        return true;
+      };
 
   bool sawReadHazard = false;
   if (!hasActiveIntersection(previous.syncWriteSlices, current.syncReadSlices,
@@ -428,7 +427,7 @@ void MembarAnalysis::finalize(FunctionOpInterface funcOp) {
     barrier->removeAttr(kPipeTMEReuseCandidateAttr);
     barrier->removeAttr(kPipeTMEReuseDisqualifiedAttr);
     if (!disqualified)
-      barrier->setAttr(kPipeTMEReuseSyncAttr,
+      barrier->setAttr(triton::musa_tle::kMUSATLEPipeTMEReuseSyncAttr,
                        UnitAttr::get(funcOp.getContext()));
   });
 #endif
@@ -460,7 +459,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
       Operation *target = op->getNextNode();
       BlockInfo effects;
       bool stillPipeOnly = false;
-      if (target && target->hasAttr(kPipePayloadCopyAttr)) {
+      if (target &&
+          target->hasAttr(triton::musa_tle::kMUSATLEPipePayloadCopyAttr)) {
         effects = getExplicitMemoryEffects(target, allocation);
         stillPipeOnly = hasOnlyPipeTMEReuseHazard(target, *blockInfo, effects,
                                                   filter, allocation);
@@ -480,7 +480,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // before the writer's warp arrivals. The full/empty protocol supplies the
   // cross-warp edge; this thread-local wait must not clear other hazards.
   if (isa<triton::gpu::AsyncWaitOp>(op) &&
-      op->hasAttr("musa_tle.pipe_async_wait"))
+      op->hasAttr(triton::musa_tle::kMUSATLEPipeAsyncWaitAttr))
     return;
   if (syncPipeLocalStoreGroups(op, blockInfo, allocation)) {
     // The pipe hardware wait is the acquire edge for this local-store

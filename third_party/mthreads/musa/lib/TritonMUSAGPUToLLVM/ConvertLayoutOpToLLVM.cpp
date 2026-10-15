@@ -1,3 +1,4 @@
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonMUSACommon/ConvertLayoutUtils.h"
 #include "TritonMUSAGPUToLLVM/Allocation.h"
@@ -19,14 +20,11 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-static constexpr llvm::StringLiteral kLayoutConversionSyncAttr =
-    "musa_tle.layout_conversion_sync";
-
 static void emitLayoutConversionBarrier(Location loc,
                                         ConversionPatternRewriter &rewriter) {
   auto sync = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, "llvm.musa.syncthreads.lm", TypeRange{}, {});
-  sync->setAttr(kLayoutConversionSyncAttr,
+  sync->setAttr(musa_tle::kMUSATLELayoutConversionSyncAttr,
                 UnitAttr::get(rewriter.getContext()));
 }
 

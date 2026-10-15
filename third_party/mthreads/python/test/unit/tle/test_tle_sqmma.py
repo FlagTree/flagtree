@@ -308,6 +308,30 @@ def _tle_sqmma_loop_wait_chain_kernel(out, k_tiles: tl.constexpr):
 
 
 @triton.jit
+def _tle_sqmma_loop_post_wait_kernel(out, k_tiles: tl.constexpr):
+    """Keep the source result type when a completed loop is waited again."""
+    a = tle.gpu.alloc(
+        (128, 64),
+        dtype=tl.float16,
+        layout=None,
+        nv_mma_shared_layout=True,
+    )
+    b = tle.gpu.alloc(
+        (64, 128),
+        dtype=tl.float16,
+        layout=None,
+        nv_mma_shared_layout=True,
+    )
+    acc = tl.zeros((128, 128), dtype=tl.float32)
+    for _ in range(0, k_tiles):
+        acc = tle.gpu.wgmma(a, b, acc)
+        acc = tle.gpu.wgmma_wait(0, acc)
+    acc = tle.gpu.wgmma_wait(0, acc)
+    offsets = tl.arange(0, 128)[:, None] * 128 + tl.arange(0, 128)[None, :]
+    tl.store(out + offsets, acc)
+
+
+@triton.jit
 def _tle_sqmma_loop_carrier_runtime_kernel(
     a_desc,
     b_desc,
@@ -1021,6 +1045,19 @@ def test_mthreads_tle_sqmma_keeps_wait_inside_loop_chain():
     assert ttgir.count("ttg.convert_layout") == 0, ttgir
 
 
+def test_mthreads_tle_sqmma_lowers_wait_after_completed_loop():
+    compiled = compile_musa(
+        _tle_sqmma_loop_post_wait_kernel,
+        {"out": "*fp32", "k_tiles": "constexpr"},
+        {"k_tiles": 2},
+    )
+    ttgir = compiled.asm["ttgir"]
+    llir = compiled.asm["llir"]
+    assert "tt.store" in ttgir, ttgir
+    assert "mtgpu.sqmma_accumulator" in ttgir, ttgir
+    assert llir.count("call void @llvm.musa.sqmma.wait()") >= 2, llir
+
+
 def _convert_sqmma_carrier_fixture(path):
     _, backend = mthreads_backend()
     context = ir.context()
@@ -1636,6 +1673,32 @@ def _sqmma_partition_dot_kernel(a, b, out, N: tl.constexpr, MODE: tl.constexpr):
                                  (_sqmma_partition_idle_role, ())], [4, 4], [240, 168])
     else:
         _sqmma_partition_dot_role(a, b, out, N)
+
+
+def test_mthreads_arch_alias_is_canonical_before_sqmma_lowering(monkeypatch):
+    monkeypatch.delenv("TRITON_OVERRIDE_ARCH", raising=False)
+    monkeypatch.setenv("TRITON_MUSA_ARCH", "mp_31")
+    monkeypatch.setattr(triton.knobs.compilation, "always_compile", True)
+    _sqmma_partition_dot_kernel.device_caches.clear()
+
+    compiled = compile_musa(
+        _sqmma_partition_dot_kernel,
+        {
+            "a": "*fp16",
+            "b": "*fp16",
+            "out": "*fp32",
+            "N": "constexpr",
+            "MODE": "constexpr",
+        },
+        {"N": 1, "MODE": 3},
+        options={"num_warps": 4, "num_stages": 1},
+    )
+    ttgir = compiled.asm["ttgir"]
+    llir = compiled.asm["llir"]
+    # The raw alias used to reach the C++ pass, miss capability detection,
+    # and leave this otherwise eligible dot on the scalar FMA fallback.
+    assert 'ttg.target = "musa:31"' in ttgir, ttgir
+    assert "llvm.musa.sqmma.fmma." in llir, llir
 
 
 def _run_sqmma_partition_dot(mode, dtype_name, stages):

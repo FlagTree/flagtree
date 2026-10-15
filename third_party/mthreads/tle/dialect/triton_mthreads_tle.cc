@@ -1,6 +1,7 @@
 #ifdef __TLE__
 
 #include "Dialect/MUSATLE/IR/Dialect.h"
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #include "TritonMUSACommon/MMAContractUtils.h"
 #include "TritonMUSACommon/MMAEncodingUtils.h"
 #include "TritonMUSAGPUTransforms/Passes.h"
@@ -535,8 +536,9 @@ void init_triton_musa_tle_ir(py::module m) {
              // Keep an explicit frontend barrier distinguishable until late
              // static warp specialization decides which barriers remain
              // CTA-wide.
-             barrier->setAttr("musa_tle.explicit_cta_sync",
-                              self.getBuilder().getUnitAttr());
+             barrier->setAttr(
+                 mlir::triton::musa_tle::kMUSATLEExplicitCtaSyncAttr,
+                 self.getBuilder().getUnitAttr());
            })
       .def("ensure_ttg_layout_attrs",
            [](TritonOpBuilder &self, int numWarps, int threadsPerWarp,
@@ -1013,10 +1015,12 @@ void init_triton_musa_tle_ir(py::module m) {
             auto &builder = self.getBuilder();
             auto op = self.create<ttg::WarpSpecializeOp>(resultTypes,
                                                          partitionNumWarps);
-            op->setAttr("musa_tle.static_warp_specialize",
-                        builder.getUnitAttr());
+            op->setAttr(
+                mlir::triton::musa_tle::kMUSATLEStaticWarpSpecializeAttr,
+                builder.getUnitAttr());
             if (defaultIsProducer)
-              op->setAttr("musa_tle.default_producer", builder.getUnitAttr());
+              op->setAttr(mlir::triton::musa_tle::kMUSATLEDefaultProducerAttr,
+                          builder.getUnitAttr());
             return TLEWarpSpecializeOp(op);
           },
           py::arg("result_types"), py::arg("partition_num_warps"),

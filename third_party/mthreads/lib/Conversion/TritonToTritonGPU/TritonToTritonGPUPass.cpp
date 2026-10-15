@@ -6,6 +6,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #ifdef __TLE__
 #include "Dialect/MUSATLE/IR/Dialect.h"
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/PriorityWorklist.h"
@@ -1344,9 +1345,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
 // SCF patterns
 //
 #ifdef __TLE__
-static constexpr llvm::StringLiteral kPartitionMaterializationAttr =
-    "musa_tle.partition_materialization";
-
 static Value unwrapInvalidPartitionMaterialization(
     Value value, Operation *context,
     SmallVectorImpl<triton::gpu::ConvertLayoutOp> &deadMaterializations) {
@@ -1354,7 +1352,8 @@ static Value unwrapInvalidPartitionMaterialization(
   // Only dialect-conversion-created bridge casts are eligible.  Explicit
   // convert_layout operations are part of the program and must be preserved.
   if (!materialization ||
-      !materialization->hasAttr(kPartitionMaterializationAttr))
+      !materialization->hasAttr(
+          triton::musa_tle::kMUSATLEPartitionMaterializationAttr))
     return value;
   auto srcType = dyn_cast<RankedTensorType>(materialization.getSrc().getType());
   auto dstType = dyn_cast<RankedTensorType>(materialization.getType());

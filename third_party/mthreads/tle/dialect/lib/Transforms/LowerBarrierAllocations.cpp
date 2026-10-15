@@ -2,6 +2,7 @@
 
 #include "Dialect/MUSA/IR/Dialect.h"
 #include "Dialect/MUSATLE/IR/Dialect.h"
+#include "MUSATLE/Transforms/TransformAttrs.h"
 #include "TritonMUSACommon/BarrierUtils.h"
 #include "TritonMUSACommon/TMEUtils.h"
 #include "TritonMUSAGPUTransforms/Passes.h"
@@ -35,9 +36,6 @@ static constexpr StringLiteral kExhaustedDiagnostic =
     "mthreads TLE barrier allocation exhausted hardware barrier ids";
 static constexpr StringLiteral kPipeExhaustedDiagnostic =
     "MUSA TLE pipe barrier allocation exceeds hardware barrier id limit";
-static constexpr StringLiteral kPipeBarrierRingAttr =
-    "musa_tle.pipe_barrier_ring";
-
 class LowerBarrierAllocationsPass
     : public impl::TritonMUSAGPUTLELowerBarrierAllocationsBase<
           LowerBarrierAllocationsPass> {
@@ -111,7 +109,7 @@ class LowerBarrierAllocationsPass
 
     BarrierAllocOp pipeAlloc;
     for (BarrierAllocOp alloc : allocs) {
-      if (alloc->hasAttr(kPipeBarrierRingAttr)) {
+      if (alloc->hasAttr(triton::musa_tle::kMUSATLEPipeBarrierRingAttr)) {
         pipeAlloc = alloc;
         break;
       }
@@ -170,7 +168,7 @@ class LowerBarrierAllocationsPass
       }
 
       rewriter.replaceAllUsesWith(alloc.getBaseId(), base);
-      alloc->removeAttr(kPipeBarrierRingAttr);
+      alloc->removeAttr(triton::musa_tle::kMUSATLEPipeBarrierRingAttr);
       rewriter.eraseOp(alloc);
       nextBase += alloc.getNumBarriers();
     }

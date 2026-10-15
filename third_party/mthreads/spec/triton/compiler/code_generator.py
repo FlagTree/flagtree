@@ -1169,37 +1169,11 @@ class CodeGenerator(ast.NodeVisitor):
         if IteratorClass == language.static_range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             static_range = range(iterator.start.value, iterator.end.value, iterator.step.value)
-            target_name = node.target.id
-            saved_lscope = dict(self.lscope)
-            saved_local_defs = dict(self.local_defs)
-            had_binding = target_name in self.lscope
-            saved_binding = self.lscope.get(target_name)
-            had_local_def = target_name in self.local_defs
-            saved_local_def = self.local_defs.get(target_name)
             for i in static_range:
-                self.lscope[target_name] = constexpr(i)
+                self.lscope[node.target.id] = constexpr(i)
                 self.visit_compound_statement(node.body)
                 for stmt in node.orelse:
                     ast.NodeVisitor.generic_visit(self, stmt)
-            # A static expansion has lexical scope. Restore outer constexpr
-            # bindings modified by its body and do not leak the induction
-            # variable into a later dynamic loop that reuses the same name.
-            for name, saved_value in saved_lscope.items():
-                if _is_constexpr(saved_value) and not _is_constexpr(self.lscope.get(name)):
-                    self.lscope[name] = saved_value
-                if _is_constexpr(saved_value):
-                    if name in saved_local_defs:
-                        self.local_defs[name] = saved_local_defs[name]
-                    else:
-                        self.local_defs.pop(name, None)
-            if had_binding:
-                self.lscope[target_name] = saved_binding
-            else:
-                self.lscope.pop(target_name, None)
-            if had_local_def:
-                self.local_defs[target_name] = saved_local_def
-            else:
-                self.local_defs.pop(target_name, None)
             return
         num_stages = None
         loop_unroll_factor = None
