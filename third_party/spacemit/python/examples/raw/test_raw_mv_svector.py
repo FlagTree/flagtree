@@ -135,7 +135,8 @@ def mv_block_style3(B: srv.mem(f16), A: srv.mem(f16), C: srv.mem(f32, out=True),
             acc1 = srv.vmacc(acc1, vb1, va)
             acc2 = srv.vmacc(acc2, vb2, va)
             acc3 = srv.vmacc(acc3, vb3, va)
-        for ki in srv.range(Kfloor, K, nvl):  # tail loop: runs 0/1 times, narrowed → fill-0 (distinct temporaries tb*/ta)
+        for ki in srv.range(Kfloor, K,
+                            nvl):  # tail loop: runs 0/1 times, narrowed → fill-0 (distinct temporaries tb*/ta)
             nvl = srv.vconfig(K - ki, 1)
             tb0 = srv.vload(packed_B, (0, ki // nvl, 0, 0))
             tb1 = srv.vload(packed_B, (0, ki // nvl, 1, 0))

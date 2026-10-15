@@ -72,12 +72,16 @@ vstore = _SmtRvisaBuiltin(
 alloc = _SmtRvisaBuiltin("alloc")  # alloc(shape_tuple, dtype) → memref.alloc
 pack = _SmtRvisaBuiltin("pack")  # pack(src, src_idx, dst, dst_shape) → pack rows (style3)
 vpack = _SmtRvisaBuiltin(
-    "vpack")  # vpack(v, group_len) → vector_ext.group_interleave → many smt.vpack.vv (cube interleave, vector<b×N>→<(b/2)×2N>)
-vmadot = _SmtRvisaBuiltin("vmadot")  # vmadot(acc, x, y) → vector_ext.cross_batch_matmul → many smt.vfwmadot (batched cube matmul)
+    "vpack"
+)  # vpack(v, group_len) → vector_ext.group_interleave → many smt.vpack.vv (cube interleave, vector<b×N>→<(b/2)×2N>)
+vmadot = _SmtRvisaBuiltin(
+    "vmadot")  # vmadot(acc, x, y) → vector_ext.cross_batch_matmul → many smt.vfwmadot (batched cube matmul)
 vshape = _SmtRvisaBuiltin("vshape")  # vshape(v, shape) → vector.shape_cast (same-numel reshape)
-vbroadcast = _SmtRvisaBuiltin("vbroadcast")  # vbroadcast(v, n) → vector.broadcast: vector<64> → vector<n×64> (broadcast dim)
+vbroadcast = _SmtRvisaBuiltin(
+    "vbroadcast")  # vbroadcast(v, n) → vector.broadcast: vector<64> → vector<n×64> (broadcast dim)
 spread = _SmtRvisaBuiltin(
-    "spread")  # spread(src, cube_shape=(kc,n,k)) → scf.for scalar-broadcast pack → memref<kc×(n*k)> (broadcasts A's n dim, bypassing vscale)
+    "spread"
+)  # spread(src, cube_shape=(kc,n,k)) → scf.for scalar-broadcast pack → memref<kc×(n*k)> (broadcasts A's n dim, bypassing vscale)
 imin = _SmtRvisaBuiltin("imin")  # imin(a, b) → arith.minsi on index(valid_rows = imin(MB, M-row_base))
 # §6.4 element-wise named functions (arithmetic operators use Python operators directly, no marker needed)
 vmin = _SmtRvisaBuiltin("vmin")  # vmin(a, b) → element-wise min → arith.minimumf / minsi

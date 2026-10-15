@@ -5,8 +5,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "triton-shared/Conversion/TLEToLinalg/TLEToLinalg.h"
 #include "tle/dialect/include/IR/Dialect.h"
+#include "triton-shared/Conversion/TLEToLinalg/TLEToLinalg.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"

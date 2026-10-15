@@ -298,56 +298,57 @@ void init_triton_xsmt_ir(py::module &&m) {
 void init_triton_spacemit_tle_ir(py::module &&m) {
   auto *builder_cls = ir::getBuilderClass();
   builder_cls->def(
-          "create_tle_dsl_region_direct",
-          [](TritonOpBuilder &self, const std::string &fn_name,
-             std::vector<Value> &inputs, std::vector<Type> &paramTypes,
-             py::function bodyBuilder) {
-            // codegen.py builds the raw fn body straight into dsl_region's
-            // region via bodyBuilder, using the same builder instance — no
-            // parseSourceString, no raw_linalg string.
-            auto &builder = self.getBuilder();
-            auto fnAttr = builder.getStringAttr(fn_name);
-            SmallVector<Value> operands(inputs.begin(), inputs.end());
-            // Generic third_party/tle DSLRegionOp: region_dialect/arg_dialect/
-            // output_operand_indices are required builder operands, but only
-            // that dialect's own consumers read them — emit the
-            // self-consistent no-output configuration. fn_name travels as a
-            // free extra attribute (the op has no assemblyFormat, so its
-            // generic printer round-trips the full attr dict); it is what
-            // TLEToLinalg.cpp's DSLRegionOpPattern reads back.
-            auto op = self.create<tle::DSLRegionOp>(
-                mlir::TypeRange{}, operands, "linalg", "memref",
-                llvm::ArrayRef<int32_t>{}, mlir::StringAttr());
-            op->setAttr("fn_name", fnAttr);
+      "create_tle_dsl_region_direct",
+      [](TritonOpBuilder &self, const std::string &fn_name,
+         std::vector<Value> &inputs, std::vector<Type> &paramTypes,
+         py::function bodyBuilder) {
+        // codegen.py builds the raw fn body straight into dsl_region's
+        // region via bodyBuilder, using the same builder instance — no
+        // parseSourceString, no raw_linalg string.
+        auto &builder = self.getBuilder();
+        auto fnAttr = builder.getStringAttr(fn_name);
+        SmallVector<Value> operands(inputs.begin(), inputs.end());
+        // Generic third_party/tle DSLRegionOp: region_dialect/arg_dialect/
+        // output_operand_indices are required builder operands, but only
+        // that dialect's own consumers read them — emit the
+        // self-consistent no-output configuration. fn_name travels as a
+        // free extra attribute (the op has no assemblyFormat, so its
+        // generic printer round-trips the full attr dict); it is what
+        // TLEToLinalg.cpp's DSLRegionOpPattern reads back.
+        auto op = self.create<tle::DSLRegionOp>(
+            mlir::TypeRange{}, operands, "linalg", "memref",
+            llvm::ArrayRef<int32_t>{}, mlir::StringAttr());
+        op->setAttr("fn_name", fnAttr);
 
-            mlir::Region &body = op.getBody();
-            mlir::Block *block = new mlir::Block();
-            body.push_back(block);
-            for (mlir::Type paramTy : paramTypes)
-              block->addArgument(paramTy, op.getLoc());
+        mlir::Region &body = op.getBody();
+        mlir::Block *block = new mlir::Block();
+        body.push_back(block);
+        for (mlir::Type paramTy : paramTypes)
+          block->addArgument(paramTy, op.getLoc());
 
-            mlir::OpBuilder::InsertionGuard guard(builder);
-            self.setInsertionPointToStart(*block);
-            std::vector<Value> blockArgs(block->getArguments().begin(),
-                                         block->getArguments().end());
-            bodyBuilder(std::ref(self), blockArgs);
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        self.setInsertionPointToStart(*block);
+        std::vector<Value> blockArgs(block->getArguments().begin(),
+                                     block->getArguments().end());
+        bodyBuilder(std::ref(self), blockArgs);
 
-            // bodyBuilder emits the raw fn's ops but not the terminator
-            // (there's no func.return here to translate) — always close with
-            // spine_ext.return; the TLEToLinalg pattern expects that
-            // terminator.
-            mlir::OperationState retState(op.getLoc(), "spine_ext.return");
-            builder.create(retState);
-          },
-          py::arg("fn_name"), py::arg("inputs"), py::arg("param_types"),
-          py::arg("body_builder"),
-          "Create tle.dsl_region by invoking body_builder(builder, block_args) "
-          "directly — no MLIR text parse round trip");
+        // bodyBuilder emits the raw fn's ops but not the terminator
+        // (there's no func.return here to translate) — always close with
+        // spine_ext.return; the TLEToLinalg pattern expects that
+        // terminator.
+        mlir::OperationState retState(op.getLoc(), "spine_ext.return");
+        builder.create(retState);
+      },
+      py::arg("fn_name"), py::arg("inputs"), py::arg("param_types"),
+      py::arg("body_builder"),
+      "Create tle.dsl_region by invoking body_builder(builder, block_args) "
+      "directly — no MLIR text parse round trip");
 }
 
 // ============================================================================
 // Spine Raw IR Builder Bindings
-// Provides the standard MLIR builder API for smt_rvisa codegen, replacing string concatenation
+// Provides the standard MLIR builder API for smt_rvisa codegen, replacing
+// string concatenation
 // ============================================================================
 
 // Helper: parse MLIR type string
@@ -823,8 +824,8 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
       .def(
           "create_vector_splat",
           [](TritonOpBuilder &self, Value input, Type vectorType) -> Value {
-            // splat = broadcast a scalar to all lanes (SplatOp is deprecated; use
-            // BroadcastOp)
+            // splat = broadcast a scalar to all lanes (SplatOp is deprecated;
+            // use BroadcastOp)
             return self.create<vector::BroadcastOp>(vectorType, input)
                 .getResult();
           },
@@ -1031,7 +1032,8 @@ void init_triton_smt_rvisa_ir(py::module &&m) {
              std::vector<Value> offsets, std::vector<Value> sizes,
              std::vector<Value> strides) -> Value {
             // ReinterpretCastOp needs OpFoldResult (Value or static int).
-            // When all-dynamic, the static arrays use ShapedType::kDynamic placeholders.
+            // When all-dynamic, the static arrays use ShapedType::kDynamic
+            // placeholders.
             auto toOFR = [](const std::vector<Value> &vals)
                 -> SmallVector<OpFoldResult> {
               SmallVector<OpFoldResult> result;
