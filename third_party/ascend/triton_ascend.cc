@@ -10,6 +10,7 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
 #include "ascend/include/AutoBlockify/Passes.h"
+#include "ascend/include/CommonIRToHIVM/ReduceSumStrengthPass.h"
 #ifdef __TLE_DSA__
 #include "ascend/include/CommonIRToHIVM/Passes.h"
 #endif
@@ -22,6 +23,7 @@
 #include "incubated/Conversion/TritonToLinalgIncubated/Passes.h"
 #include "incubated/Conversion/TritonToStructuredIncubated/Passes.h"
 #include "incubated/Conversion/TritonToUnstructureIncubated/Passes.h"
+#include "mlir-ext/Dialect/CommonIR/Transforms/Passes.h"
 
 #include "ascend/include/DynamicCVPipeline/Common/BufferCountManager.h"
 #include "ascend/include/DynamicCVPipeline/Passes.h"
@@ -339,10 +341,19 @@ void init_triton_ascend_ir(py::module &&m) {
 }
 
 void init_triton_ascend_passes_ttir(py::module &&m) {
+  m.def("add_lane_vectorize", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::tile::createTritonLaneVectorize());
+  });
+
   m.def("add_auto_blockify", [](mlir::PassManager &pm, int autoBlockifySize) {
     AutoBlockifyOptions opts;
     opts.autoBlockifySize = autoBlockifySize;
     pm.addPass(mlir::triton::createAutoBlockifyPass(opts));
+  });
+
+  m.def("add_reduce_sum_strength", [](mlir::PassManager &pm, bool enable,
+                                      int32_t splitFactor) {
+    pm.addPass(mlir::triton::createReduceSumStrengthPass(enable, splitFactor));
   });
 
   m.def("add_triton_to_structure",
