@@ -1025,7 +1025,14 @@ class MUSABackend(BaseBackend):
         maxnreg = opts.get("maxnreg", None)
         if maxnreg is not None and (not isinstance(maxnreg, int) or maxnreg <= 0):
             raise ValueError(f"maxnreg must be a positive integer, got {maxnreg!r}")
-        args.update({k: opts[k] for k in MUSAOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
+        # ``arch`` has already been resolved using the backend precedence
+        # (runtime override, per-kernel option, then target) and canonicalized
+        # above.  Do not copy the raw user spelling back over it here.
+        args.update({
+            k: opts[k]
+            for k in MUSAOptions.__dataclass_fields__.keys()
+            if k != "arch" and k in opts and opts[k] is not None
+        })
         if "warp_size" not in args:
             args["warp_size"] = _warp_size_from_capability(capability)
         return MUSAOptions(**args)

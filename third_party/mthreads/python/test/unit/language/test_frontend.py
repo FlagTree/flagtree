@@ -207,10 +207,14 @@ def test_call_in_loop():
 @triton.jit
 def test_static_range_constexpr_assignment_persists():
     # CHECK-LABEL: test_static_range_constexpr_assignment_persists
+    # CHECK: [[TEN:%.*]] = arith.constant 10 : i32
     acc: tl.constexpr = 10
     for i in tl.static_range(3):
         acc = acc + i
-    tl.static_assert(acc == 13)
+    # CHECK: [[ACC1:%.*]] = arith.addi [[TEN]], %{{.*}} : i32
+    # CHECK: [[ACC2:%.*]] = arith.addi [[ACC1]], %{{.*}} : i32
+    # CHECK: call @{{.*}}anchor{{.*}}([[ACC2]])
+    anchor(acc)
 
 
 @filecheck_test
