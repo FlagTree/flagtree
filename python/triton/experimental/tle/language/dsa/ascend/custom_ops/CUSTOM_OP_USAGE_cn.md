@@ -526,7 +526,7 @@ def add_int32(*args, **kwargs):
 @triton.jit
 def custom_add_kernel(a, b, out, N_ELEMENTS: tl.constexpr):
     ...
-    
+
     out_t = tle_raw.call(add_int32,
                          [tle.dsa.to_tensor(a_ub), tle.dsa.to_tensor(b_ub), out_t],
                          output_indices=[2])

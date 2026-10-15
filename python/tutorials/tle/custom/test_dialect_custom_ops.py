@@ -1,6 +1,5 @@
 # Copyright 2026- FlagOS Contributors
 # Copyright 2026- Xcoresigma Technology Co., Ltd
-
 """
 @dialect(name="cann") custom op end-to-end tests
 ===================================================
@@ -11,8 +10,6 @@ The example op is: add (int32 / fp16) via source JIT (format omitted)
 
 Correctness only, no benchmarking.
 """
-
-from pathlib import Path
 
 import torch
 import torch_npu

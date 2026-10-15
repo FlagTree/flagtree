@@ -40,12 +40,12 @@ add_impl(memref_t<__ubuf__ T, 1> *src0, memref_t<__ubuf__ T, 1> *src1,
 
 extern "C" {
 
-#define REGISTER_CIFACE_ADD(TYPE_NAME, T)                                       \
-  __aiv__ __attribute__((always_inline)) void                                   \
-      _mlir_ciface_custom_add_##TYPE_NAME(                                      \
-          memref_t<__ubuf__ T, 1> *src0, memref_t<__ubuf__ T, 1> *src1,         \
-          memref_t<__ubuf__ T, 1> *dst) {                                       \
-    add_impl<T>(src0, src1, dst);                                               \
+#define REGISTER_CIFACE_ADD(TYPE_NAME, T)                                      \
+  __aiv__                                                                      \
+      __attribute__((always_inline)) void _mlir_ciface_custom_add_##TYPE_NAME( \
+          memref_t<__ubuf__ T, 1> *src0, memref_t<__ubuf__ T, 1> *src1,        \
+          memref_t<__ubuf__ T, 1> *dst) {                                      \
+    add_impl<T>(src0, src1, dst);                                              \
   }
 
 REGISTER_CIFACE_ADD(int32, int32_t)
