@@ -396,27 +396,6 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   flagtree_configure_tle_plugin(FALSE)
 endif()
 
-# third_party/spacemit consumes the generic TLE dialect (TleIR/TleTableGen
-# from third_party/tle), but third_party/spacemit is configured BEFORE the
-# tle plugin in both branches above, so its targets cannot reference
-# TleTableGen at configure time and spine-triton-opt's TRITON_LIBS capture
-# misses TleIR. Wire both here, after flagtree_configure_tle_plugin has
-# defined the targets (mirrors flagtree_add_tle_generated_header_dependencies,
-# which documents the same race for core targets).
-if(TARGET TleTableGen)
-  foreach(t SpineTriton TLEToLinalg TritonToUnstructured spine-triton-opt)
-    if(TARGET ${t})
-      add_dependencies(${t} TleTableGen)
-    endif()
-  endforeach()
-endif()
-if(TARGET spine-triton-opt AND TARGET TleIR)
-  # TleDialect's registration lives in TleIR; spine-triton-opt registers the
-  # dialect (RegisterSpineTritonDialects.h) and thus needs its symbols. Also
-  # provided transitively via TLEToLinalg's PUBLIC link, kept explicit here.
-  target_link_libraries(spine-triton-opt PRIVATE TleIR)
-endif()
-
 find_package(Threads REQUIRED)
 
 add_subdirectory(third_party/f2reduce)
