@@ -196,11 +196,13 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
-      // Preserve an explicitly inferred caller context for warp-specialized
-      // helpers. Falling back to the module default here can silently give a
-      // helper the wrong barrier participant count.
-      if (Attribute numWarps = funcOp->getAttr(triton::gpu::AttrNumWarpsName))
-        newFuncOp->setAttr("ws_num_warps", numWarps);
+      // Preserve the warp count used to lower barriers when this function is
+      // called from a warp-specialized region. Worker helpers carry an
+      // explicit count; helpers called by the default group fall back to the
+      // module count through lookupNumWarps().
+      newFuncOp->setAttr(
+          "ws_num_warps",
+          rewriter.getI32IntegerAttr(triton::gpu::lookupNumWarps(funcOp)));
     }
 
     // Determine the actual number of required warps.

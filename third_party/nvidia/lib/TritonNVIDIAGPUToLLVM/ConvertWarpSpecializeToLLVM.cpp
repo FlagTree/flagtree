@@ -419,18 +419,22 @@ static LogicalResult rewriteInnerFunctionWarpGroupBarriers(
 // function-call-aware warp-specialize barrier lowering.
 static LogicalResult rewriteWarpGroupBarriers(ModuleOp module,
                                               unsigned threadsPerWarp) {
-  SmallVector<LLVM::LLVMFuncOp> wsKernels;
+  SmallVector<LLVM::LLVMFuncOp> kernels;
+  bool hasWarpSpecialize = false;
   for (LLVM::LLVMFuncOp func : module.getOps<LLVM::LLVMFuncOp>()) {
-    WalkResult hasWarpSpecialize =
+    if (func.getLinkage() == LLVM::Linkage::External)
+      kernels.push_back(func);
+
+    WalkResult hasWarpSpecializeInFunc =
         func.walk([&](WarpSpecializeOp) { return WalkResult::interrupt(); });
-    if (!hasWarpSpecialize.wasInterrupted())
+    if (!hasWarpSpecializeInFunc.wasInterrupted())
       continue;
     if (func.getLinkage() != LLVM::Linkage::External)
       return func.emitError(
           "only top-level kernel functions can be warp-specialized");
-    wsKernels.push_back(func);
+    hasWarpSpecialize = true;
   }
-  if (wsKernels.empty())
+  if (!hasWarpSpecialize)
     return success();
 
   DenseSet<StringAttr> internalFunctions;
@@ -442,7 +446,10 @@ static LogicalResult rewriteWarpGroupBarriers(ModuleOp module,
       internalFunctions.insert(func.getSymNameAttr());
   }
 
-  for (LLVM::LLVMFuncOp kernel : wsKernels) {
+  // Internal Triton helpers are renamed and gain a hidden barrier argument
+  // below. Rewrite calls from every kernel in the module so a non-specialized
+  // kernel cannot retain a reference to the old helper ABI.
+  for (LLVM::LLVMFuncOp kernel : kernels) {
     if (failed(rewriteKernelWarpGroupBarriers(kernel, internalFunctions,
                                               threadsPerWarp)))
       return failure();

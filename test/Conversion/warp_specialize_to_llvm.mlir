@@ -137,6 +137,17 @@ llvm.func @rewrite_barriers_through_calls() attributes {allocation.offset = 32 :
   llvm.return
 }
 
+// A module may contain another kernel that calls the same Triton helper. Its
+// call must follow the renamed helper ABI even though this kernel has no
+// warp-specialize op of its own.
+// CHECK-LABEL: llvm.func @plain_kernel_calling_ws_helper()
+llvm.func @plain_kernel_calling_ws_helper() {
+  // CHECK: [[PLAIN_C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: llvm.call @inner_func_nw4_ws([[PLAIN_C0]]) : (i32) -> ()
+  llvm.call @inner_func_nw4() : () -> ()
+  llvm.return
+}
+
 }
 
 // -----
