@@ -1547,6 +1547,11 @@ class CodeGenerator(ast.NodeVisitor):
             self.caller_context = prev_caller_context
 
     # flagtree tle: check supported
+    def _get_tle_backend_name(self):
+        from triton._flagtree_backend import get_active_backend_name
+
+        return get_active_backend_name()
+
     def _require_tle_primitive(self, primitive):
         from triton.experimental.tle import primitive_name
 
@@ -1554,10 +1559,9 @@ class CodeGenerator(ast.NodeVisitor):
             name = primitive_name(primitive)
         except ValueError:
             return
-        from triton._flagtree_backend import get_active_backend_name
         from triton.experimental.tle import require_tle
 
-        require_tle(get_active_backend_name(), name)
+        require_tle(self._get_tle_backend_name(), name)
 
     def call_Function(self, node, fn, args, kws):
         # 4. Get current line number and hints
