@@ -675,11 +675,8 @@ def alloc_barriers(
     # not share a helper specialization. Forced mbarriers keep the historical
     # type identity and do not consume virtual named-barrier ids.
     can_use_named_backend = expect_bytes is None and init == tle.PENDING
-    named_base_id = (
-        _reserve_named_barrier_ids(_semantic, num_barriers, _generator)
-        if can_use_named_backend
-        else 0
-    )
+    named_base_id = (_reserve_named_barrier_ids(_semantic, num_barriers, _generator)
+                     if can_use_named_backend else 0)
     barrier_ty = tle.barrier_type(num_barriers, arrive_count, init, expect_bytes, layout, _semantic,
                                   shape=[num_barriers, 1], named_base_id=named_base_id)
     handle = _semantic.builder.create_barrier_alloc(

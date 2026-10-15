@@ -96,8 +96,7 @@ static void reserveWarpSpecializeBarrierIds(ModuleOp module,
 }
 
 static LogicalResult
-collectNamedBarrierId(Operation *op, Value idValue,
-                      llvm::SmallBitVector &used,
+collectNamedBarrierId(Operation *op, Value idValue, llvm::SmallBitVector &used,
                       llvm::MapVector<int64_t, int64_t> &virtualToPhysical) {
   std::optional<int64_t> id = getConstantI32(idValue);
   if (!id)

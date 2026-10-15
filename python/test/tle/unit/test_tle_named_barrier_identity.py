@@ -42,11 +42,7 @@ def _two_barriers_passed_to_one_helper():
 def test_allocated_named_barrier_identity_participates_in_helper_mangling():
     ttir = _make_ttir(_two_barriers_passed_to_one_helper)
 
-    helper_defs = [
-        line
-        for line in ttir.splitlines()
-        if "tt.func private" in line and "_wait_on_named_barrier" in line
-    ]
+    helper_defs = [line for line in ttir.splitlines() if "tt.func private" in line and "_wait_on_named_barrier" in line]
     assert len(helper_defs) == 2
     assert any(re.search(r"barrier_.*_16(?:__|\W|$)", line) for line in helper_defs)
     assert any(re.search(r"barrier_.*_17(?:__|\W|$)", line) for line in helper_defs)
