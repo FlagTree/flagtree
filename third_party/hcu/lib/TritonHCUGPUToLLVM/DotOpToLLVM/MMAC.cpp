@@ -24,8 +24,8 @@
 #include "TritonHCUGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
