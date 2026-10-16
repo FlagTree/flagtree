@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
+
 def _find_repo_root() -> Path:
     here = Path(__file__).resolve()
     for parent in here.parents:
