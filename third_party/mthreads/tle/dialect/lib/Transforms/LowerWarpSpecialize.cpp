@@ -145,8 +145,7 @@ static bool equivalentConsumerBounds(Value lhs, Region &lhsConsumer, Value rhs,
 // barrier and derives its alternating phase from the loop iteration count.
 static LogicalResult markConsumerEpochRendezvous(ttg::WarpSpecializeOp ws,
                                                  IRRewriter &rewriter) {
-  if (ws->hasAttr(musa_tle::kMUSATLEDefaultProducerAttr) ||
-      !ws->hasAttr(musa_tle::kMUSATLEConsumerEpochRendezvousRequiredAttr))
+  if (!ws->hasAttr(musa_tle::kMUSATLEConsumerEpochRendezvousRequiredAttr))
     return success();
   auto skipInference = [&]() {
     ws->removeAttr(musa_tle::kMUSATLEConsumerEpochRendezvousRequiredAttr);
@@ -268,11 +267,6 @@ class PrepareWarpSpecializePass
       return ws.emitOpError(
           "MUSA TLE static warp_specialize worker region and warp-count "
           "sizes must match");
-    if (ws->hasAttr(musa_tle::kMUSATLEDefaultProducerAttr) &&
-        workerRegions.size() != 1)
-      return ws.emitOpError(
-          "MUSA TLE default producer requires exactly one consumer worker "
-          "partition");
     if (auto requestedRegisters = ws.getRequestedRegisters()) {
       if (requestedRegisters->size() != workerRegions.size())
         return ws.emitOpError(

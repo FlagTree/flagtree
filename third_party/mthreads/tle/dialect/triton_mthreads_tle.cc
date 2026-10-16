@@ -527,7 +527,6 @@ void init_triton_musa_tle_ir(py::module m) {
   builderCls.attr("mthreads_tle_grouped_completion_version") = py::int_(1);
   builderCls.attr("mthreads_tle_16_warp_persistent_version") = py::int_(1);
   builderCls.attr("mthreads_tle_fused_pipe_consumer_version") = py::int_(1);
-  builderCls.attr("mthreads_tle_default_producer_version") = py::int_(1);
   builderCls
       .def("create_mthreads_local_barrier",
            [](TritonOpBuilder &self) {
@@ -1007,24 +1006,17 @@ void init_triton_musa_tle_ir(py::module m) {
              return self.create<ttg::WarpSpecializePartitionsOp>(
                  explicitCaptures, numPartitions);
            })
-      .def(
-          "create_warp_specialize",
-          [](TritonOpBuilder &self, std::vector<mlir::Type> resultTypes,
-             std::vector<int32_t> partitionNumWarps,
-             bool defaultIsProducer) -> TLEWarpSpecializeOp {
-            auto &builder = self.getBuilder();
-            auto op = self.create<ttg::WarpSpecializeOp>(resultTypes,
-                                                         partitionNumWarps);
-            op->setAttr(
-                mlir::triton::musa_tle::kMUSATLEStaticWarpSpecializeAttr,
-                builder.getUnitAttr());
-            if (defaultIsProducer)
-              op->setAttr(mlir::triton::musa_tle::kMUSATLEDefaultProducerAttr,
-                          builder.getUnitAttr());
-            return TLEWarpSpecializeOp(op);
-          },
-          py::arg("result_types"), py::arg("partition_num_warps"),
-          py::arg("default_is_producer") = false)
+      .def("create_warp_specialize",
+           [](TritonOpBuilder &self, std::vector<mlir::Type> resultTypes,
+              std::vector<int32_t> partitionNumWarps) -> TLEWarpSpecializeOp {
+             auto &builder = self.getBuilder();
+             auto op = self.create<ttg::WarpSpecializeOp>(resultTypes,
+                                                          partitionNumWarps);
+             op->setAttr(
+                 mlir::triton::musa_tle::kMUSATLEStaticWarpSpecializeAttr,
+                 builder.getUnitAttr());
+             return TLEWarpSpecializeOp(op);
+           })
       .def("create_exclusive_cumsum",
            [](TritonOpBuilder &self, mlir::Type exclusiveTy, mlir::Type totalTy,
               mlir::Value src, int axis, bool reverse) -> mlir::OpState {

@@ -44,7 +44,6 @@ MTHREADS_TLE_DYNAMIC_PARTITION_SYNC_VERSION = getattr(libtriton.ir.builder,
 MTHREADS_TLE_GROUPED_COMPLETION_VERSION = getattr(libtriton.ir.builder, "mthreads_tle_grouped_completion_version", 0)
 MTHREADS_TLE_16_WARP_PERSISTENT_VERSION = getattr(libtriton.ir.builder, "mthreads_tle_16_warp_persistent_version", 0)
 MTHREADS_TLE_FUSED_PIPE_CONSUMER_VERSION = getattr(libtriton.ir.builder, "mthreads_tle_fused_pipe_consumer_version", 0)
-MTHREADS_TLE_DEFAULT_PRODUCER_VERSION = getattr(libtriton.ir.builder, "mthreads_tle_default_producer_version", 0)
 # Python-only backend option capability. It lets persistent TLE kernels retain
 # the SQMMA optimizations while avoiding the unsafe max-ILP scheduler.
 MTHREADS_TLE_DISABLE_MAX_ILP_SCHEDULER_VERSION = 1
@@ -74,6 +73,5 @@ __all__ = [
     "MTHREADS_TLE_GROUPED_COMPLETION_VERSION",
     "MTHREADS_TLE_16_WARP_PERSISTENT_VERSION",
     "MTHREADS_TLE_FUSED_PIPE_CONSUMER_VERSION",
-    "MTHREADS_TLE_DEFAULT_PRODUCER_VERSION",
     "MTHREADS_TLE_DISABLE_MAX_ILP_SCHEDULER_VERSION",
 ]

@@ -13,8 +13,6 @@ inline constexpr llvm::StringLiteral
 inline constexpr llvm::StringLiteral
     kMUSATLEStaticWarpSpecializeAttr("musa_tle.static_warp_specialize");
 inline constexpr llvm::StringLiteral
-    kMUSATLEDefaultProducerAttr("musa_tle.default_producer");
-inline constexpr llvm::StringLiteral
     kMUSATLEConsumerEpochSyncAttr("musa_tle.consumer_epoch_sync");
 inline constexpr llvm::StringLiteral
     kMUSATLEConsumerEpochRendezvousRequiredAttr(

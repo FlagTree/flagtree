@@ -220,7 +220,6 @@ def warp_specialize(
     functions_and_args,
     worker_num_warps,
     worker_num_regs,
-    default_is_producer=False,
     _semantic: TLESemantic | None = None,
     _generator=None,
 ):
@@ -230,18 +229,12 @@ def warp_specialize(
     ``functions_and_args[0]`` is emitted into the default partition. Later
     entries are emitted into worker partitions, with their warp counts and
     requested register counts provided by ``worker_num_warps`` and
-    ``worker_num_regs``. On MThreads, ``default_is_producer=True`` marks the
-    default partition as the producer and requires one consumer worker.
+    ``worker_num_regs``.
     """
     if _generator is None:
         raise ValueError("warp_specialize requires a Triton code generator")
     functions_and_args = tl._unwrap_if_constexpr(functions_and_args)
     mthreads_enabled = mthreads_common.enabled()
-    default_is_producer = tl._unwrap_if_constexpr(default_is_producer)
-    if not isinstance(default_is_producer, bool):
-        raise ValueError("warp_specialize default_is_producer must be a compile-time bool")
-    if default_is_producer and not mthreads_enabled:
-        raise ValueError("warp_specialize default_is_producer is only supported on MThreads")
     if mthreads_enabled:
         worker_num_warps, worker_num_regs = mthreads_warp_specialize.normalize_config(worker_num_warps, worker_num_regs)
     else:
@@ -286,12 +279,7 @@ def warp_specialize(
 
     builder.restore_insertion_point(insert_pt)
     if mthreads_enabled:
-        ws_op = mthreads_warp_specialize.create_op(
-            builder,
-            result_types,
-            worker_num_warps,
-            default_is_producer,
-        )
+        ws_op = mthreads_warp_specialize.create_op(builder, result_types, worker_num_warps)
     else:
         ws_op = builder.create_warp_specialize(result_types, worker_arg_handles, worker_num_warps)
     real_default_block = builder.create_block_with_parent(ws_op.get_default_region(), [])

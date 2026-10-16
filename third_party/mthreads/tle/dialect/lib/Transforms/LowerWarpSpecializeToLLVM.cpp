@@ -203,20 +203,12 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
         "MUSA TLE partition synchronization requires matching worker "
         "regions and warp counts");
 
-  bool defaultProducer = ws->hasAttr(musa_tle::kMUSATLEDefaultProducerAttr);
-  if (defaultProducer && workerRegions.size() != 1)
-    return ws.emitOpError(
-        "MUSA TLE default producer requires exactly one consumer worker "
-        "partition");
-
-  // The regular layout assigns the final worker to the producer; the
-  // optional single-worker layout assigns the default region instead.
+  // The regular layout assigns the final worker to the producer.
   // Every non-explicit local barrier that survives pipe dependency analysis
   // is a real partition rendezvous. Explicit frontend CTA barriers remain
   // untouched and are lowered after the static partitions are flattened.
-  Region &producerRegion =
-      defaultProducer ? ws.getDefaultRegion() : *workerRegions.back();
-  int32_t producerWarps = defaultProducer ? defaultWarps : workerWarps.back();
+  Region &producerRegion = *workerRegions.back();
+  int32_t producerWarps = workerWarps.back();
   SmallVector<PartitionSync> syncs;
   SmallVector<LLVM::CallIntrinsicOp> tmeReuseSyncs;
   producerRegion.walk([&](LLVM::CallIntrinsicOp call) {
@@ -255,14 +247,9 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
       return WalkResult::advance();
     });
   };
-  if (defaultProducer) {
-    for (unsigned index = 0; index < workerRegions.size(); ++index)
-      collectConsumerSyncs(*workerRegions[index], workerWarps[index]);
-  } else {
-    collectConsumerSyncs(ws.getDefaultRegion(), defaultWarps);
-    for (unsigned index = 0; index + 1 < workerRegions.size(); ++index)
-      collectConsumerSyncs(*workerRegions[index], workerWarps[index]);
-  }
+  collectConsumerSyncs(ws.getDefaultRegion(), defaultWarps);
+  for (unsigned index = 0; index + 1 < workerRegions.size(); ++index)
+    collectConsumerSyncs(*workerRegions[index], workerWarps[index]);
 
   if (invalidSharedGroup)
     return ws.emitOpError(
@@ -326,22 +313,14 @@ static LogicalResult lowerWarpGroupBarriers(LLVM::LLVMFuncOp func,
   if (!sharedGroupOrder.empty()) {
     ArrayRef<int32_t> workerWarps = ws.getPartitionNumWarps();
     llvm::DenseSet<Region *> expectedConsumerPartitions;
-    int64_t expectedConsumerWarps = 0;
-    if (defaultProducer) {
-      for (unsigned index = 0; index < workerWarps.size(); ++index) {
-        expectedConsumerWarps += workerWarps[index];
-        expectedConsumerPartitions.insert(ws.getPartitionRegions()[index]);
-      }
-    } else {
-      expectedConsumerPartitions.insert(&ws.getDefaultRegion());
-      expectedConsumerWarps = defaultWarps;
-      // The regular layout places the producer in the final worker
-      // partition.  Every preceding partition participates in the shared
-      // consumer epoch rendezvous.
-      for (unsigned index = 0; index + 1 < workerWarps.size(); ++index) {
-        expectedConsumerWarps += workerWarps[index];
-        expectedConsumerPartitions.insert(ws.getPartitionRegions()[index]);
-      }
+    expectedConsumerPartitions.insert(&ws.getDefaultRegion());
+    int64_t expectedConsumerWarps = defaultWarps;
+    // The regular layout places the producer in the final worker partition.
+    // Every preceding partition participates in the shared consumer epoch
+    // rendezvous.
+    for (unsigned index = 0; index + 1 < workerWarps.size(); ++index) {
+      expectedConsumerWarps += workerWarps[index];
+      expectedConsumerPartitions.insert(ws.getPartitionRegions()[index]);
     }
     if (expectedConsumerWarps <= 0 ||
         expectedConsumerWarps > std::numeric_limits<int32_t>::max())
@@ -513,16 +492,11 @@ static LogicalResult lowerStaticWarpSpecialize(LLVM::LLVMFuncOp func,
                                                IRRewriter &rewriter) {
   auto workerRegions = ws.getPartitionRegions();
   ArrayRef<int32_t> workerWarps = ws.getPartitionNumWarps();
-  bool defaultProducer = ws->hasAttr(musa_tle::kMUSATLEDefaultProducerAttr);
   if (ws.getNumResults() != 0 || workerRegions.empty() ||
       workerRegions.size() != workerWarps.size())
     return ws.emitOpError(
         "MUSA TLE late lowering requires a default partition, one or more "
         "worker partitions, and no results");
-  if (defaultProducer && workerRegions.size() != 1)
-    return ws.emitOpError(
-        "MUSA TLE default producer requires exactly one consumer worker "
-        "partition");
 
   Region &defaultRegion = ws.getDefaultRegion();
   if (defaultRegion.empty())
@@ -630,21 +604,14 @@ static LogicalResult lowerStaticWarpSpecialize(LLVM::LLVMFuncOp func,
         rewriter.createBlock(&funcBody, continuation->getIterator());
     funcBlocks.splice(continuation->getIterator(), defaultRegion.getBlocks());
 
-    Block *producerRoot = defaultProducer ? defaultRoot : workerRoots.front();
-    Block *consumerRoot = defaultProducer ? workerRoots.front() : defaultRoot;
+    Block *producerRoot = workerRoots.front();
+    Block *consumerRoot = defaultRoot;
     SmallVector<Operation *> producerTerminators;
     SmallVector<Operation *> consumerTerminators;
-    if (defaultProducer) {
-      for (ttg::WarpYieldOp op : defaultYields)
-        producerTerminators.push_back(op);
-      for (ttg::WarpReturnOp op : workerReturns.front())
-        consumerTerminators.push_back(op);
-    } else {
-      for (ttg::WarpReturnOp op : workerReturns.front())
-        producerTerminators.push_back(op);
-      for (ttg::WarpYieldOp op : defaultYields)
-        consumerTerminators.push_back(op);
-    }
+    for (ttg::WarpReturnOp op : workerReturns.front())
+      producerTerminators.push_back(op);
+    for (ttg::WarpYieldOp op : defaultYields)
+      consumerTerminators.push_back(op);
 
     for (Operation *op : producerTerminators) {
       rewriter.setInsertionPoint(op);
@@ -672,17 +639,13 @@ static LogicalResult lowerStaticWarpSpecialize(LLVM::LLVMFuncOp func,
     Value boundaryValue =
         arith::ConstantIntOp::create(rewriter, loc, threadEnds.front(), 32);
     Value isProducer = arith::CmpIOp::create(
-        rewriter, loc,
-        defaultProducer ? arith::CmpIPredicate::ult : arith::CmpIPredicate::uge,
-        tid, boundaryValue);
+        rewriter, loc, arith::CmpIPredicate::uge, tid, boundaryValue);
     cf::CondBranchOp::create(rewriter, loc, isProducer, producerRoot,
                              ValueRange{}, producerJoin, ValueRange{});
 
     rewriter.setInsertionPointToEnd(producerJoin);
     Value isConsumer = arith::CmpIOp::create(
-        rewriter, loc,
-        defaultProducer ? arith::CmpIPredicate::uge : arith::CmpIPredicate::ult,
-        tid, boundaryValue);
+        rewriter, loc, arith::CmpIPredicate::ult, tid, boundaryValue);
     cf::CondBranchOp::create(rewriter, loc, isConsumer, consumerRoot,
                              ValueRange{}, continuation, ValueRange{});
     return success();

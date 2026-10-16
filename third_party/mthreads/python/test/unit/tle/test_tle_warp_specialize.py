@@ -62,16 +62,6 @@ def _ws_simple_worker(out):
 
 
 @triton.jit
-def _ws_default_producer_kernel(out):
-    tle.gpu.warp_specialize(
-        [(_ws_simple_default, (out, )), (_ws_simple_worker, (out, ))],
-        worker_num_warps=[16],
-        worker_num_regs=[160],
-        default_is_producer=True,
-    )
-
-
-@triton.jit
 def _ws_multi_default(out):
     smem = tle.gpu.alloc((1, ), dtype=tl.int32, nv_mma_shared_layout=False)
     local = tle.gpu.local_ptr(smem, (0, ))
@@ -387,7 +377,6 @@ def test_tle_warp_specialize_musa_container_contract():
         "mthreads_tle_grouped_completion_version": 1,
         "mthreads_tle_16_warp_persistent_version": 1,
         "mthreads_tle_fused_pipe_consumer_version": 1,
-        "mthreads_tle_default_producer_version": 1,
     }
     for capability, minimum in expected_capabilities.items():
         assert getattr(builder, capability, 0) >= minimum
@@ -426,55 +415,6 @@ def test_tle_warp_specialize_keeps_old_builder_call_compatible():
         ["result"],
         [4],
     )
-    with pytest.raises(RuntimeError, match="default-producer"):
-        mthreads_warp_specialize.create_op(
-            builder,
-            ["result"],
-            [4],
-            default_is_producer=True,
-        )
-
-
-def test_tle_warp_specialize_default_producer_contract():
-    ttir, ttgir, late_ir = _compile_ws_ir(
-        _ws_default_producer_kernel,
-        {"out": "*i32"},
-        constexprs={},
-        consumer_warps=4,
-        include_late=True,
-    )
-    for ir_text in (ttir, ttgir):
-        assert "musa_tle.default_producer" in ir_text, ir_text
-        assert "num_warps(16)" in ir_text, ir_text
-        assert re.search(r"requestedRegisters\s*=\s*array<i32:\s*160>", ir_text), ir_text
-
-    assert '"ttg.total-num-warps" = 20 : i32' in ttgir, ttgir
-    assert "warpGroupStartIds = array<i32: 4>" in ttgir, ttgir
-    assert "ttg.warp_specialize" not in late_ir, late_ir
-    assert "arith.constant 128 : i32" in late_ir, late_ir
-    assert late_ir.count("arith.cmpi ult") == 1, late_ir
-    assert late_ir.count("arith.cmpi uge") == 1, late_ir
-    assert late_ir.index("arith.cmpi ult") < late_ir.index("arith.cmpi uge"), late_ir
-
-
-def test_tle_warp_specialize_default_producer_runtime():
-    out = torch.full((2, ), -1, dtype=torch.int32, device="musa")
-    compiled = _ws_default_producer_kernel.warmup(
-        out,
-        grid=(1, ),
-        num_warps=4,
-        num_stages=1,
-    )
-    assert compiled.metadata.num_warps == 20
-    for _ in range(10):
-        out.fill_(-1)
-        _ws_default_producer_kernel[(1, )](
-            out,
-            num_warps=4,
-            num_stages=1,
-        )
-        torch.musa.synchronize()
-        torch.testing.assert_close(out.cpu(), torch.tensor([1, 2], dtype=torch.int32))
 
 
 @pytest.mark.parametrize(
