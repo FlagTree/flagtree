@@ -515,6 +515,11 @@ bool isLayoutAnchor(Operation *op) {
     return true;
   if (hasTleExplicitResultEncoding(op))
     return true;
+  // TLE WGMMA is lowered to the native WarpGroupDot anchor later in the
+  // NVIDIA pipeline. Treat it identically before that lowering so layout
+  // propagation never attempts to clone or retag the asynchronous dot.
+  if (isa<tle::WGMMAOp>(op))
+    return true;
 #endif // __TLE__
   if (isa<DescriptorOpInterface>(op))
     return true;
