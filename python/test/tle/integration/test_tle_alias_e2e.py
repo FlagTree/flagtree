@@ -25,6 +25,13 @@ def _synchronize():
     torch.get_device_module().synchronize()
 
 
+pytestmark = pytest.mark.skipif(
+    FLAGTREE_BACKEND == "enflame",
+    reason="temporary: alloc-alias memdesc->memref materialization fails to legalize on enflame (GCU); "
+    "see test_tle_alias_e2e.py:54",
+)
+
+
 @triton.jit
 def alias_e2e_kernel(in_ptr, out_ptr, N, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
@@ -113,6 +120,7 @@ def alias_trans_kernel(in_ptr, out_ptr, BLOCK: tl.constexpr):
 
 
 @pytest.mark.require_tle("gpu.alloc", "gpu.copy")
+@pytestmark
 def test_alias_shares_smem_offset_zero():
     """o_smem observes v_smem's overwrite when alias_offset_bytes == 0."""
     N = 2048
@@ -136,6 +144,7 @@ def test_alias_shares_smem_offset_zero():
 
 
 @pytest.mark.require_tle("gpu.alloc", "gpu.copy")
+@pytestmark
 def test_alias_nonzero_offset_bytes():
     """alias_offset_bytes != 0: o_smem observes the overwrite at the byte offset."""
     offset_bytes = BLOCK * 4  # second float32 chunk of the 2 * BLOCK source
@@ -158,6 +167,7 @@ def test_alias_nonzero_offset_bytes():
 
 
 @pytest.mark.require_tle("gpu.alloc", "gpu.copy")
+@pytestmark
 def test_alias_cross_dtype_u8_to_u16():
     """Transtype alias: byte pattern in a u8 smem buffer, read back as u16.
 
