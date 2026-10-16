@@ -22,6 +22,7 @@ import triton.language.core as tl
 
 from .. import types as tle
 from . import common
+from .types import TMECachePolicy, _TME_CACHE_POLICIES
 
 
 def normalize_copy_shape(shape) -> tuple[int, ...]:
@@ -94,18 +95,9 @@ def normalize_cache_policy(cache_policy):
     from .. import semantic as tle_semantic
     if not common.enabled() or tle_semantic.COMMON_IR_ENABLED:
         raise ValueError("copy cache_policy is only supported by the MUSA TLE backend")
-    if isinstance(cache_policy, tl.tuple):
-        cache_policy = cache_policy.values
-    if not isinstance(cache_policy, (tuple, list)) or len(cache_policy) != 2:
-        raise ValueError("cache_policy must be a compile-time (inner, outer) pair")
-    policies = ("none", "once", "normal", "persist")
-    result = []
-    for value in cache_policy:
-        value = tl._unwrap_if_constexpr(value)
-        if not isinstance(value, str) or value not in policies:
-            raise ValueError("cache_policy entries must be compile-time strings: none, once, normal, or persist")
-        result.append(policies.index(value))
-    return tuple(result)
+    if not isinstance(cache_policy, TMECachePolicy):
+        raise ValueError("cache_policy must be a compile-time tle.gpu.mthreads.TMECachePolicy")
+    return tuple(_TME_CACHE_POLICIES.index(value) for value in (cache_policy.inner, cache_policy.outer))
 
 
 def tmacopy(src, dst, direction, shape, offsets, barrier=None, cache_policy=None, _semantic=None) -> None:

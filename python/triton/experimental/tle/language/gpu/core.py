@@ -159,7 +159,8 @@ def _as_call_args(args):
         raise ValueError(f"warp_specialize function arguments must be a tuple, got {type(args).__name__}")
 
     def normalize(arg):
-        if isinstance(arg, (tl.dtype, float, int, bool, str, tuple)):
+        if isinstance(arg, (tl.dtype, float, int, bool, str, tuple)) or isinstance(getattr(arg, "type", None),
+                                                                                   tl.constexpr_type):
             return tl.constexpr(arg)
         return arg
 
@@ -1139,12 +1140,14 @@ def copy(
             global-to-local copies, masked elements are written to local memory
             as zero. For local-to-global copies, masked elements are not stored.
             TMA descriptor copies do not accept a mask.
-        cache_policy: Optional compile-time pair ``(inner, outer)`` of TME cache
-            persistence hints. Each entry is ``"none"``, ``"once"``, ``"normal"``,
-            or ``"persist"``. Supported only for MUSA descriptor-to-shared copies.
-            Omission preserves the default ``("normal", "normal")`` behavior.
+        cache_policy: Optional backend-specific compile-time policy object.
+            None preserves the backend's default behavior. MThreads accepts
+            ``tle.gpu.mthreads.TMECachePolicy(inner, outer)`` for
+            descriptor-to-shared copies; both fields default to ``"normal"``
+            and accept ``"none"``, ``"once"``, ``"normal"``, or ``"persist"``.
+            Other backends and CommonIR currently reject explicit policies.
             Hints apply to this copy only and do not change synchronization.
-            Benchmark non-default pairs on the target workload. Streaming
+            Benchmark non-default policies on the target workload. Streaming
             access alone does not justify ``inner="none"``, which can severely
             degrade GEMM performance.
         _semantic: Internal semantic analyzer for validation and compilation (user-provided)
@@ -1171,7 +1174,7 @@ def copy(
 
         MUSA TME load with explicit default cache persistence:
             tle.gpu.copy(tma_desc, local_buf, [64, 64], [x_offset, y_offset],
-                         barrier=bar, cache_policy=("normal", "normal"))
+                         barrier=bar, cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="normal", outer="normal"))
 
         Logical tensor-descriptor -> automatic exact tiled buffer:
             local_buf = tle.alloc([80, 256], dtype=tl.float16, scope=tle.smem)
@@ -1179,7 +1182,11 @@ def copy(
     """
     mthreads_enabled = mthreads_common.enabled()
     iluvatar_enabled = iluvatar_copy.enabled()
-    cache_policy = mthreads_copy.normalize_cache_policy(cache_policy)
+    cache_policy = tl._unwrap_if_constexpr(cache_policy)
+    if mthreads_enabled:
+        cache_policy = mthreads_copy.normalize_cache_policy(cache_policy)
+    elif cache_policy is not None:
+        raise ValueError("copy cache_policy is not supported by this backend")
 
     def normcopy(
         src: tl.tensor,

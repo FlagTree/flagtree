@@ -9,6 +9,7 @@ import triton
 import triton.language as tl
 import triton.experimental.tle.language as tle
 from triton.compiler.errors import CompilationError
+from triton.experimental.tle.language.gpu.mthreads import TMECachePolicy
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from test_tle_utils import compile_musa, compile_to_ttir, require_mthreads_libtriton
@@ -16,7 +17,7 @@ from test_tle_utils import compile_musa, compile_to_ttir, require_mthreads_libtr
 require_mthreads_libtriton()
 
 POLICIES = ("none", "once", "normal", "persist")
-PAIRS = list(itertools.product(POLICIES, repeat=2))
+PAIRS = [TMECachePolicy(inner, outer) for inner, outer in itertools.product(POLICIES, repeat=2)]
 
 
 @triton.jit
@@ -53,7 +54,7 @@ def _tme_loads(compiled):
 @pytest.mark.parametrize("explicit", [False, True])
 def test_tme_cache_policy_reaches_intrinsic(policy, explicit):
     compiled = _compile_copy(policy, explicit)
-    inner, outer = (POLICIES.index(value) for value in policy)
+    inner, outer = (POLICIES.index(value) for value in (policy.inner, policy.outer))
     ttir = compiled.asm["ttir"]
     assert f"musa.tme.inner_persistence = {inner} : i32" in ttir
     assert f"musa.tme.outer_persistence = {outer} : i32" in ttir
@@ -68,7 +69,7 @@ def test_tme_cache_policy_reaches_intrinsic(policy, explicit):
 
 def test_tme_cache_policy_default_is_unchanged():
     omitted = _compile_copy(omit=True)
-    normal = _compile_copy(("normal", "normal"))
+    normal = _compile_copy(TMECachePolicy())
     assert "musa.tme.inner_persistence" not in omitted.asm["ttir"]
     # Compare the emitted load operands, ignoring debug metadata.
     loads = lambda compiled: [line.split(", !dbg")[0] for line in _tme_loads(compiled)]
@@ -79,8 +80,9 @@ def test_tme_cache_policy_default_is_unchanged():
 def _independent_policy_kernel(a, b):
     a_smem = tle.gpu.alloc((16, 64), a.dtype, nv_mma_shared_layout=False)
     b_smem = tle.gpu.alloc((16, 64), b.dtype, nv_mma_shared_layout=False)
-    tle.gpu.copy(a, a_smem, (16, 64), (0, 0), cache_policy=("persist", "normal"))
-    tle.gpu.copy(b, b_smem, (16, 64), (0, 0), cache_policy=("once", "none"))
+    tle.gpu.copy(a, a_smem, (16, 64), (0, 0),
+                 cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="persist", outer="normal"))
+    tle.gpu.copy(b, b_smem, (16, 64), (0, 0), cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="once", outer="none"))
 
 
 def test_tme_cache_policy_is_per_copy():
@@ -102,8 +104,10 @@ def _grouped_policy_kernel(a, b, out):
     reader = pipe.reader()
     for i in tl.static_range(4):
         slot = writer.acquire(i)
-        tle.gpu.copy(a, slot.a, (16, 64), (i * 16, 0), barrier=full[i % 2], cache_policy=("persist", "normal"))
-        tle.gpu.copy(b, slot.b, (16, 64), (i * 16, 0), barrier=full[i % 2], cache_policy=("once", "none"))
+        tle.gpu.copy(a, slot.a, (16, 64), (i * 16, 0), barrier=full[i % 2],
+                     cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="persist", outer="normal"))
+        tle.gpu.copy(b, slot.b, (16, 64), (i * 16, 0), barrier=full[i % 2],
+                     cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="once", outer="none"))
         writer.commit(i)
         result = reader.wait(i)
         av = tl.load(tle.gpu.local_ptr(result.slot.a)).to(tl.float32)
@@ -142,7 +146,7 @@ def test_tme_cache_policy_grouped_completion_runtime(dtype):
 
 
 @pytest.mark.parametrize("policy", [(), ("once", ), ("once", "none", "normal"), "once", 1, ("invalid", "none"),
-                                    ("once", 0), ("once", "last_use")])
+                                    ("once", 0), ("once", "last_use"), ("once", "none"), ["once", "none"]])
 def test_tme_cache_policy_rejects_invalid_values(policy):
     with pytest.raises(CompilationError, match="cache_policy"):
         _compile_copy(policy)
@@ -151,11 +155,11 @@ def test_tme_cache_policy_rejects_invalid_values(policy):
 @triton.jit
 def _dynamic_policy_kernel(desc, policy):
     smem = tle.gpu.alloc((16, 64), desc.dtype, nv_mma_shared_layout=False)
-    tle.gpu.copy(desc, smem, (16, 64), (0, 0), cache_policy=(policy, "none"))
+    tle.gpu.copy(desc, smem, (16, 64), (0, 0), cache_policy=tle.gpu.mthreads.TMECachePolicy(inner=policy, outer="none"))
 
 
 def test_tme_cache_policy_must_be_compile_time():
-    with pytest.raises(CompilationError, match="compile-time strings"):
+    with pytest.raises(CompilationError, match="TMECachePolicy inner must be a compile-time string"):
         compile_to_ttir(_dynamic_policy_kernel, signature={"desc": "tensordesc<fp16[16,64]>", "policy": "i32"})
 
 
@@ -163,10 +167,12 @@ def test_tme_cache_policy_must_be_compile_time():
 def _unsupported_copy_kernel(desc, ptr, STORE: tl.constexpr):
     smem = tle.gpu.alloc((16, 64), desc.dtype, nv_mma_shared_layout=False)
     if STORE:
-        tle.gpu.copy(smem, desc, (16, 64), (0, 0), cache_policy=("once", "none"))
+        tle.gpu.copy(smem, desc, (16, 64), (0, 0),
+                     cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="once", outer="none"))
     else:
         offsets = tl.arange(0, 16)[:, None] * 64 + tl.arange(0, 64)[None, :]
-        tle.gpu.copy(ptr + offsets, smem, (16, 64), cache_policy=("once", "none"))
+        tle.gpu.copy(ptr + offsets, smem, (16, 64),
+                     cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="once", outer="none"))
 
 
 @pytest.mark.parametrize("store", [False, True])
@@ -182,8 +188,9 @@ def test_tme_cache_policy_rejects_other_backends(monkeypatch, enabled, common_ir
     from triton.experimental.tle.language.gpu import core
     monkeypatch.setattr(core.mthreads_common, "enabled", lambda: enabled)
     monkeypatch.setattr(core.tle_semantic, "COMMON_IR_ENABLED", common_ir)
-    with pytest.raises(ValueError, match="only supported by the MUSA TLE backend"):
-        core.copy(None, None, (), cache_policy=("once", "none"), _semantic=object())
+    with pytest.raises(ValueError, match="copy cache_policy"):
+        core.copy(None, None, (), cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="once", outer="none"),
+                  _semantic=object())
 
 
 @triton.jit
@@ -198,7 +205,7 @@ def _pipe_copy_kernel(src, dst):
     for iteration in tl.static_range(4):
         slot = writer.acquire(iteration)
         tle.gpu.copy(src, slot.data, (32, 256), ((iteration + 1) * 32, 128), barrier=full[iteration % 2],
-                     cache_policy=("once", "none"))
+                     cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="once", outer="none"))
         writer.commit(iteration)
         wait = reader.wait(iteration)
         tle.gpu.copy(wait.slot.data, dst, (32, 256), ((iteration + 1) * 32, 128))
@@ -226,7 +233,8 @@ def _ws_producer(desc, smem, full, POLICY: tl.constexpr):
 
 @triton.jit
 def _ws_producer_split(desc, smem, full, INNER: tl.constexpr, OUTER: tl.constexpr):
-    tle.gpu.copy(desc, smem, (16, 64), (0, 0), barrier=full, cache_policy=(INNER, OUTER))
+    tle.gpu.copy(desc, smem, (16, 64), (0, 0), barrier=full,
+                 cache_policy=tle.gpu.mthreads.TMECachePolicy(inner=INNER, outer=OUTER))
 
 
 @triton.jit
@@ -242,8 +250,8 @@ def _ws_copy_kernel(desc, out, POLICY: tl.constexpr, SPLIT_POLICY: tl.constexpr)
     smem = tle.gpu.alloc((16, 64), desc.dtype, nv_mma_shared_layout=False)
     full = tle.gpu.alloc_barrier(expect_bytes=16 * 64 * desc.dtype.primitive_bitwidth // 8)
     if SPLIT_POLICY:
-        inner: tl.constexpr = POLICY[0]
-        outer: tl.constexpr = POLICY[1]
+        inner: tl.constexpr = POLICY.inner
+        outer: tl.constexpr = POLICY.outer
         tle.gpu.warp_specialize([(_ws_consumer, (smem, full, out)),
                                  (_ws_producer_split, (desc, smem, full, inner, outer))], worker_num_warps=[4],
                                 worker_num_regs=[24])
@@ -253,7 +261,7 @@ def _ws_copy_kernel(desc, out, POLICY: tl.constexpr, SPLIT_POLICY: tl.constexpr)
 
 
 @pytest.mark.parametrize("policy", PAIRS)
-@pytest.mark.parametrize("split_policy", [False, True], ids=["tuple", "strings"])
+@pytest.mark.parametrize("split_policy", [False, True], ids=["object", "strings"])
 def test_tme_cache_policy_preserves_warp_specialization(policy, split_policy):
     compiled = compile_musa(
         _ws_copy_kernel, signature={
@@ -261,7 +269,7 @@ def test_tme_cache_policy_preserves_warp_specialization(policy, split_policy):
         }, constexprs={"POLICY": policy, "SPLIT_POLICY": split_policy})
     calls = _tme_loads(compiled)
     assert len(calls) == 1
-    inner, outer = (POLICIES.index(value) for value in policy)
+    inner, outer = (POLICIES.index(value) for value in (policy.inner, policy.outer))
     assert re.search(rf"i32 {inner}, i32 {outer}, i32 0\)", calls[0]), calls
     assert "musa.tme.issue_thread = 128 : i32" in compiled.asm["ttgir"]
     assert "call void @llvm.musa.barrier0()" not in compiled.asm["llir"]
@@ -294,7 +302,7 @@ def test_tme_cache_policy_pipe_reuse_runtime():
 
 @pytest.mark.skipif(not torch.musa.is_available(), reason="MUSA device is not available")
 @pytest.mark.parametrize("policy", PAIRS)
-@pytest.mark.parametrize("split_policy", [False, True], ids=["tuple", "strings"])
+@pytest.mark.parametrize("split_policy", [False, True], ids=["object", "strings"])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_tme_cache_policy_warp_specialization_runtime(policy, split_policy, dtype):
     src = torch.randn((16, 64), dtype=dtype, device="musa")
@@ -302,3 +310,20 @@ def test_tme_cache_policy_warp_specialization_runtime(policy, split_policy, dtyp
     desc = TensorDescriptor.from_tensor(src, [16, 64])
     _ws_copy_kernel[(1, )](desc, dst, policy, split_policy, num_warps=4, num_stages=1)
     torch.testing.assert_close(dst.cpu(), src.cpu(), rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.musa.is_available(), reason="MUSA device is not available")
+def test_tme_cache_policy_jit_cache_runtime():
+    source = torch.randn((16, 64), device="musa", dtype=torch.float16)
+    out = torch.empty_like(source)
+    desc = TensorDescriptor.from_tensor(source, [16, 64])
+    first = _copy_kernel[(1, )](desc, out, 0, TMECachePolicy("once", "none"), True, False, num_warps=4, num_stages=1)
+    equal = _copy_kernel[(1, )](desc, out, 0, TMECachePolicy(inner="once", outer="none"), True, False, num_warps=4,
+                                num_stages=1)
+    different = _copy_kernel[(1, )](desc, out, 0, TMECachePolicy("normal", "none"), True, False, num_warps=4,
+                                    num_stages=1)
+    assert first is equal
+    assert first is not different
+    assert "musa.tme.inner_persistence = 1 : i32" in first.asm["ttir"]
+    assert "musa.tme.inner_persistence = 2 : i32" in different.asm["ttir"]
+    torch.testing.assert_close(out.cpu(), source.cpu(), rtol=0, atol=0)

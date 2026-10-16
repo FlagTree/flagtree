@@ -232,7 +232,7 @@ class TestPipeline:
 class TestWarpSpecializeFrontend:
     """Test warp_specialize front-end capture handling."""
 
-    @pytest.mark.parametrize("policy", ["once", ("once", "none")])
+    @pytest.mark.parametrize("policy", ["once", ("once", "none"), tle.gpu.mthreads.TMECachePolicy("once", "none")])
     @pytest.mark.parametrize("wrapped", [False, True])
     def test_constexpr_policy_has_no_runtime_capture(self, policy, wrapped):
         from triton.experimental.tle.language.gpu.core import _as_call_args
@@ -551,6 +551,31 @@ class TestBufferedTensor:
 
 class TestCachePolicyFrontend:
 
+    def test_policy_is_an_immutable_value(self):
+        from dataclasses import FrozenInstanceError
+        policy = tle.gpu.mthreads.TMECachePolicy("once", "none")
+        equal = tle.gpu.mthreads.TMECachePolicy(inner="once", outer="none")
+        different = tle.gpu.mthreads.TMECachePolicy("normal", "none")
+        assert policy == equal
+        assert policy != different
+        assert hash(policy) == hash(equal)
+        assert repr(policy) == repr(equal)
+        assert {policy: 1, equal: 2, different: 3} == {policy: 2, different: 3}
+        with pytest.raises(FrozenInstanceError):
+            policy.inner = "persist"
+
+    def test_policy_default_and_constexpr_fields(self):
+        policy = tle.gpu.mthreads.TMECachePolicy()
+        assert (policy.inner, policy.outer) == ("normal", "normal")
+        wrapped = tle.gpu.mthreads.TMECachePolicy(tl.constexpr("once"), tl.constexpr("none"))
+        assert wrapped == tle.gpu.mthreads.TMECachePolicy("once", "none")
+
+    @pytest.mark.parametrize("field", ["inner", "outer"])
+    @pytest.mark.parametrize("value", ["invalid", "last_use", "NORMAL", 0, None, ("once", "none")])
+    def test_policy_rejects_invalid_fields(self, field, value):
+        with pytest.raises(ValueError, match=f"TMECachePolicy {field} must be a compile-time string"):
+            tle.gpu.mthreads.TMECachePolicy(**{field: value})
+
     @pytest.mark.parametrize("enabled,common_ir", [(False, False), (False, True), (True, False), (True, True)])
     @pytest.mark.parametrize("wrapped", [False, True])
     def test_normalize_none_preserves_all_backends(self, monkeypatch, enabled, common_ir, wrapped):
@@ -566,7 +591,8 @@ class TestCachePolicyFrontend:
         from triton.experimental.tle.language.gpu import core
         monkeypatch.setattr(core.mthreads_common, "enabled", lambda: enabled)
         monkeypatch.setattr(core.tle_semantic, "COMMON_IR_ENABLED", common_ir)
-        policy = tl.constexpr(("once", "none")) if wrapped else ("once", "none")
+        policy = tle.gpu.mthreads.TMECachePolicy("once", "none")
+        policy = tl.constexpr(policy) if wrapped else policy
         with pytest.raises(ValueError, match="only supported by the MUSA TLE backend"):
             core.mthreads_copy.normalize_cache_policy(policy)
 
@@ -575,7 +601,8 @@ class TestCachePolicyFrontend:
         from triton.experimental.tle.language.gpu import core
         monkeypatch.setattr(core.mthreads_common, "enabled", lambda: True)
         monkeypatch.setattr(core.tle_semantic, "COMMON_IR_ENABLED", False)
-        policy = tl.constexpr(("once", "none")) if wrapped else ("once", "none")
+        policy = tle.gpu.mthreads.TMECachePolicy("once", "none")
+        policy = tl.constexpr(policy) if wrapped else policy
         assert core.mthreads_copy.normalize_cache_policy(policy) == (1, 0)
 
 
@@ -629,6 +656,7 @@ class TestTmaCopyBarrierFrontend:
             raise AssertionError("non-MUSA copy must not enter the MThreads implementation")
 
         monkeypatch.setattr(core.mthreads_copy, "tmacopy", unexpected_mthreads_copy)
+        monkeypatch.setattr(core.mthreads_copy, "normalize_cache_policy", unexpected_mthreads_copy)
         desc, buffer, semantic = self._make_desc_buffer_semantic([16, 16])
         kwargs = {"cache_policy": None} if explicit_none else {}
         if with_barrier:
@@ -648,8 +676,9 @@ class TestTmaCopyBarrierFrontend:
         monkeypatch.setattr(core.iluvatar_copy, "enabled", lambda: backend == "iluvatar")
         monkeypatch.setattr(core.tle_semantic, "COMMON_IR_ENABLED", backend == "common_ir")
         desc, buffer, semantic = self._make_desc_buffer_semantic([16, 16])
-        with pytest.raises(ValueError, match="only supported by the MUSA TLE backend"):
-            tle.gpu.copy(desc, buffer, (16, 16), (0, 0), cache_policy=("once", "none"), _semantic=semantic)
+        with pytest.raises(ValueError, match="copy cache_policy is not supported by this backend"):
+            tle.gpu.copy(desc, buffer, (16, 16), (0, 0), cache_policy=tle.gpu.mthreads.TMECachePolicy("once", "none"),
+                         _semantic=semantic)
         assert semantic.builder.tma_copy_args is None
 
     def test_copy_barrier_requires_barrier_value(self):

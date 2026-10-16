@@ -1118,10 +1118,11 @@ tle.gpu.copy(a_ptrs + ystride_a * yoffs[None, :], a_smem, [XBLOCK, YBLOCK])
 ```
 
 - Signature: `tle.gpu.copy(src, dst, shape, offsets=None, barrier=None, mask=None, cache_policy=None)`
-- `cache_policy`：可选的编译期 `(inner, outer)` 元组。每项接受 `"none"`、`"once"`、`"normal"` 或 `"persist"`。
+- `cache_policy`：可选的后端专属编译期策略对象；公共接口不规定其字段。
+- MThreads 接受 `tle.gpu.mthreads.TMECachePolicy(inner="normal", outer="normal")`。每个字段接受 `"none"`、`"once"`、`"normal"` 或 `"persist"`。该对象不可变，按字段值比较和计算哈希，用于 JIT 特化。
 - 显式策略仅支持 MThreads 后端的 tensor descriptor → shared memory 搬运。其他后端、CommonIR、普通指针 copy 和 shared → global copy 会拒绝非 `None` 策略。
 - 省略参数或传 Python `None` 保持既有行为（MUSA TME 为 `normal/normal`）。Python `None` 与字符串 `"none"` 不同。
-- 两个提示作用于同一次 copy；A、B 的 copy 可分别设置不同二元组。缓存提示不改变 barrier 完成或同步语义。
+- 两个提示作用于同一次 copy；A、B 的 copy 可分别设置不同策略对象。缓存提示不改变 barrier 完成或同步语义。
 
 缓存驻留提示对性能影响很大。应从默认策略开始，针对实际 kernel、shape、dtype 和布局逐一实测非默认组合。不能仅因为访问是流式的就选 `inner="none"`：它可能使 GEMM 性能严重退化。`outer="none"` 有收益也不代表 `inner="none"` 有收益。这些名称不保证强制绕过缓存、固定复用次数或锁定驻留；本 API 不定义其与物理 L1/L2 的映射。
 
@@ -1130,11 +1131,12 @@ tle.gpu.copy(a_ptrs + ystride_a * yoffs[None, :], a_smem, [XBLOCK, YBLOCK])
 ```python
 completion = tle.gpu.alloc_barrier(expect_bytes=BM * BK * 2)  # FP16/BF16
 tle.gpu.copy(a_desc, a_smem, [BM, BK], [m_offset, k_offset],
-             barrier=completion, cache_policy=("normal", "normal"))
+             barrier=completion,
+             cache_policy=tle.gpu.mthreads.TMECachePolicy(inner="normal", outer="normal"))
 tle.gpu.barrier_wait(completion, phaseIdx=0)
 ```
 
-`tl.constexpr` 策略元组也可作为参数传给 `warp_specialize` 的 producer worker。
+`TMECachePolicy` 可在 host 或 JIT kernel 内构造，并作为 `tl.constexpr` 参数传给 `warp_specialize` 的 producer worker。裸元组和字符串不作为 MThreads 缓存策略对象接受。
 
 ##### 3.3.1.2 执行编排
 
@@ -1148,7 +1150,7 @@ tle.gpu.barrier_wait(completion, phaseIdx=0)
   - `worker_num_warps`: worker partition 的 warp 数列表，长度必须等于 `len(functions_and_args) - 1`。
   - `worker_num_regs`: worker partition 的 requested register 数列表，长度必须等于 `len(functions_and_args) - 1`。
 - 语义：
-  - 每个 `args` 必须是 tuple；普通 Python `int/float/bool/str/tuple/tl.dtype` 会按 constexpr 传入。
+  - 每个 `args` 必须是 tuple；普通 Python `int/float/bool/str/tuple/tl.dtype`，以及 `.type` 为 `tl.constexpr_type` 的对象，会按 constexpr 传入。
   - default partition 可以返回值，`tle.gpu.warp_specialize(...)` 的返回值来自 default partition；worker partition 只执行副作用并以 warp return 结束。
   - worker partition 的 callee 会带上对应 `"ttg.num-warps"` 属性，region 上会记录 `requestedRegisters`。
   - 捕获到的 worker 参数会在 IR 中去重，多个 worker 可共享同一个 pipe endpoint 或 buffer handle。
