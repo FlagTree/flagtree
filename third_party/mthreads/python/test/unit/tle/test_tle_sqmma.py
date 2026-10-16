@@ -497,8 +497,8 @@ def _tle_sqmma_dual_wait_kernel(out):
         layout=None,
         nv_mma_shared_layout=True,
     )
-    b_lo = b.slice(0, half_n, dim=1)
-    b_hi = b.slice(half_n, half_n, dim=1)
+    b_lo = b.subslice(0, half_n, dim=1)
+    b_hi = b.subslice(half_n, half_n, dim=1)
     acc_lo = tle.gpu.wgmma(a, b_lo, tl.zeros((block_m, half_n), tl.float32))
     acc_hi = tle.gpu.wgmma(a, b_hi, tl.zeros((block_m, half_n), tl.float32))
     acc_lo = tle.gpu.wgmma_wait(0, acc_lo)

@@ -1393,7 +1393,6 @@ class GridExecutor:
                     arg.strides,
                     arg.block_shape,
                     arg.padding,
-                    getattr(arg, "stride_alignment", 16),
                 )
             elif not hasattr(arg, "data_ptr"):
                 return arg

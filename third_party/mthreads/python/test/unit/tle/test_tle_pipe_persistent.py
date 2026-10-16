@@ -110,8 +110,8 @@ def _persistent_single_reader(
         for k_iter in range(k_tiles):
             token = tile * k_tiles + k_iter
             ready = reader.wait(token)
-            b_lo = ready.slot.b.slice(0, half_n, dim=1)
-            b_hi = ready.slot.b.slice(half_n, half_n, dim=1)
+            b_lo = ready.slot.b.subslice(0, half_n, dim=1)
+            b_hi = ready.slot.b.subslice(half_n, half_n, dim=1)
             acc_lo = tle.gpu.wgmma(ready.slot.a, b_lo, acc_lo)
             acc_hi = tle.gpu.wgmma(ready.slot.a, b_hi, acc_hi)
             acc_lo = tle.gpu.wgmma_wait(0, acc_lo)
@@ -295,8 +295,8 @@ def _persistent_main_reader(
         for k_iter in range(k_tiles):
             token = epoch * k_tiles + k_iter
             ready = reader.wait(token)
-            b_lo = ready.slot.b_main.slice(0, half_n, dim=1)
-            b_hi = ready.slot.b_main.slice(half_n, half_n, dim=1)
+            b_lo = ready.slot.b_main.subslice(0, half_n, dim=1)
+            b_hi = ready.slot.b_main.subslice(half_n, half_n, dim=1)
             acc_lo = tle.gpu.wgmma(ready.slot.a, b_lo, acc_lo)
             acc_hi = tle.gpu.wgmma(ready.slot.a, b_hi, acc_hi)
             acc_lo = tle.gpu.wgmma_wait(0, acc_lo)

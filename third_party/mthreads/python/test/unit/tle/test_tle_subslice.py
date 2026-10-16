@@ -17,14 +17,10 @@ def _staged_subslice_kernel(
     START: tl.constexpr,
     LENGTH: tl.constexpr,
     DIM: tl.constexpr,
-    USE_SLICE: tl.constexpr,
 ):
     storage = tle.gpu.alloc((4, 2, 128), dtype=tl.float16, nv_mma_shared_layout=False)
     slot = storage.slot(0)
-    if USE_SLICE:
-        view = slot.slice(START, LENGTH, DIM)
-    else:
-        view = slot.subslice(START, LENGTH, DIM)
+    view = slot.subslice(START, LENGTH, DIM)
     tl.static_assert(view.type.alloc_shape[0] == 2)
     tl.static_assert(view.type.alloc_shape[1] == 128)
     tl.store(out, view.shape[0] * view.shape[1])
@@ -74,8 +70,8 @@ def _staged_rectangular_sqmma_kernel(a_desc, b_desc, out):
     tle.gpu.barrier_wait(a_ready, phaseIdx=0)
     tle.gpu.barrier_wait(b_ready, phaseIdx=0)
 
-    left = b.slice(0, half_n, 1)
-    right = b.slice(half_n, half_n, 1)
+    left = b.subslice(0, half_n, 1)
+    right = b.subslice(half_n, half_n, 1)
     left_acc = tle.gpu.wgmma(a, left, tl.zeros((block_m, half_n), dtype=tl.float32))
     right_acc = tle.gpu.wgmma(a, right, tl.zeros((block_m, half_n), dtype=tl.float32))
     left_acc = tle.gpu.wgmma_wait(0, left_acc)
@@ -169,12 +165,11 @@ def _partitioned_sqmma_kernel(a_top_desc, a_bottom_desc, b_desc, out):
     )
 
 
-@pytest.mark.parametrize("use_slice", [False, True], ids=["subslice", "slice"])
 @pytest.mark.parametrize(
     "start,length,dim",
     [(0, 1, 0), (1, 1, -2), (64, 64, 1), (64, 64, -1)],
 )
-def test_tle_buffered_tensor_subslice_builds_native_memdesc_view(start, length, dim, use_slice):
+def test_tle_buffered_tensor_subslice_builds_native_memdesc_view(start, length, dim):
     ttir = compile_to_ttir(
         _staged_subslice_kernel,
         {"out": "*i32"},
@@ -182,7 +177,6 @@ def test_tle_buffered_tensor_subslice_builds_native_memdesc_view(start, length, 
             "START": start,
             "LENGTH": length,
             "DIM": dim,
-            "USE_SLICE": use_slice,
         },
     )
     assert "ttg.memdesc_index" in ttir

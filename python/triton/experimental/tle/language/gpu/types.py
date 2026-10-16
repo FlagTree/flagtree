@@ -727,16 +727,6 @@ class buffered_tensor(tl.base_value):
         return buffered_tensor(sub_handle, self.dtype, sub_shape, self.type.storage, self.type.layout, _semantic,
                                alloc_shape=sub_ty.alloc_shape)
 
-    @tl.builtin
-    def slice(self, start, length, dim=-1, _semantic: TLESemantic | None = None):
-        """Compatibility spelling for a rank-preserving shared-memory slice.
-
-        This is equivalent to :meth:`subslice` and keeps the backing
-        allocation shape, which is required when several SQMMA consumers view
-        disjoint rectangles of one TME landing buffer.
-        """
-        return self.subslice(start, length, dim, _semantic=_semantic)
-
     def make_permute(self, handle, dims):
         permuted_layout = self.type.layout.make_permute(dims)
         alloc_shape = self.type.alloc_shape
