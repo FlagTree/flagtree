@@ -3,6 +3,7 @@
 #include "Dialect/MUSATLE/IR/Dialect.h"
 #include "TritonMUSACommon/MMAContractUtils.h"
 #include "TritonMUSACommon/MMAEncodingUtils.h"
+#include "TritonMUSACommon/TMEUtils.h"
 #include "TritonMUSAGPUTransforms/Passes.h"
 #include "ir.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -660,10 +661,10 @@ void init_triton_musa_tle_ir(py::module m) {
                           self.getBuilder().getI32IntegerAttr(expectBytes));
             if (cachePolicy) {
               op->setAttr(
-                  "musa.tme.inner_persistence",
+                  musa::kTMEInnerPersistenceAttr,
                   self.getBuilder().getI32IntegerAttr(cachePolicy->first));
               op->setAttr(
-                  "musa.tme.outer_persistence",
+                  musa::kTMEOuterPersistenceAttr,
                   self.getBuilder().getI32IntegerAttr(cachePolicy->second));
             }
           },

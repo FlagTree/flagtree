@@ -199,8 +199,8 @@ static LogicalResult lowerTMACopy(ttg::TMACopyOp op, RewriterBase &rewriter) {
     return op.emitOpError("expects one tensor descriptor operand and one "
                           "shared memdesc operand");
   }
-  if (!globalToLocal && (op->hasAttr("musa.tme.inner_persistence") ||
-                         op->hasAttr("musa.tme.outer_persistence")))
+  if (!globalToLocal && (op->hasAttr(triton::musa::kTMEInnerPersistenceAttr) ||
+                         op->hasAttr(triton::musa::kTMEOuterPersistenceAttr)))
     return op.emitOpError("cache persistence is only supported for "
                           "descriptor-to-shared copies");
 
@@ -226,8 +226,8 @@ static LogicalResult lowerTMACopy(ttg::TMACopyOp op, RewriterBase &rewriter) {
         triton::musa::TMECopyKind::GlobalToLocal);
     if (failed(config))
       return op.emitOpError("unable to resolve final TME load config");
-    auto inner = getTMEPersistence(op, "musa.tme.inner_persistence");
-    auto outer = getTMEPersistence(op, "musa.tme.outer_persistence");
+    auto inner = getTMEPersistence(op, triton::musa::kTMEInnerPersistenceAttr);
+    auto outer = getTMEPersistence(op, triton::musa::kTMEOuterPersistenceAttr);
     if (failed(inner) || failed(outer))
       return failure();
     config->innerPersistence = *inner;

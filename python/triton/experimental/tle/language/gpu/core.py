@@ -159,7 +159,7 @@ def _as_call_args(args):
         raise ValueError(f"warp_specialize function arguments must be a tuple, got {type(args).__name__}")
 
     def normalize(arg):
-        if isinstance(arg, (tl.dtype, float, int, bool)):
+        if isinstance(arg, (tl.dtype, float, int, bool, str, tuple)):
             return tl.constexpr(arg)
         return arg
 
@@ -1144,6 +1144,9 @@ def copy(
             or ``"persist"``. Supported only for MUSA descriptor-to-shared copies.
             Omission preserves the default ``("normal", "normal")`` behavior.
             Hints apply to this copy only and do not change synchronization.
+            Benchmark non-default pairs on the target workload. Streaming
+            access alone does not justify ``inner="none"``, which can severely
+            degrade GEMM performance.
         _semantic: Internal semantic analyzer for validation and compilation (user-provided)
 
     Raises:
@@ -1166,18 +1169,17 @@ def copy(
         Masked global -> local copy with zero fill:
             tle.copy(global_ptrs, local_buf, [64, 128], mask=valid)
 
-        MUSA TME load with per-copy cache persistence:
+        MUSA TME load with explicit default cache persistence:
             tle.gpu.copy(tma_desc, local_buf, [64, 64], [x_offset, y_offset],
-                         barrier=bar, cache_policy=("once", "none"))
+                         barrier=bar, cache_policy=("normal", "normal"))
+
         Logical tensor-descriptor -> automatic exact tiled buffer:
             local_buf = tle.alloc([80, 256], dtype=tl.float16, scope=tle.smem)
             tle.copy(desc_80x256, local_buf, [80, 256], [0, 0])
     """
     mthreads_enabled = mthreads_common.enabled()
     iluvatar_enabled = iluvatar_copy.enabled()
-    cache_policy = tl._unwrap_if_constexpr(cache_policy)
-    if cache_policy is not None and (not mthreads_enabled or tle_semantic.COMMON_IR_ENABLED):
-        raise ValueError("copy cache_policy is only supported by the MUSA TLE backend")
+    cache_policy = mthreads_copy.normalize_cache_policy(cache_policy)
 
     def normcopy(
         src: tl.tensor,

@@ -92,6 +92,55 @@ def test_tme_cache_policy_is_per_copy():
     assert re.search(r"i32 1, i32 0, i32 0\)", calls[1]), calls
 
 
+@triton.jit
+def _grouped_policy_kernel(a, b, out):
+    aa = tle.gpu.alloc((2, 16, 64), a.dtype, nv_mma_shared_layout=False)
+    bb = tle.gpu.alloc((2, 16, 64), b.dtype, nv_mma_shared_layout=False)
+    full = tle.gpu.alloc_barriers(2, expect_bytes=2 * 16 * 64 * a.dtype.primitive_bitwidth // 8)
+    pipe = tle.pipe(capacity=2, a=aa, b=bb)
+    writer = pipe.writer()
+    reader = pipe.reader()
+    for i in tl.static_range(4):
+        slot = writer.acquire(i)
+        tle.gpu.copy(a, slot.a, (16, 64), (i * 16, 0), barrier=full[i % 2], cache_policy=("persist", "normal"))
+        tle.gpu.copy(b, slot.b, (16, 64), (i * 16, 0), barrier=full[i % 2], cache_policy=("once", "none"))
+        writer.commit(i)
+        result = reader.wait(i)
+        av = tl.load(tle.gpu.local_ptr(result.slot.a)).to(tl.float32)
+        bv = tl.load(tle.gpu.local_ptr(result.slot.b)).to(tl.float32)
+        offsets = (i * 16 + tl.arange(0, 16))[:, None] * 64 + tl.arange(0, 64)[None, :]
+        tl.store(out + offsets, av + bv)
+        reader.release(i)
+
+
+def test_tme_cache_policy_preserves_grouped_completion():
+    compiled = compile_musa(_grouped_policy_kernel,
+                            signature={"a": "tensordesc<fp16[16,64]>", "b": "tensordesc<fp16[16,64]>", "out": "*fp32"})
+    calls = _tme_loads(compiled)
+    assert len(calls) == 8
+    assert all(re.search(r"i32 3, i32 2, i32 0\)", line) for line in calls[::2]), calls
+    assert all(re.search(r"i32 1, i32 0, i32 0\)", line) for line in calls[1::2]), calls
+    ttgir = compiled.asm["ttgir"]
+    # The two copies share one 4096-byte transaction per iteration, even
+    # though their cache hints differ. Reuse the same two completion slots.
+    assert ttgir.count("ttmg.barrier_add_trans") == 4
+    assert ttgir.count("ttmg.arrive_barrier_noret") == 4
+    add_trans = [line for line in compiled.asm["llir"].splitlines() if "call void @llvm.musa.async.add.trans(" in line]
+    assert len(add_trans) == 4
+    assert all("i32 4096)" in line for line in add_trans)
+
+
+@pytest.mark.skipif(not torch.musa.is_available(), reason="MUSA device is not available")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_tme_cache_policy_grouped_completion_runtime(dtype):
+    a = torch.randn((64, 64), device="musa", dtype=dtype)
+    b = torch.randn_like(a)
+    out = torch.empty((64, 64), device="musa", dtype=torch.float32)
+    _grouped_policy_kernel[(1, )](TensorDescriptor.from_tensor(a, [16, 64]), TensorDescriptor.from_tensor(b, [16, 64]),
+                                  out, num_warps=4, num_stages=1)
+    torch.testing.assert_close(out.cpu(), a.cpu().float() + b.cpu().float(), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("policy", [(), ("once", ), ("once", "none", "normal"), "once", 1, ("invalid", "none"),
                                     ("once", 0), ("once", "last_use")])
 def test_tme_cache_policy_rejects_invalid_values(policy):
@@ -171,8 +220,13 @@ def test_tme_cache_policy_survives_pipe_and_swizzle():
 
 
 @triton.jit
-def _ws_producer(desc, smem, full):
-    tle.gpu.copy(desc, smem, (16, 64), (0, 0), barrier=full, cache_policy=("once", "none"))
+def _ws_producer(desc, smem, full, POLICY: tl.constexpr):
+    tle.gpu.copy(desc, smem, (16, 64), (0, 0), barrier=full, cache_policy=POLICY)
+
+
+@triton.jit
+def _ws_producer_split(desc, smem, full, INNER: tl.constexpr, OUTER: tl.constexpr):
+    tle.gpu.copy(desc, smem, (16, 64), (0, 0), barrier=full, cache_policy=(INNER, OUTER))
 
 
 @triton.jit
@@ -184,18 +238,31 @@ def _ws_consumer(smem, full, out):
 
 
 @triton.jit
-def _ws_copy_kernel(desc, out):
+def _ws_copy_kernel(desc, out, POLICY: tl.constexpr, SPLIT_POLICY: tl.constexpr):
     smem = tle.gpu.alloc((16, 64), desc.dtype, nv_mma_shared_layout=False)
-    full = tle.gpu.alloc_barrier(expect_bytes=16 * 64 * 2)
-    tle.gpu.warp_specialize([(_ws_consumer, (smem, full, out)), (_ws_producer, (desc, smem, full))],
-                            worker_num_warps=[4], worker_num_regs=[24])
+    full = tle.gpu.alloc_barrier(expect_bytes=16 * 64 * desc.dtype.primitive_bitwidth // 8)
+    if SPLIT_POLICY:
+        inner: tl.constexpr = POLICY[0]
+        outer: tl.constexpr = POLICY[1]
+        tle.gpu.warp_specialize([(_ws_consumer, (smem, full, out)),
+                                 (_ws_producer_split, (desc, smem, full, inner, outer))], worker_num_warps=[4],
+                                worker_num_regs=[24])
+    else:
+        tle.gpu.warp_specialize([(_ws_consumer, (smem, full, out)), (_ws_producer, (desc, smem, full, POLICY))],
+                                worker_num_warps=[4], worker_num_regs=[24])
 
 
-def test_tme_cache_policy_preserves_warp_specialization():
-    compiled = compile_musa(_ws_copy_kernel, signature={"desc": "tensordesc<fp16[16,64]>", "out": "*fp16"})
+@pytest.mark.parametrize("policy", PAIRS)
+@pytest.mark.parametrize("split_policy", [False, True], ids=["tuple", "strings"])
+def test_tme_cache_policy_preserves_warp_specialization(policy, split_policy):
+    compiled = compile_musa(
+        _ws_copy_kernel, signature={
+            "desc": "tensordesc<fp16[16,64]>", "out": "*fp16", "POLICY": "constexpr", "SPLIT_POLICY": "constexpr"
+        }, constexprs={"POLICY": policy, "SPLIT_POLICY": split_policy})
     calls = _tme_loads(compiled)
     assert len(calls) == 1
-    assert re.search(r"i32 1, i32 0, i32 0\)", calls[0]), calls
+    inner, outer = (POLICIES.index(value) for value in policy)
+    assert re.search(rf"i32 {inner}, i32 {outer}, i32 0\)", calls[0]), calls
     assert "musa.tme.issue_thread = 128 : i32" in compiled.asm["ttgir"]
     assert "call void @llvm.musa.barrier0()" not in compiled.asm["llir"]
 
@@ -226,9 +293,12 @@ def test_tme_cache_policy_pipe_reuse_runtime():
 
 
 @pytest.mark.skipif(not torch.musa.is_available(), reason="MUSA device is not available")
-def test_tme_cache_policy_warp_specialization_runtime():
-    src = torch.randn((16, 64), dtype=torch.float16, device="musa")
+@pytest.mark.parametrize("policy", PAIRS)
+@pytest.mark.parametrize("split_policy", [False, True], ids=["tuple", "strings"])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_tme_cache_policy_warp_specialization_runtime(policy, split_policy, dtype):
+    src = torch.randn((16, 64), dtype=dtype, device="musa")
     dst = torch.empty_like(src)
     desc = TensorDescriptor.from_tensor(src, [16, 64])
-    _ws_copy_kernel[(1, )](desc, dst, num_warps=4, num_stages=1)
+    _ws_copy_kernel[(1, )](desc, dst, policy, split_policy, num_warps=4, num_stages=1)
     torch.testing.assert_close(dst.cpu(), src.cpu(), rtol=0, atol=0)

@@ -21,6 +21,7 @@
 import triton.language.core as tl
 
 from .. import types as tle
+from . import common
 
 
 def normalize_copy_shape(shape) -> tuple[int, ...]:
@@ -89,6 +90,10 @@ def normalize_cache_policy(cache_policy):
     cache_policy = tl._unwrap_if_constexpr(cache_policy)
     if cache_policy is None:
         return None
+    # Import lazily because gpu.semantic also imports this module.
+    from .. import semantic as tle_semantic
+    if not common.enabled() or tle_semantic.COMMON_IR_ENABLED:
+        raise ValueError("copy cache_policy is only supported by the MUSA TLE backend")
     if isinstance(cache_policy, tl.tuple):
         cache_policy = cache_policy.values
     if not isinstance(cache_policy, (tuple, list)) or len(cache_policy) != 2:
@@ -105,7 +110,6 @@ def normalize_cache_policy(cache_policy):
 
 def tmacopy(src, dst, direction, shape, offsets, barrier=None, cache_policy=None, _semantic=None) -> None:
     shape = normalize_copy_shape(shape)
-    cache_policy = normalize_cache_policy(cache_policy)
     desc = src if direction.name == "GM_TO_LOCAL" else dst
     buffer = dst if direction.name == "GM_TO_LOCAL" else src
 
