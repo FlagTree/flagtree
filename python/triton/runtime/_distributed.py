@@ -42,8 +42,11 @@ class DistributedRtContext:
         return cls._instance
 
     def __init__(self, _comm_ptr=None, _mem_ptr=None):
-        if _comm_ptr and _mem_ptr:
-            type(self)._init_count += 1
+        # Ordinary Triton launches query the context before FlagCX creates its
+        # handles. A lookup must not commit that empty state as initialized.
+        if not (_comm_ptr and _mem_ptr):
+            return
+        type(self)._init_count += 1
 
         if self._initialized:
             return
