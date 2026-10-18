@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ascend35x-dist-test:
+  ascend35x-dist:
     strategy:
       fail-fast: false
       matrix:
