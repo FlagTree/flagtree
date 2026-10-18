@@ -52,7 +52,6 @@ jobs:
       flaggems-tag: 'v5.3.5'
       flagtree-build-command: |-
         set -x
-        source ~/env.sh
         export FLAGTREE_BACKEND=ascend
         MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
       flaggems-pre-command: |-

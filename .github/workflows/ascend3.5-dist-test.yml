@@ -74,7 +74,6 @@ jobs:
         shell: bash
         run: |
           set -x
-          source ~/env.sh
           export FLAGTREE_BACKEND=ascend
           MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
 

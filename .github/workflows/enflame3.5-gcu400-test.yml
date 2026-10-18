@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  enflame35x-gcu400-unit-test:
+  enflame35x-gcu400:
     runs-on: enflame3.5-gcu400
     if: ${{ github.repository == 'flagos-ai/flagtree' && github.event.pull_request.draft == false }}
     steps:
