@@ -69,7 +69,7 @@ jobs:
           export FLAGTREE_BACKEND=ascend
           source ~/env.sh
           export PATH=~/.flagtree/ascend/llvm-7d5de303-ubuntu-aarch64-python311-compat/bin/:${PATH}  # clang
-          MAX_JOBS=32 python3 -m pip install . --no-build-isolation
+          MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
 
       - name: Clear cache if ClearCache label present
         if: steps.check_backend.outputs.should_skip != 'true'
@@ -77,7 +77,7 @@ jobs:
         uses: flagos-ai/FlagTree/.github/actions/clear-cache-if-labeled@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          backend: ascend-qwen3.6
+          backend: ascend
 
       - name: Start the service
         if: ${{ steps.check_backend.outputs.should_skip != 'true' }}
