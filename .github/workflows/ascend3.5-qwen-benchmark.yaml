@@ -66,8 +66,8 @@ jobs:
         shell: bash
         run: |
           set -x
-          export FLAGTREE_BACKEND=ascend
           source ~/env.sh
+          export FLAGTREE_BACKEND=ascend
           MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
 
       - name: Clear cache if ClearCache label present

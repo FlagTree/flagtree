@@ -47,9 +47,8 @@ jobs:
       flaggems-tag: 'v5.3.5'
       flagtree-build-command: |-
         set -x
-        export FLAGTREE_BACKEND=ascend
         source ~/env.sh
-        export PATH=~/.flagtree/ascend/llvm-7d5de303-ubuntu-aarch64-python311-compat/bin/:${PATH}
+        export FLAGTREE_BACKEND=ascend
         MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
       flaggems-pre-command: |-
         source /usr/local/Ascend/ascend-toolkit/set_env.sh
