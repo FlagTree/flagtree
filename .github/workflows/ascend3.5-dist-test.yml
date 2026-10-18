@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-name: Ascend3.5-DIST
+name: Ascend3.5-Dist
 
 on:
   schedule:
@@ -42,8 +42,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ascend3.5-910b-py311-dist, ascend3.5-910b-py312-dist,
-                 ascend3.5-910c-py311-dist, ascend3.5-910c-py312-dist]
+        runner: [ascend3.5-910c-py312-dist, ascend3.5-910c-py311-dist,
+                 ascend3.5-910b-py312-dist, ascend3.5-910b-py311-dist]
     runs-on: ${{ matrix.runner }}
     if: ${{ github.repository == 'flagos-ai/flagtree' && github.event.pull_request.draft == false }}
     steps:
