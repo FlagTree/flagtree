@@ -23,6 +23,7 @@ set_llvm_env = lambda path: set_env(
         'LLVM_SYSPATH': path,
         'PYTHONPATH': os.pathsep.join([str(Path(path) / "python_packages" / "mlir_core"),
                                        os.getenv("PYTHONPATH", "")]),
+        'PATH': os.pathsep.join([str(Path(path) / "bin"), os.getenv("PATH", "")]),
     })
 
 
@@ -565,9 +566,17 @@ cache.store(
 # ascend
 cache.store(
     file="llvm-7d5de303-ubuntu-aarch64-python311-compat",
-    condition=("ascend" == flagtree_backend),
+    condition=("ascend" == flagtree_backend) and sys.version_info[:2] == (3, 11),
     url=
     "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/llvm-7d5de303-ubuntu-aarch64-python311-compat_v0.6.0.tar.gz",
+    pre_hock=lambda: check_env('LLVM_SYSPATH'),
+    post_hock=set_llvm_env,
+)
+cache.store(
+    file="llvm-7d5de303-ubuntu-aarch64-python312-compat",
+    condition=("ascend" == flagtree_backend) and sys.version_info[:2] == (3, 12),
+    url=
+    "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/llvm-7d5de303-ubuntu-aarch64-python312-compat_v0.7.0.tar.gz",
     pre_hock=lambda: check_env('LLVM_SYSPATH'),
     post_hock=set_llvm_env,
 )

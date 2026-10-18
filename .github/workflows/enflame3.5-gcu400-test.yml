@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  enflame35x-gcu400-unit-test:
+  enflame35x-gcu400:
     runs-on: enflame3.5-gcu400
     if: ${{ github.repository == 'flagos-ai/flagtree' && github.event.pull_request.draft == false }}
     steps:
@@ -81,7 +81,7 @@ jobs:
           python3 -m pip uninstall -y triton --break-system-packages
           python3 -m pip uninstall -y triton_gcu --break-system-packages
           export FLAGTREE_BACKEND=enflame
-          MAX_JOBS=32 python3 -m pip install . --no-build-isolation --break-system-packages
+          MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v --break-system-packages
 
       - name: Clear cache if ClearCache label present
         if: steps.check_backend.outputs.should_skip != 'true'

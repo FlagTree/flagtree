@@ -18,39 +18,41 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-name: Ascend3.5-910C-Gems-Test
+name: Ascend3.5-Gems-Baseline
 
 on:
-  pull_request:
+  push:
     branches: ["triton_v3.5.x"]
-    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  # Group by PR number for pull_request events to cancel outdated runs from the same PR.
+  # Group by commit SHA for push events to allow parallel runs from different merges.
   # Fall back to run_id for other events (e.g., schedule) to ensure each run is independent.
   group: ${{ github.workflow }}-${{
-    github.event_name == 'pull_request' && github.event.pull_request.number ||
+    github.event_name == 'push' && github.event.head_commit.id ||
     github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  ascend35x-910c:
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
-    uses: flagos-ai/FlagTree/.github/workflows/template-gems-test.yml@main
+  ascend35x:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ascend3.5-910c-py312, ascend3.5-910c-py311,
+                 ascend3.5-910b-py312]
+    if: ${{ github.event_name == 'push' }}
+    uses: flagos-ai/FlagTree/.github/workflows/template-gems-baseline.yml@main
     with:
-      runner: ascend3.5-910c
+      runner: ${{ matrix.runner }}
       backend: ascend
       gpu-env-var: ASCEND_RT_VISIBLE_DEVICES
       flaggems-tag: 'v5.3.5'
       flagtree-build-command: |-
         set -x
         export FLAGTREE_BACKEND=ascend
-        source ~/env.sh
-        export PATH=~/.flagtree/ascend/llvm-7d5de303-ubuntu-aarch64-python311-compat/bin/:${PATH}
         MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
       flaggems-pre-command: |-
         source /usr/local/Ascend/ascend-toolkit/set_env.sh

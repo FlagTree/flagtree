@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-name: CD-Ascend3.5
+name: CD-Ascend3.5-Py311
 
 on:
   workflow_dispatch:
@@ -76,7 +76,7 @@ on:
 
 jobs:
   call-delivery:
-    uses: flagos-ai/flagtree/.github/workflows/ascend3.5-delivery.yml@main
+    uses: flagos-ai/flagtree/.github/workflows/ascend3.5-py311-delivery.yml@main
     with:
       WHL_VER: ${{ inputs.WHL_VER }}
       PYTHON_VER: ${{ inputs.PYTHON_VER }}

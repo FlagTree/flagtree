@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-name: Ascend3.5-910B
+name: Ascend3.5
 
 on:
   schedule:
@@ -38,8 +38,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ascend35x-910b-unit-test:
-    runs-on: ascend3.5-910b
+  ascend35x:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ascend3.5-910c-py312, ascend3.5-910c-py311,
+                 ascend3.5-910b-py312]
+    runs-on: ${{ matrix.runner }}
     if: ${{ github.repository == 'flagos-ai/flagtree' && github.event.pull_request.draft == false }}
     steps:
       - name: Setup environment
@@ -70,9 +75,7 @@ jobs:
         run: |
           set -x
           export FLAGTREE_BACKEND=ascend
-          source ~/env.sh
-          export PATH=~/.flagtree/ascend/llvm-7d5de303-ubuntu-aarch64-python311-compat/bin/:${PATH}  # clang
-          MAX_JOBS=32 python3 -m pip install . --no-build-isolation
+          MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
 
       - name: Clear cache if ClearCache label present
         if: steps.check_backend.outputs.should_skip != 'true'
