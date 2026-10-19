@@ -33,11 +33,6 @@
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
-// warp_specialize on RDNA exists only for the FlagMega/TLE cooperative
-// megakernel; isolate the whole pass (and its tablegen registration, guarded in
-// Passes.td) behind __TLE__ so a non-TLE build neither defines nor registers it.
-#ifdef __TLE__
-
 namespace mlir {
 
 #define GEN_PASS_DEF_TRITONAMDGPUCONVERTWARPSPECIALIZE
@@ -275,5 +270,3 @@ struct TritonAMDGPUConvertWarpSpecializePass
 
 } // namespace
 } // namespace mlir
-
-#endif // __TLE__

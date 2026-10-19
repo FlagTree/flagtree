@@ -7,22 +7,26 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
-// TLE-only: these lower the amdgpu Init/Arrive/WaitBarrier ops that exist solely
-// as the tle.pipe mbarrier emulation (created by TleLowerPipeToRDNA). A non-TLE
-// build has no such ops, so the whole lowering is guarded.
-#ifdef __TLE__
+// This lowers the native amdg Init/Wait/Arrive barrier ops (the Gluon gfx1250
+// mbarrier path, bound via create_lds_barrier_* in gluon_ir.cc). TLE reuses the
+// same ops for its tle.pipe mbarrier emulation on RDNA; the TLE-specific
+// divergences below are guarded by __TLE__, the rest stays native.
 using namespace mlir;
 using namespace mlir::triton;
 
 constexpr int kBarrierCountBitWidth = 29;
-// The phase field occupies bits [kBarrierCountBitWidth : 31] of the i64 word, but
-// the emulated arrive/wait path uses only a single toggling bit (0<->1). This
-// matches the i1 parity carried by `tle.pipe` (writer/reader $phase), so a pipe
-// wait can pass that parity straight into WaitBarrier. A wider decrementing phase
-// would break stage reuse: after one flip the field would read 7 and a wait on
-// parity 1 would return immediately. The gfx1250 hardware-arrive branch below is
-// not used by any Radeon part, so narrowing this read is inconsequential there.
+// The phase field occupies bits [kBarrierCountBitWidth : 31] of the i64 word.
+// The native Gluon mbarrier path keeps the full-width decrementing phase; the
+// TLE emulation narrows it to a single toggling bit (0<->1) to match the i1
+// parity carried by `tle.pipe` (writer/reader $phase), so a pipe wait can pass
+// that parity straight into WaitBarrier. A wider phase would break tle stage
+// reuse: after one flip the field would read 7 and a wait on parity 1 would
+// return immediately.
+#ifdef __TLE__
 constexpr int kBarrierPhaseMask = 1;
+#else
+constexpr int kBarrierPhaseMask = ((1ULL << (32 - kBarrierCountBitWidth)) - 1);
+#endif
 constexpr int kInitCountPos = 32;
 
 namespace {
@@ -218,5 +222,3 @@ void mlir::triton::AMD::populateBarrierOpToLLVMPatterns(
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, targetInfo, benefit);
 }
-
-#endif // __TLE__

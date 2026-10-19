@@ -291,11 +291,9 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
   ];
 }
 
-// TLE-only: ttg.warp_specialize is lowered to RDNA waves only for the FlagMega
-// megakernel. mlir-tblgen receives -D__TLE__ (LLVM_TABLEGEN_FLAGS), so guarding
-// the pass def here also drops its blanket GEN_PASS_REGISTRATION in non-TLE
-// builds -- no dangling pass factory, nothing to link.
-#ifdef __TLE__
+// Lower ttg.warp_specialize to a static RDNA wave-id partition. Part of the
+// standard AMD pipeline (add_convert_warp_specialize); a no-op when no
+// warp_specialize op is present, so it is unconditionally defined/registered.
 def TritonAMDGPUConvertWarpSpecialize : Pass<"tritonamdgpu-convert-warp-specialize", "mlir::ModuleOp"> {
   let summary = "Lower ttg.warp_specialize to a static wave-id partition (RDNA)";
 
@@ -314,6 +312,5 @@ def TritonAMDGPUConvertWarpSpecialize : Pass<"tritonamdgpu-convert-warp-speciali
                            "mlir::arith::ArithDialect",
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
-#endif // __TLE__
 
 #endif

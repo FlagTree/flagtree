@@ -289,10 +289,8 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
-#ifdef __TLE__
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                          AMDBenefit);
-#endif // __TLE__
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
                                             AMDBenefit);
 
