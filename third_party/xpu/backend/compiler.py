@@ -247,6 +247,12 @@ class XPUOptions:
                 warnings.warn(f'libdevice not found: {extern_libs["libdevice-sdnn"]}', UserWarning)
                 del extern_libs["libdevice-sdnn"]
 
+        try:
+            from .distributed import Distributed
+            extern_libs.update(Distributed().get_extern_libs())
+        except Exception:
+            pass
+
         object.__setattr__(self, "extern_libs", tuple(extern_libs.items()))
 
         invalid_params = []
@@ -316,6 +322,8 @@ class XPUBackend(BaseBackend):
     def make_ttxir(mod, metadata, opt):
         metadata["xpu_arch"] = opt.arch
         metadata["is_tle"] = XPUBackend.is_tle_kernel(mod)
+        from triton.runtime._distributed import DistributedRtContext
+        metadata["flagcx_implicit_args"] = bool(DistributedRtContext().is_lite_mode and metadata["is_tle"])
         metadata["is_sdnn"] = opt.is_sdnn or xpu.is_sdnn_kernel(mod)
         # tensor_args drives the launch-time scaled-buffer quantization (findmax +
         # cast_te) in device/xpu3/launch.cpp, which replaces the input pointer with
@@ -367,6 +375,8 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.ttir.add_loop_aware_cse(pm)
         if metadata["is_tle"]:
+            if metadata["flagcx_implicit_args"]:
+                xpu.passes.ttxpuir.add_params_for_distribution(pm)
             # TLE path: independent IR pipeline, skip all normcopy optimization passes.
             # TritonToTritonXPU adds ClusterLayout encoding needed for type conversion.
             # TLE-specific ops (tle_copy_g2l/l2g, tle_local_ptr) + triton.load/store
@@ -712,10 +722,12 @@ class XPUBackend(BaseBackend):
 
         if opt.extern_libs:
             if metadata["is_sdnn"]:
-                paths = [path for (name, path) in opt.extern_libs if "sdnn" in name and xpu.llvm.need_extern_lib(mod)]
+                paths = [path for (name, path) in opt.extern_libs
+                         if "sdnn" in name and name != "libflagcx" and xpu.llvm.need_extern_lib(mod)]
             else:
                 paths = [
-                    path for (name, path) in opt.extern_libs if "sdnn" not in name and xpu.llvm.need_extern_lib(mod)
+                    path for (name, path) in opt.extern_libs
+                    if "sdnn" not in name and name != "libflagcx" and xpu.llvm.need_extern_lib(mod)
                 ]
             assert (len(paths) <= 1), f"Expected 0/1 extern_lib path, but found {len(paths)}"
             llvm.link_extern_libs(llvm_mod, paths)
@@ -792,6 +804,14 @@ class XPUBackend(BaseBackend):
         triple = f"xpu{opt.arch}-baidu-none-gnu"
         proc = f"xpu{opt.arch}"
         ir_text = llvm19_toolchain.downgrade_ir(mod._ir_for_lowering(), "xpu")
+        from .distributed import has_flagcx_extern_deps, link_flagcx_device_ir
+        metadata["xpu_uses_flagcx"] = has_flagcx_extern_deps(ir_text)
+        if metadata["xpu_uses_flagcx"]:
+            flagcx_bitcode = next((path for name, path in opt.extern_libs if name == "libflagcx"), None)
+            if not flagcx_bitcode:
+                raise RuntimeError("XPU distributed operations require XPU FlagCX device bitcode; "
+                                   "set FLAGCX_BITCODE_PATH to libflagcx_device.bc")
+            ir_text = link_flagcx_device_ir(ir_text, flagcx_bitcode)
         # Merge the payloads in after the downgrade (they are LLVM 19 text).
         try:
             ir_text = merge_raw_payloads(ir_text, metadata, "xpu", opt.arch)
