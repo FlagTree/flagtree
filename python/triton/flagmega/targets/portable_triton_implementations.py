@@ -14,32 +14,39 @@ they genuinely only make sense on NVIDIA hardware.
 
 from dataclasses import replace
 
+from triton.flagmega.codegen.triton.delta_rule_implementations import delta_rule_implementations
 from triton.flagmega.codegen.triton.implementation import (
     TritonImplementation,
     TritonImplementationModel,
 )
 from triton.flagmega.codegen.triton.portable_implementations import (
-    portable_sparse_experts_implementations,
-    portable_axis_reduction_implementations,
-    portable_tensor_transform_implementations,
-    portable_router_elementwise_implementations,
     portable_attention_implementations,
     portable_attention_preferences,
+    portable_axis_reduction_implementations,
+    portable_gather_implementations,
+    portable_kda_implementations,
     portable_local_reduction_implementations,
     portable_local_reduction_preferences,
+    portable_mhc_implementations,
     portable_normalization_implementations,
     portable_normalization_preferences,
+    portable_router_elementwise_implementations,
+    portable_sparse_experts_implementations,
+    portable_staged_routing_implementations,
+    portable_tensor_transform_implementations,
 )
 from triton.flagmega.ir import tensor_type
-from triton.flagmega.codegen.triton.delta_rule_implementations import delta_rule_implementations
-from triton.flagmega.targets.nvidia.shared_layout import align_shared_workspaces
-from triton.flagmega.targets.nvidia.gdn import gdn_state_pipeline_implementations, gdn_large_key_implementations
 from triton.flagmega.ir.tir import (
     TIRAuxiliaryConsumerContract,
     TIRSharedWorkspaceDescriptor,
     TIRTransferPipelineChannel,
     TIRTransferPipelineContract,
 )
+from triton.flagmega.targets.nvidia.gdn import gdn_large_key_implementations, gdn_state_pipeline_implementations
+from triton.flagmega.targets.nvidia.mhc import mhc_contiguous_tf32_implementations
+from triton.flagmega.targets.nvidia.mla import mla_projection_implementations
+from triton.flagmega.targets.nvidia.shared_layout import align_shared_workspaces
+from triton.flagmega.targets.nvidia.sparse_experts import sparse_experts_wgmma_implementations
 
 
 def _implementation(
@@ -54,6 +61,29 @@ def _implementation(
     shared_workspaces=(),
     transfer_pipeline=None,
 ) -> TritonImplementation:
+    facts = dict(facts or {})
+    # The decode lookup addresses the table by (token_id, feature).  The
+    # vocabulary axis is always broadcast -- a token id is a runtime value, so
+    # an owner holding only some rows could not answer for the rest -- and the
+    # feature axis is projected exactly onto the output's, so a chip-compact
+    # table needs no Boxing: the renderer indexes it with the local feature
+    # coordinate.  Pinning `weight` canonical here instead obliged every chip to
+    # store the whole vocabulary.
+    if (
+        facts.get("host_tensor_descriptor")
+        and (parameters or {}).get("descriptor_kind") != "table"
+    ):
+        # A single tensor map spans the canonical weight shape, so it needs a
+        # canonical global base address. Make that requirement visible before
+        # allocation. A descriptor table instead emits one map per resident
+        # owner, so it addresses whatever storage the weight already has and
+        # must not force every chip to hold the whole tensor.
+        arguments = {
+            "dense_matmul": ("rhs",),
+            "dense_matmul_glu": ("gate_weight", "up_weight"),
+        }.get(family)
+        if arguments is not None:
+            facts["canonical_global_arguments"] = arguments
     return TritonImplementation(
         candidate_id,
         family,
@@ -76,7 +106,14 @@ def portable_triton_implementation_model() -> TritonImplementationModel:
         *gdn_large_key_implementations(),
         *delta_rule_implementations(),
         *portable_tensor_transform_implementations(),
+        *portable_gather_implementations(),
+        *portable_kda_implementations(),
+        *portable_mhc_implementations(),
+        *mhc_contiguous_tf32_implementations(),
+        *mla_projection_implementations(),
+        *portable_staged_routing_implementations(),
         *portable_sparse_experts_implementations(),
+        *sparse_experts_wgmma_implementations(),
         *portable_axis_reduction_implementations(),
         *portable_router_elementwise_implementations(),
         *portable_attention_implementations(),
@@ -149,6 +186,14 @@ def portable_triton_implementation_model() -> TritonImplementationModel:
             facts={"portable_triton": True},
         ),
         _implementation(
+            "tir.elementwise.cast.typed",
+            "elementwise",
+            "cast",
+            {"vector_groups": 32},
+            contract={"semantic_op": "tensors.cast", "vectorization_kind": "typed_elements"},
+            facts={"portable_triton": True},
+        ),
+        _implementation(
             "tir.embedding.decode",
             "embedding",
             "decode",
@@ -218,6 +263,19 @@ def portable_triton_implementation_model() -> TritonImplementationModel:
                 "supports_mean": True,
                 "axis_kind": "suffix",
                 "bias_mode": "tensor",
+            },
+            facts={"portable_triton": True},
+        ),
+        _implementation(
+            "tir.gated_norm_apply.local",
+            "gated_norm_apply",
+            "local",
+            {"block_size": 1024},
+            contract={
+                "supports_mean": True,
+                "axis_kind": "suffix",
+                "bias_mode": "tensor",
+                "activations": ("sigmoid", "silu", "swish"),
             },
             facts={"portable_triton": True},
         ),
@@ -665,6 +723,45 @@ def portable_triton_implementation_model() -> TritonImplementationModel:
                 ), ),
                 capacity=4,
             ),
+        ),
+        _implementation(
+            "tir.dense_matmul.packed_k_major_threaded_fma",
+            "dense_matmul",
+            "packed_k_major_threaded_fma",
+            {"block_k": 1024, "tile_n": 8, "dot_lanes": 128, "values_per_lane": 8,
+             "compute_num_warps": 4},
+            contract={
+                "supports_local_row_loop": True,
+                "input_kind": "packed",
+                "epilogue": "none",
+                "vectorization_kind": "output_axis",
+                "distribution_kind": "canonical",
+                "packed_layout": "k_major_n8_k16",
+                "required_input_dtype": "bfloat16",
+                "required_output_dtype": "float32",
+                "requires_unpartitioned_reduction": True,
+                "supports_masked_output_tiles": True,
+            },
+            requires=("cooperative_grid",),
+        ),
+        _implementation(
+            "tir.dense_matmul.packed_k_major_mma",
+            "dense_matmul",
+            "packed_k_major_mma",
+            {"block_k": 32, "tile_n": 16, "compute_num_warps": 4},
+            contract={
+                "supports_local_row_loop": True,
+                "input_kind": "packed",
+                "epilogue": "none",
+                "vectorization_kind": "output_axis",
+                "distribution_kind": "canonical",
+                "packed_layout": "k_major_n8_k16",
+                "required_input_dtype": "bfloat16",
+                "required_output_dtype": "bfloat16",
+                "requires_unpartitioned_reduction": True,
+                "supports_masked_tiles": True,
+            },
+            requires=("mma_v3",),
         ),
         _implementation(
             "tir.dense_matmul.packed_k_major_gemv",
@@ -1917,6 +2014,7 @@ def portable_triton_implementation_model() -> TritonImplementationModel:
     ),)
     attention_preferences = portable_attention_preferences()
     preferences = {
+        "mla_projection": ("tir.mla_projection.mma",),
         "delta_rule_gates": ("tir.delta_rule_gates.local",),
         "l2_normalization": ("tir.l2_normalization.local",),
         "delta_rule_coefficients": ("tir.delta_rule_coefficients.blockwise",),
@@ -1934,6 +2032,9 @@ def portable_triton_implementation_model() -> TritonImplementationModel:
         ),
         "norm_apply": (
             "tir.norm_apply.local",
+        ),
+        "gated_norm_apply": (
+            "tir.gated_norm_apply.local",
         ),
         "gdn_convolution": ("tir.gdn_convolution.persistent",),
         "gdn_recurrent": ("tir.gdn_recurrent.persistent", "tir.gdn_recurrent.persistent_k256",
@@ -1958,6 +2059,8 @@ def portable_triton_implementation_model() -> TritonImplementationModel:
             "tir.dense_matmul.split_k_n_packed_k_major_gemv_tn64",
             "tir.dense_matmul.split_k_n_packed_k_major_gemv_tn128",
             "tir.dense_matmul.split_k_n_packed_k_major_gemv_tn64_bk128",
+            "tir.dense_matmul."
+            "split_k_n_packed_tensor_descriptor_table_smem_pipeline_gemv",
             "tir.dense_matmul.split_k_n_packed_k_major_gemv",
             "tir.dense_matmul.split_k_packed_k_major_gemv",
             "tir.dense_matmul.split_k_gemv",

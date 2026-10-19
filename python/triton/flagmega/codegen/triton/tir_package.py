@@ -4,10 +4,9 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from math import prod
-import re
-from .descriptor_resources import DescriptorResources
 
 from triton.flagmega.codegen.triton.function_call import (
     emit_function_call_arguments,
@@ -23,23 +22,28 @@ from triton.flagmega.codegen.triton.package_plan import (
     plain_package_value,
     require_package_plan,
 )
+from triton.flagmega.codegen.triton.physical_access import emit_triton_scalar_type
 from triton.flagmega.codegen.triton.pipeline_source import (
     build_pipeline_source_schedule,
     function_call_storage_roots,
 )
 from triton.flagmega.codegen.triton.runtime_binding import (
+    DEVICE_CONTEXT_ABI,
+    DEVICE_CONTEXT_ARGUMENTS,
+    DEVICE_CONTEXT_HANDLES,
+    DEVICE_CONTEXT_MODE,
     describe_function_runtime_binding,
 )
-from triton.flagmega.codegen.triton.physical_access import emit_triton_scalar_type
 from triton.flagmega.codegen.triton.templates import (
     KernelTemplateSpec,
     TritonTemplateRegistry,
     module_template_target,
 )
 from triton.flagmega.errors import CodegenError, IRVerificationError
-from triton.flagmega.ir import IRModule, verify_buffer_plan, verify_module
-from triton.flagmega.ir import execution_calls_of
+from triton.flagmega.ir import IRModule, execution_calls_of, verify_buffer_plan, verify_module
+from triton.flagmega.ir.ops.math._block_scaled import block_scaled_precision_supports_target
 
+from .descriptor_resources import DescriptorResources
 
 TIR_PACKAGE_DESCRIPTOR_SCHEMA = "flagmega.triton-package-descriptor/v1"
 
@@ -86,6 +90,31 @@ def describe_tir_package(module: IRModule) -> dict[str, object]:
         for name in function_names
     }
     _verify_package_call_closure(package_plan, bindings)
+
+    cooperative = bool(plan_launch.get("cooperative_grid", False))
+    mesh = (
+        _mesh_context(launch.get("grid_mesh"))
+        if cooperative
+        else _local_mesh(launch.get("grid_mesh"))
+    )
+    # A chip/node coordinate comes from the FlagCX runtime context rather
+    # than the per-rank Triton launch grid.  Thread that context through every
+    # generated wrapper as one tuple of runtime handles so nested calls and
+    # kernel helpers observe the same topology without address specialization.
+    needs_device_dptr = bool(mesh.get("mesh_requires_device_dptr", False))
+    if needs_device_dptr:
+        for binding in bindings.values():
+            binding["signature"] = [*binding["signature"], "device_dptr"]
+        for calls in encoded_calls.values():
+            for call in calls:
+                descriptor_parameters = tuple(call.get("descriptor_parameters", ()))
+                pointer_count = len(call["arguments"]) - len(descriptor_parameters)
+                pointer_arguments = list(call["arguments"][:pointer_count])
+                descriptors = list(call["arguments"][pointer_count:])
+                if "device_dptr" not in pointer_arguments:
+                    pointer_arguments.append("device_dptr")
+                call["arguments"] = [*pointer_arguments, *descriptors]
+                call["signature"] = ", ".join(call["arguments"])
 
     root_binding = bindings[module.entry]
     replicated_block_runtime_pool = any(
@@ -139,23 +168,72 @@ def describe_tir_package(module: IRModule) -> dict[str, object]:
         for name in function_names
         for call in encoded_calls[name]
     ]
-    cooperative = bool(plan_launch.get("cooperative_grid", False))
-    mesh = (
-        _mesh_context(launch.get("grid_mesh"))
-        if cooperative
-        else _local_mesh(launch.get("grid_mesh"))
-    )
+    device_function_names = {
+        definition["function"]
+        for definition in source_schedule.get("device_functions", ())
+    } if source_schedule is not None else set()
+    for name, calls in encoded_calls.items():
+        for call in calls:
+            call["device_function_parent"] = name in device_function_names
+    # A stage the schedule invokes once per loop trip shares one pipe instance
+    # across trips, so its template renders a trip-base offset and leaves the
+    # stream open; mark those wrappers before any template sees them.
+    if source_schedule is not None:
+        trip_scoped, trip_dynamic = _trip_scoped_stage_calls(source_schedule)
+        for call in wrappers:
+            call_id = str(call.get("call"))
+            if call_id in trip_scoped:
+                call["trip_scoped_pipe"] = True
+            if call_id in trip_dynamic:
+                call["trip_scoped_dynamic"] = True
     grid_barrier_axis_groups = _attach_grid_barrier_axis_groups(
         entry_events,
         source_schedule,
         mesh,
     )
-    owner_count = int(mesh["mesh_size"])
-    for call in wrappers:
-        if call["family"] == "add_norm_stats":
-            call["owner_count"] = owner_count
+    device_window_storage = _device_window_storage(wrappers, root_binding)
+    # Ordinary entries execute one program. Cooperative wrappers retain the
+    # chip-local reduction groups derived from their physical buffer ABI;
+    # logical mesh_size also counts device/node replicas of the allocation.
+    if not cooperative:
+        for call in wrappers:
+            if call["family"] == "add_norm_stats":
+                call["owner_count"] = 1
+                call["owner_index"] = "0"
+            elif call["family"] == "greedy_sample":
+                call["partial_owner_count"] = 1
+                call["partial_owner_index"] = "0"
 
     platform, architecture = module_template_target(module)
+    if (platform != "nvidia" or architecture != "sm90") and any(
+        call.get("decode_schedule") == "bf16_mma" for calls in encoded_calls.values() for call in calls
+    ):
+        raise CodegenError("DSA bf16_mma requires the NVIDIA SM90 target.")
+    if (platform != "nvidia" or architecture != "sm90") and any(
+        call.get("kda_reduction_layout") == "warp_k" for calls in encoded_calls.values() for call in calls
+    ):
+        raise CodegenError("KDA warp_k requires the NVIDIA SM90 target.")
+    if (platform != "nvidia" or architecture != "sm90") and any(
+        call.get("norm_stats_reduction_algorithm") == "fma_1024"
+        for calls in encoded_calls.values() for call in calls
+    ):
+        raise CodegenError("NormStats fma_1024 requires the NVIDIA SM90 target.")
+    if (platform != "nvidia" or architecture != "sm90") and any(
+        call.get("norm_stats_reduction_layout") == "contiguous_8"
+        or call.get("norm_partial_reduction") == "global_tree"
+        for calls in encoded_calls.values() for call in calls
+    ):
+        raise CodegenError("Contiguous NormStats/global-tree finalization requires the NVIDIA SM90 target.")
+    if int(plan_launch["num_warps"]) < 2 and any(
+        call.get("norm_stats_reduction_algorithm") == "fma_1024"
+        for calls in encoded_calls.values() for call in calls
+    ):
+        raise CodegenError("NormStats fma_1024 requires at least two compute warps.")
+    # A resumed raw TIR call also has to satisfy the approximation's target
+    # contract; candidate filtering alone cannot protect this entry point.
+    if any(not block_scaled_precision_supports_target(call.get("semantic_attrs", {}), platform, architecture)
+           for calls in encoded_calls.values() for call in calls):
+        raise CodegenError("SM90 reciprocal activation quantization requires the NVIDIA SM90 target.")
     raw_templates = package_plan.get("kernel_templates")
     if not isinstance(raw_templates, (tuple, list)):
         raise CodegenError("TIR package plan has no kernel-template closure.")
@@ -176,20 +254,34 @@ def describe_tir_package(module: IRModule) -> dict[str, object]:
         root_signature,
     )
     descriptor_names = [str(value["name"]) for value in descriptor_specs]
-    signature = [*root_signature, *descriptor_names]
+    offset_tables = source_schedule["function_offset_tables"] if source_schedule else []
+    entry_signature = [field for name in root_signature
+                       for field in (DEVICE_CONTEXT_ARGUMENTS if name == "device_dptr" else (name,))]
+    signature = [*entry_signature, *descriptor_names, *(table["name"] for table in offset_tables)]
+    if len(signature) != len(set(signature)):
+        raise CodegenError(
+            "TIR entry ABI requires unique argument names across buffers, "
+            "device context, descriptors and function offset tables."
+        )
     scalar_arguments = {
         str(value["name"]): str(value["scalar_dtype"])
         for value in root_binding["arguments"]
         if value.get("runtime_value_kind") == "scalar"
     }
-    typed_signature = ",\n    ".join(
-        f"{name}: {emit_triton_scalar_type(scalar_arguments[name])}" if name in scalar_arguments else name
+    if needs_device_dptr:
+        scalar_arguments.update({name: "int64" for name in DEVICE_CONTEXT_HANDLES})
+    typed_signature_arguments = [
+        f"{name}: tl.constexpr" if needs_device_dptr and name == DEVICE_CONTEXT_MODE else name
         for name in signature
+    ]
+    typed_signature = ",\n    ".join(
+        f"{name}: {emit_triton_scalar_type(scalar_arguments[name])}" if name in scalar_arguments else typed_name
+        for name, typed_name in zip(signature, typed_signature_arguments, strict=True)
     )
     external_names = {
         str(value["name"]) for value in root_binding["arguments"]
     }
-    descriptor_base = len(root_signature)
+    descriptor_base = len(entry_signature)
     dynamic_descriptors = [
         descriptor_base + index
         for index, spec in enumerate(descriptor_specs)
@@ -203,14 +295,26 @@ def describe_tir_package(module: IRModule) -> dict[str, object]:
         "dynamic_argument_indices": list(
             range(len(root_binding["arguments"]))
         ) + dynamic_descriptors,
-        "signature_arguments": signature,
+        "signature_arguments": [
+            name for name in signature
+        ],
+        "typed_signature_arguments": typed_signature_arguments,
         "signature": typed_signature,
         "scalar_arguments": list(scalar_arguments),
         "host_tensor_descriptor_specs": plain_package_value(
             descriptor_specs
         ),
+        "function_offset_tables": plain_package_value(offset_tables),
         "function_schedule": plain_package_value(root_schedule),
-        "runtime_binding": plain_package_value(root_binding),
+        # The logical context is not an external buffer or memory-pool root.
+        # Only the generated entry expands it into two runtime scalar handles.
+        "runtime_binding": plain_package_value({
+            **root_binding,
+            "signature": [
+                name for name in root_binding["signature"]
+                if name != "device_dptr"
+            ],
+        }),
         "replicated_block_runtime_pool": replicated_block_runtime_pool,
         "render_calls": wrappers,
         "entry_events": entry_events,
@@ -222,6 +326,12 @@ def describe_tir_package(module: IRModule) -> dict[str, object]:
         "platform": platform,
         "target_architecture": architecture,
         "distributed_entry": cooperative,
+        "distributed_device_dptr": needs_device_dptr,
+        "device_context_abi": DEVICE_CONTEXT_ABI if needs_device_dptr else None,
+        # A kernel that reads a peer chip's instance addresses it inside the
+        # FlagCX symmetric window, so the runtime has to register this pool
+        # itself rather than a placeholder allocation.
+        "device_window_storage": device_window_storage,
         "grid_barrier_axis_groups": grid_barrier_axis_groups,
         **mesh,
         **_shared_template_context(wrappers),
@@ -294,6 +404,34 @@ def _merge_host_tensor_descriptor_specs(
     return tuple(specs)
 
 
+def _trip_scoped_stage_calls(source_schedule):
+    """Return call ids of stages invoked once per counted-loop trip.
+
+    The first set scales its pipe iteration by a statically known commit
+    count; the second has to compute its own base at run time because the
+    stream length is only known on the device.
+    """
+
+    found: set[str] = set()
+    dynamic: set[str] = set()
+
+    def walk(events):
+        for event in events or ():
+            if event.get("trip_scoped_pipe"):
+                found.add(str(event.get("call")))
+            if event.get("trip_scoped_dynamic"):
+                dynamic.add(str(event.get("call")))
+            if event.get("kind") == "loop":
+                walk(event.get("events"))
+    for role in ("consumer_events", "producer_events", "auxiliary_events"):
+        walk(source_schedule.get(role))
+    for definition in source_schedule.get("device_functions", ()) or ():
+        schedule = definition.get("schedule") or {}
+        for role in ("consumer_events", "producer_events", "auxiliary_events"):
+            walk(schedule.get(role))
+    return found, dynamic
+
+
 def render_tir_package(
     descriptor: dict[str, object], renderer_version: str
 ) -> str:
@@ -353,7 +491,7 @@ def _expand_entry_events(
             raise CodegenError(
                 f"TIR function @{function_name} calls unplanned @{callee}."
             )
-        local_actuals = emit_function_call_arguments(module, binding, event)
+        local_actuals = emit_function_call_arguments(module, binding, event, callee_binding=bindings[callee])
         callee_signature = bindings[callee]["signature"]
         if len(local_actuals) != len(callee_signature):
             raise CodegenError(
@@ -444,6 +582,11 @@ def _kernel_source_event(
         "memory_dependencies": plain_package_value(dependencies),
         "symbol": str(call["symbol"]),
         "pipeline_channels": call.get("pipeline_channels", ()),
+        # How many pipe iterations one invocation consumes; a counted
+        # loop needs it to advance the stage's iteration base per trip.
+        "pipeline_commits_per_invocation": call.get(
+            "pipeline_commits_per_invocation", 0
+        ),
         "pipeline_consumer_workspaces": call.get(
             "pipeline_consumer_workspaces", ()
         ),
@@ -471,9 +614,13 @@ def _dependency_barrier_requirement(
     *,
     force_full_grid: bool = False,
 ) -> tuple[str, tuple[int, ...]] | None:
+    dependencies = tuple(dependencies)
+    # A device dependency outranks the collective promotion below: a chip-local
+    # grid barrier orders nothing between chips.
+    if any(str(value.get("scope", "grid")) == "device" for value in dependencies):
+        return "device", ()
     if force_full_grid:
         return "grid", ()
-    dependencies = tuple(dependencies)
     if not dependencies:
         return None
     grid_axes = []
@@ -498,6 +645,8 @@ def _merge_barrier_requirements(
         return rhs
     if rhs is None:
         return lhs
+    if "device" in {lhs[0], rhs[0]}:
+        return "device", ()
     if lhs[0] == "block":
         return rhs
     if rhs[0] == "block":
@@ -505,6 +654,47 @@ def _merge_barrier_requirements(
     if not lhs[1] or not rhs[1]:
         return "grid", ()
     return "grid", tuple(sorted(set((*lhs[1], *rhs[1]))))
+
+
+def _device_window_storage(
+    wrappers: list[dict[str, object]],
+    root_binding: Mapping[str, object],
+) -> str | None:
+    """Return the pool a kernel reads through peer chips, if any.
+
+    Remote reads address the peer's instance at this pool's own offsets, so the
+    registered FlagCX symmetric window has to be the pool allocation itself.
+    One window exists per process, so two pools read remotely cannot both be
+    registered.
+    """
+
+    storages = {
+        str(leaf["remote_window_pool"])
+        for call in wrappers
+        for leaf in (call, *call.get("leaves", ()))
+        if "remote_window_pool" in leaf
+    }
+    if not storages:
+        return None
+    if len(storages) > 1:
+        raise CodegenError(
+            "One FlagCX symmetric window exists per process, but cross-chip "
+            f"reads span memory spaces {sorted(storages)}."
+        )
+    storage = storages.pop()
+    pools = {str(pool["storage"]): pool for pool in root_binding["pools"]}
+    pool = pools.get(storage)
+    if pool is None:
+        raise CodegenError(
+            f"Cross-chip reads target memory space {storage!r}, which the entry "
+            "runtime binding does not allocate as a pool."
+        )
+    if int(pool.get("scope_count", 1)) != 1:
+        raise CodegenError(
+            f"Cross-chip reads require a chip-scoped pool, but {storage!r} is "
+            f"replicated per {pool.get('scope')}."
+        )
+    return storage
 
 
 def _attach_grid_barrier_axis_groups(
@@ -799,6 +989,12 @@ def _local_mesh(value: object = None) -> dict[str, object]:
             "mesh_axes": (),
             "mesh_rank": 0,
             "mesh_size": 1,
+            "mesh_axis_sources": (),
+            "mesh_coordinate_strides": (),
+            "mesh_device_extent": 1,
+            "mesh_node_extent": 1,
+            "mesh_requires_device_dptr": False,
+            "mesh_topology_repr": "{}",
             "mesh_axes_repr": "[]",
         }
     topology = _mesh_context(value)
@@ -829,23 +1025,56 @@ def _mesh_context(value: object) -> dict[str, object]:
         raise CodegenError("Triton grid-mesh dimensions must be positive.")
     if any(level not in {"c", "d", "b"} for level in levels):
         raise CodegenError("Triton grid-mesh levels must be drawn from c/d/b.")
-    if any(
-        level != "b" and hierarchy[index] != 1
-        for index, level in enumerate(levels)
-    ):
-        raise CodegenError(
-            "Triton launches can materialize only non-trivial physical block axes."
-        )
     if "b" not in levels:
         raise CodegenError("Triton distributed launch has no physical block axis.")
-    axis_names = tuple(f"block_{name}" for name in names)
+    # ``c``/``d`` coordinates identify a device/node rank through FlagCX;
+    # only ``b`` coordinates are materialized by the per-rank Triton grid.
+    # Keep placement rank/order for address arithmetic while exposing the
+    # canonical TLE names for runtime shard queries.
+    axis_names = tuple(
+        "device" if level == "c" else
+        "node" if level == "d" else
+        f"block_{name}"
+        for name, level in zip(names, levels, strict=True)
+    )
+    if len({name for name, level in zip(axis_names, levels, strict=True) if level == "b"}) != levels.count("b"):
+        raise CodegenError("Triton physical grid-mesh axis names must be unique.")
     physical_names = tuple(
         axis_names[index]
         for index, level in enumerate(levels)
         if level == "b"
     )
-    if len(set(physical_names)) != len(physical_names):
-        raise CodegenError("Triton physical grid-mesh axis names must be unique.")
+    device_extent = prod(
+        hierarchy[index] for index, level in enumerate(levels) if level == "c"
+    )
+    node_extent = prod(
+        hierarchy[index] for index, level in enumerate(levels) if level == "d"
+    )
+    topology: dict[str, object] = {}
+    if node_extent > 1:
+        topology["node"] = node_extent
+    if device_extent > 1:
+        topology["device"] = device_extent
+    topology["block"] = [
+        (axis_names[index], hierarchy[index])
+        for index, level in enumerate(levels)
+        if level == "b"
+    ]
+    mesh_axis_sources = tuple(
+        "device" if level == "c" and hierarchy[index] > 1 else
+        "node" if level == "d" and hierarchy[index] > 1 else
+        None
+        for index, level in enumerate(levels)
+    )
+    mesh_coordinate_strides = tuple(
+        prod(
+            hierarchy[next_index]
+            for next_index in range(index + 1, len(hierarchy))
+            if mesh_axis_sources[next_index] == mesh_axis_sources[index]
+        )
+        if mesh_axis_sources[index] is not None else 1
+        for index in range(len(hierarchy))
+    )
     axes = tuple(
         {
             "placement_axis": index,
@@ -867,6 +1096,12 @@ def _mesh_context(value: object) -> dict[str, object]:
         "mesh_axes": axes,
         "mesh_rank": len(hierarchy),
         "mesh_size": prod(hierarchy),
+        "mesh_axis_sources": mesh_axis_sources,
+        "mesh_coordinate_strides": mesh_coordinate_strides,
+        "mesh_device_extent": device_extent,
+        "mesh_node_extent": node_extent,
+        "mesh_requires_device_dptr": device_extent > 1 or node_extent > 1,
+        "mesh_topology_repr": repr(topology),
         "mesh_axes_repr": repr([
             (axis_names[index], hierarchy[index])
             for index, level in enumerate(levels)

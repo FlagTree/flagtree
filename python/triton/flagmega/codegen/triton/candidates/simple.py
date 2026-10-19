@@ -4,12 +4,17 @@
 
 from __future__ import annotations
 
-from triton.flagmega.ir import Candidate, Node, DistributedType, TensorType, VectorType, DType
-from triton.flagmega.ir.distributed_type import is_fully_sharded_across_placement
-from triton.flagmega.ir.distributed_inference import tensor_of
 from triton.flagmega.codegen.triton.vectorization import (
     configured_vector_schedule,
     vectorization_contract,
+)
+from triton.flagmega.errors import CodegenError
+from triton.flagmega.ir import Candidate, DistributedType, DType, Node, TensorType, VectorType
+from triton.flagmega.ir.distributed_inference import tensor_of
+from triton.flagmega.ir.distributed_type import is_fully_sharded_across_placement
+from triton.flagmega.ir.ops.math._block_scaled import (
+    block_scaled_mma_supports_precision,
+    block_scaled_precision_supports_target,
 )
 
 from .core import TritonCandidateContext, TritonCandidateProposal
@@ -27,6 +32,7 @@ class ElementwiseCandidateProvider:
         "math.add",
         "math.mul",
         "math.div",
+        "math.exp",
         "math.sigmoid",
         "math.silu",
         "math.vectorized_binary",
@@ -73,11 +79,19 @@ class BlockFp8CandidateProvider:
     })
 
     def propose(self, node: Node, context: TritonCandidateContext) -> TritonCandidateProposal | None:
-        del node
+        native_quant = node.attrs.get("weight_encoding")
+        if not block_scaled_precision_supports_target(
+                node.attrs, getattr(context.target, "codegen_platform", None),
+                getattr(context.target, "codegen_architecture", None)):
+            raise CodegenError("SM90 reciprocal activation quantization requires the NVIDIA SM90 target.")
+        value_dtype = tensor_of(context.module.node_map[node.inputs[0]].type).dtype
+        mma_legal = block_scaled_mma_supports_precision(node.attrs, value_dtype,
+                                                       block_k=int(node.attrs["weight_block_k"]))
         candidates = tuple(
             context.configure_implementation(implementation)
             for implementation in context.implementations("block_fp8")
-        )
+            if (native_quant is None or implementation.variant == "simt")
+            and (implementation.variant != "mma" or mma_legal))
         if not candidates:
             return None
         return _proposal(candidates, context.choose_default("block_fp8", candidates))
@@ -87,11 +101,15 @@ class MatmulGluCandidateProvider:
     op_names = frozenset({"nn.matmul_glu", "nn.packed_matmul_glu"})
 
     def propose(self, node: Node, context: TritonCandidateContext) -> TritonCandidateProposal | None:
-        del node
+        if not block_scaled_precision_supports_target(
+                node.attrs, getattr(context.target, "codegen_platform", None),
+                getattr(context.target, "codegen_architecture", None)):
+            raise CodegenError("SM90 reciprocal activation quantization requires the NVIDIA SM90 target.")
+        native_quant = node.attrs.get("gate_weight_encoding") or node.attrs.get("up_weight_encoding")
         candidates = tuple(
             context.configure_implementation(implementation)
             for implementation in context.implementations("matmul_glu")
-        )
+            if native_quant is None or implementation.variant == "simt")
         if not candidates:
             return None
         return _proposal(candidates, context.choose_default("matmul_glu", candidates))
@@ -196,6 +214,11 @@ class GdnCandidateProvider:
 
 
 def _gdn_applicable(node, context, implementation):
+    if node.op == "nn.gdn_recurrent_core" and node.attrs.get("b_weight_encoding") is not None:
+        # The native packed projection helper is implemented by the persistent
+        # recurrent kernel; the state-pipeline variant still assumes dense rows.
+        if implementation.variant != "persistent":
+            return False
     if (node.op == "nn.gdn_recurrent_core"
             and int(node.attrs["key_head_dim"]) > implementation.parameters["tile_state"][0]):
         return False
@@ -203,8 +226,7 @@ def _gdn_applicable(node, context, implementation):
         return True
     output = node.type.fields[0]
     if (not isinstance(output, DistributedType) or output.partial is not None or output.exclusive is not None
-            or not is_fully_sharded_across_placement(output)
-            or not isinstance(output.tensor.dtype, DType)
+            or not is_fully_sharded_across_placement(output) or not isinstance(output.tensor.dtype, DType)
             or output.tensor.dtype.value != implementation.contract["required_activation_dtype"]
             or not output.tensor.shape[0].is_fixed or output.tensor.shape[0].fixed_value != 1):
         return False
@@ -222,11 +244,9 @@ def _gdn_applicable(node, context, implementation):
     partition = implementation.transfer_pipeline.channels[0].inplace_partition
     _, leaf = partition.source_leaf(state)
     shape = leaf.shape
-    return (isinstance(leaf, TensorType) and leaf.dtype == VectorType(DType.FLOAT32, (4,))
-            and len(shape) == 4 and all(value.is_fixed for value in shape)
-            and tuple(value.fixed_value for value in shape) == (
-                1, int(node.attrs["num_value_heads"]), int(node.attrs["value_head_dim"]),
-                key_dim // 4))
+    return (isinstance(leaf, TensorType) and leaf.dtype == VectorType(DType.FLOAT32, (4, )) and len(shape) == 4
+            and all(value.is_fixed for value in shape) and tuple(value.fixed_value for value in shape)
+            == (1, int(node.attrs["num_value_heads"]), int(node.attrs["value_head_dim"]), key_dim // 4))
 
 
 __all__ = [

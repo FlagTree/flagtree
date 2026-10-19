@@ -42,7 +42,8 @@ def test_nvidia_sm89_rejects_non_ada(capability):
         _validate_artifact_device(_FakeTorch(capability), "cuda", "nvidia-sm89")
 
 
-def test_nvidia_sm90_remains_exact():
-    _validate_artifact_device(_FakeTorch((9, 0)), "cuda", "nvidia-sm90")
+@pytest.mark.parametrize("target,capability", [("nvidia-sm90", (9, 0)), ("nvidia-sm120", (12, 0))])
+def test_other_nvidia_targets_remain_exact(target, capability):
+    _validate_artifact_device(_FakeTorch(capability), "cuda", target)
     with pytest.raises(RuntimeContractError):
-        _validate_artifact_device(_FakeTorch((9, 1)), "cuda", "nvidia-sm90")
+        _validate_artifact_device(_FakeTorch((capability[0], capability[1] + 1)), "cuda", target)

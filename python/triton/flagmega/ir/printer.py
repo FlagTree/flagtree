@@ -41,7 +41,6 @@ from triton.flagmega.ir.print_symbols import GraphPrintSymbols, function_node_sc
 from triton.flagmega.ir.print_weights import WeightPrintAnalysis
 from triton.flagmega.ir.types import DType, MaskVectorType, PointerType, VectorType
 
-
 _DTYPE_DISPLAY_NAMES = {
     DType.BOOL: "bool",
     DType.INT32: "i32",
@@ -50,6 +49,7 @@ _DTYPE_DISPLAY_NAMES = {
     DType.FLOAT16: "f16",
     DType.FLOAT32: "f32",
     DType.FLOAT8_E4M3FN: "F8_E4M3",
+    DType.UINT8: "U8",
 }
 
 
@@ -382,7 +382,8 @@ def _print_tir_stmt(lines: list[str], statement, indent: int) -> None:
         lines.append(f"{prefix}}}")
         return
     if isinstance(statement, PipelineDrain):
-        lines.append(f"{prefix}T.PipelineDrain({statement.stage_id!r})")
+        suffix = ", ArenaReuse" if statement.arena_reuse else ""
+        lines.append(f"{prefix}T.PipelineDrain({statement.stage_id!r}{suffix})")
         return
     if isinstance(statement, PipelineHandoff):
         lines.append(f"{prefix}T.PipelineHandoff({statement.handoff_id!r})")

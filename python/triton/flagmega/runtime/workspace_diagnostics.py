@@ -16,6 +16,7 @@ from triton.flagmega.errors import RuntimeContractError
 from triton.flagmega.ir.bufferization import BufferPlan
 from triton.flagmega.ir.distributed_storage import DistributedBufferStorageKind
 from triton.flagmega.ir.distributed_type import placement_owner_count
+from triton.flagmega.ir.distributed_type import block_owner_count
 from triton.flagmega.ir.types import DType, VectorType
 
 
@@ -106,14 +107,20 @@ def memory_pool_view_specs(
                 *_dense_strides(lane_shape),
             )
             if (
-                descriptor.distributed_storage_kind
-                is DistributedBufferStorageKind.COMPACT_PER_OWNER
+                descriptor.distributed_storage_kind in {
+                    DistributedBufferStorageKind.COMPACT_PER_OWNER,
+                    DistributedBufferStorageKind.COMPACT_PER_CHIP,
+                }
             ):
                 if descriptor.distributed_type is None:
                     raise RuntimeContractError(
                         f"Compact-per-owner buffer {descriptor.id!r} has no DistributedType."
                     )
-                owners = placement_owner_count(descriptor.distributed_type)
+                owners = (
+                    placement_owner_count(descriptor.distributed_type)
+                    if descriptor.distributed_storage_kind is DistributedBufferStorageKind.COMPACT_PER_OWNER
+                    else block_owner_count(descriptor.distributed_type)
+                )
                 owner_stride = prod(descriptor.component_shape, start=1) * lane_count
                 shape = (owners, *shape)
                 strides = (owner_stride, *strides)
@@ -288,15 +295,14 @@ def _torch_dtype(torch, dtype: DType):
             DType.BOOL: torch.bool,
             DType.INT32: torch.int32,
             DType.INT64: torch.int64,
+            DType.UINT8: torch.uint8,
             DType.BFLOAT16: torch.bfloat16,
             DType.FLOAT16: torch.float16,
             DType.FLOAT32: torch.float32,
             DType.FLOAT8_E4M3FN: torch.float8_e4m3fn,
         }[dtype]
     except (AttributeError, KeyError) as error:
-        raise RuntimeContractError(
-            f"Workspace diagnostics cannot materialize dtype {dtype.value!r}."
-        ) from error
+        raise RuntimeContractError(f"Workspace diagnostics cannot materialize dtype {dtype.value!r}.") from error
 
 
 __all__ = [

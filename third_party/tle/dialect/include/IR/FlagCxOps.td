@@ -65,7 +65,7 @@ def Tle_DeviceIntraBarrierOp : Tle_Op<"device intra barrier"> {
     specified memory ordering semantics (`order`). `multimem` indicates whether
     the barrier operates on multimem storage.
 
-    Returns the runtime status code.
+    The runtime routines return void; this operation has no results.
   }];
 
   let arguments = (ins

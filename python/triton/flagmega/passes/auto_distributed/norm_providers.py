@@ -16,9 +16,9 @@ from triton.flagmega.ir import (
     TupleType,
     local_tensor_type,
     SBP,
-    is_exclusive,
 )
 from triton.flagmega.ir.distributed_inference import tensor_of
+from triton.flagmega.ir.ops.nn.gated_norm_apply import GatedNormApply
 from triton.flagmega.ir.ops.nn.norm_apply import NormApply
 from triton.flagmega.ir.ops.nn.norm_stats import NormStats
 from triton.flagmega.ir.ops.ntt.add_norm_stats import (
@@ -31,8 +31,7 @@ from triton.flagmega.passes.auto_distributed.candidates import (
     DistributedCandidateProviderBase,
 )
 from triton.flagmega.passes.auto_distributed.candidate_identity import (
-    distributed_candidate_id,
-)
+    distributed_candidate_id, )
 
 
 class NormStatsCandidateProvider(DistributedCandidateProviderBase):
@@ -158,6 +157,92 @@ class NormApplyCandidateProvider(DistributedCandidateProviderBase):
         return tuple(results)
 
 
+class GatedNormApplyCandidateProvider(DistributedCandidateProviderBase):
+    """NormApply's layout rules, plus a gate that shares the input policies."""
+
+    op_names = frozenset({"nn.gated_norm_apply"})
+    allows_partial_inputs = False
+    is_exhaustive = True
+
+    def _enumerate_candidates(
+        self, context: DistributedCandidateContext,
+    ) -> tuple[DistributedCandidate, ...]:
+        node = context.source_call
+        module = context.module
+        value = tensor_of(module.node_map[node.inputs[0]].type)
+        scale = tensor_of(module.node_map[node.inputs[2]].type)
+        bias = tensor_of(module.node_map[node.inputs[3]].type)
+        gate = tensor_of(module.node_map[node.inputs[4]].type)
+        axis = _normalize_axis(int(node.attrs["axis"]), value.rank)
+        results: list[DistributedCandidate] = []
+        for input_type in _candidate_distributed_inputs(context, 0, value):
+            policies = input_type.axis_policies
+            partial_stats = NormStats.infer_type(
+                (_typed_node("<gated_norm_apply_input>", input_type),),
+                {"axis": axis, "use_mean": bool(node.attrs["use_mean"])},
+            )
+            assert isinstance(partial_stats, DistributedType)
+            stats_type = replace(partial_stats, partial=None)
+            suffix_policies = tuple(policies[axis:])
+            try:
+                scale_type = DistributedType(
+                    scale, suffix_policies, context.placement,
+                    exclusive=input_type.exclusive,
+                )
+                bias_type = DistributedType(
+                    bias, suffix_policies, context.placement,
+                    exclusive=input_type.exclusive,
+                )
+                # The gate is elementwise over the whole value, so it can only
+                # be read under the input's own policies.
+                gate_type = DistributedType(
+                    gate, policies, context.placement,
+                    exclusive=input_type.exclusive,
+                )
+                inputs = (
+                    _typed_node("<gated_norm_apply_input>", input_type),
+                    _typed_node("<gated_norm_apply_stats>", stats_type),
+                    _typed_node("<gated_norm_apply_scale>", scale_type),
+                    _typed_node("<gated_norm_apply_bias>", bias_type),
+                    _typed_node("<gated_norm_apply_gate>", gate_type),
+                )
+                output_type = GatedNormApply.infer_type(inputs, node.attrs)
+            except IRSchemaError:
+                continue
+            factors = GatedNormApply.cost_factors(inputs, node.attrs, output_type)
+            results.append(DistributedCandidate(
+                distributed_candidate_id(
+                    node.id,
+                    "gated_norm_apply",
+                    output_type,
+                    tuple(item.type for item in inputs),
+                ),
+                output_type,
+                tuple(item.type for item in inputs),
+                (
+                    _local_elements(input_type)
+                    if factors is None
+                    else context.operation_cost_model.get_latency(
+                        factors, output_type
+                    )
+                ),
+                "gated-norm-apply-compatible-sbp",
+                objective_model=(
+                    "flagmega.gated-norm-apply-local-work/v1"
+                    if factors is None
+                    else context.operation_cost_model.identity
+                ),
+                objective_evidence=(
+                    "materialized-statistics",
+                    "suffix-parameter-policy",
+                    "elementwise-gate-policy",
+                    "op-definition-cost-factors",
+                    "hierarchical-target-latency",
+                ),
+            ))
+        return tuple(results)
+
+
 class BindNormStatsCandidateProvider(DistributedCandidateProviderBase):
     op_names = frozenset({"nn.bind_norm_stats"})
     allows_partial_inputs = False
@@ -200,7 +285,8 @@ class AddNormStatsCandidateProvider(DistributedCandidateProviderBase):
     is_exhaustive = True
 
     def _enumerate_candidates(
-        self, context: DistributedCandidateContext,
+        self,
+        context: DistributedCandidateContext,
     ) -> tuple[DistributedCandidate, ...]:
         node = context.source_call
         if len(context.available_input_types) != 2 or not isinstance(node.type, TupleType):
@@ -227,12 +313,23 @@ class AddNormStatsCandidateProvider(DistributedCandidateProviderBase):
         for candidate in context.leaf_candidate_types(expected_tensors[0]):
             if candidate not in addend_types:
                 addend_types.append(candidate)
+        input_types = list(context.available_input_types[0])
+        if any(not isinstance(value, DistributedType) and tensor_of(value) == expected_tensors[0]
+               for value in input_types):
+            # A logical function parameter may occur in either operand. Its
+            # materialized view can use the same requested layout as the
+            # addend; the normal edge realization still proves the reshard.
+            for value in addend_types:
+                if (isinstance(value, DistributedType) and value.placement == context.placement
+                        and value.partial is None and tensor_of(value) == expected_tensors[0]
+                        and value not in input_types):
+                    input_types.append(value)
         for addend_type in addend_types:
             if tensor_of(addend_type) != expected_tensors[0]:
                 continue
             try:
                 stats_type = NormStats.infer_type(
-                    (_typed_node("<combine_addend>", addend_type),),
+                    (_typed_node("<combine_addend>", addend_type), ),
                     {
                         "axis": int(node.attrs["axis"]),
                         "use_mean": bool(node.attrs["use_mean"]),
@@ -242,11 +339,9 @@ class AddNormStatsCandidateProvider(DistributedCandidateProviderBase):
                 continue
             if tensor_of(stats_type) != expected_tensors[1]:
                 continue
-            for input_type in context.available_input_types[0]:
+            for input_type in input_types:
                 relation = (input_type, addend_type)
-                if relation in seen or not can_materialize_sum_partial(
-                    input_type, addend_type
-                ):
+                if relation in seen or not can_materialize_sum_partial(input_type, addend_type):
                     continue
                 seen.add(relation)
                 output_type = TupleType((addend_type, stats_type))
@@ -254,57 +349,43 @@ class AddNormStatsCandidateProvider(DistributedCandidateProviderBase):
                     _typed_node("<combine_input>", input_type),
                     _typed_node("<combine_addend>", addend_type),
                 )
-                factors = AddNormStats.cost_factors(
-                    typed_inputs, node.attrs, output_type
-                )
+                factors = AddNormStats.cost_factors(typed_inputs, node.attrs, output_type)
                 if factors is None:
                     local_work = _type_local_elements(addend_type)
-                    communication = (
-                        _type_local_elements(input_type)
-                        if isinstance(input_type, DistributedType)
-                        and input_type.partial is not None
-                        else 0
-                    )
+                    communication = (_type_local_elements(input_type) if isinstance(input_type, DistributedType)
+                                     and input_type.partial is not None else 0)
                     operation_cost = min(
-                        local_work * (4 if node.attrs["use_mean"] else 3)
-                        + communication
-                        + (
-                            context.reshard_cost_model.grid_synchronization_cost
-                            if input_type != addend_type
-                            else 0
-                        ),
+                        local_work * (4 if node.attrs["use_mean"] else 3) + communication +
+                        (context.reshard_cost_model.grid_synchronization_cost if input_type != addend_type else 0),
                         2_000_000_000,
                     )
-                    objective_model = (
-                        "flagmega.add-norm-stats-distribution/v1"
-                    )
+                    objective_model = ("flagmega.add-norm-stats-distribution/v1")
                 else:
-                    operation_cost = context.operation_cost_model.get_latency(
-                        factors, output_type
-                    )
+                    operation_cost = context.operation_cost_model.get_latency(factors, output_type)
                     objective_model = context.operation_cost_model.identity
-                results.append(DistributedCandidate(
-                    distributed_candidate_id(
-                        node.id,
-                        "add_norm_stats",
+                results.append(
+                    DistributedCandidate(
+                        distributed_candidate_id(
+                            node.id,
+                            "add_norm_stats",
+                            output_type,
+                            relation,
+                        ),
                         output_type,
                         relation,
-                    ),
-                    output_type,
-                    relation,
-                    operation_cost,
-                    "sum-partial-materialize-add-norm-stats-sbp",
-                    objective_kind="analytic",
-                    objective_model=objective_model,
-                    objective_evidence=(
-                        "sum-partial-materialization",
-                        "collective-grid-synchronization",
-                        "addend-defines-materialized-layout",
-                        "additive-statistics-output",
-                        "op-definition-cost-factors",
-                        "hierarchical-target-latency",
-                    ),
-                ))
+                        operation_cost,
+                        "sum-partial-materialize-add-norm-stats-sbp",
+                        objective_kind="analytic",
+                        objective_model=objective_model,
+                        objective_evidence=(
+                            "sum-partial-materialization",
+                            "collective-grid-synchronization",
+                            "addend-defines-materialized-layout",
+                            "additive-statistics-output",
+                            "op-definition-cost-factors",
+                            "hierarchical-target-latency",
+                        ),
+                    ))
         return tuple(results)
 
 
@@ -394,6 +475,7 @@ def _type_local_elements(value: IRType) -> int:
 __all__ = [
     "BindNormStatsCandidateProvider",
     "AddNormStatsCandidateProvider",
+    "GatedNormApplyCandidateProvider",
     "NormApplyCandidateProvider",
     "NormStatsCandidateProvider",
 ]

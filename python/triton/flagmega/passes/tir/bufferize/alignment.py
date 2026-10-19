@@ -48,11 +48,12 @@ def _declared_requirements(module):
         # buffer to the value's alignment: that pads the per-owner stride of a
         # result whose own contract never asked for it, and the callee that
         # later receives it as a formal parameter computes the unpadded stride.
-        for leaf, parameter in zip(
-            _result_leaves(module, node), _output_parameter_leaves(function), strict=True
-        ):
+        for leaf, parameter in zip(_result_leaves(module, node), _output_parameter_leaves(function), strict=True):
             if parameter.alignment_bytes is not None:
                 _add(requirements, leaf, parameter.alignment_bytes)
+    # Vector lanes describe representation, not an address-alignment promise.
+    # Only the kernel ABI may require aligned accesses; views propagate that
+    # declared requirement without inventing one from their element width.
     return requirements
 
 
@@ -109,11 +110,20 @@ def _propagate(module, requirements):
         changed = False
         for node in module.nodes:
             if node.op in {
-                "builtin.get_item",
-                "builtin.tuple",
-                "distributed.sharded_view",
-                "tir.buffer_view",
-                "tir.buffer_subspan",
+                    "builtin.get_item",
+                    "builtin.tuple",
+                    "distributed.sharded_view",
+                    "tir.buffer_view",
+                    "tir.buffer_subspan",
+                    # Layout transforms may be represented as zero-copy aliases
+                    # by the buffer planner.  Propagate the stricter alignment
+                    # across them so a vectorized view cannot alias a scalar
+                    # allocation with an under-aligned base address.
+                    "tensors.pack",
+                    "tensors.unpack",
+                    "tensors.permute",
+                    "tensors.reshape",
+                    "tensors.bitcast",
             }:
                 for source, target in _view_leaf_pairs(module, node):
                     changed |= _unify(requirements, source, target)
@@ -126,9 +136,7 @@ def _propagate(module, requirements):
                 for formal, actual in _value_leaf_pairs(module, formal_id, actual_id):
                     changed |= _unify(requirements, formal, actual)
             # A call result is the storage the callee returned, leaf for leaf.
-            returned = [
-                leaf for value in callee.outputs for leaf in _leaves(module, value)
-            ]
+            returned = [leaf for value in callee.outputs for leaf in _leaves(module, value)]
             results = _result_leaves(module, node)
             if len(returned) != len(results):
                 raise IRVerificationError(

@@ -124,7 +124,50 @@ class TorchEvaluator:
                     node_arguments = tuple(evaluate_node(value) for value in node.inputs)
                     dump_token = dump_writer.before(function_name, node, node_arguments)
                     with context.call_scope(node, node_arguments, evaluate_node):
-                        if node.op == "builtin.call":
+                        if node.op == "control.for":
+                            lower, upper, step = (int(value) for value in node_arguments[:3])
+                            count = int(node.attrs["iter_count"])
+                            value = tuple(node_arguments[3:3 + count])
+                            captures = node_arguments[3 + count:]
+                            region = module.function_map[str(node.attrs["callee"])]
+                            # Dimension-valued uses of the induction variable
+                            # (a layer id, for example) are symbolised from the
+                            # loop node, which need not match the region's
+                            # positional parameter name, so bind both.
+                            iv_symbols = {
+                                str(region.parameters[0]),
+                                f"{node.id}_iv",
+                            }
+                            previous = {
+                                symbol: context.dimension_bindings.get(symbol)
+                                for symbol in iv_symbols
+                            }
+                            try:
+                                for index in range(lower, upper, step):
+                                    # Values derived from the induction
+                                    # variable as a dimension (a layer id, for
+                                    # example) resolve through the dimension
+                                    # bindings, so the trip has to publish it
+                                    # there as well as pass it positionally.
+                                    for symbol in iv_symbols:
+                                        context.dimension_bindings[symbol] = index
+                                    iv = context.torch.tensor(
+                                        index, dtype=context.torch.int64,
+                                        device=getattr(
+                                            next((v for v in value
+                                                  if hasattr(v, "device")), None),
+                                            "device", None),
+                                    )
+                                    value = evaluate_function(
+                                        str(node.attrs["callee"]), (iv, *value, *captures)
+                                    )
+                            finally:
+                                for symbol, old_value in previous.items():
+                                    if old_value is None:
+                                        context.dimension_bindings.pop(symbol, None)
+                                    else:
+                                        context.dimension_bindings[symbol] = old_value
+                        elif node.op == "builtin.call":
                             callee_outputs = evaluate_function(
                                 str(node.attrs["callee"]), node_arguments
                             )
@@ -146,18 +189,29 @@ class TorchEvaluator:
                 return tuple(evaluate_node(output) for output in function.outputs)
             finally:
                 active_calls.pop()
+                # The recursive visitor closes over itself and its memo.
+                # Break that cycle at the call boundary instead of retaining
+                # a layer's tensors until an unrelated cyclic-GC collection.
+                evaluate_node = None
+                local.clear()
 
         entry = module.function_map[module.entry]
         entry_arguments = tuple(
             context.input_value(node_map[parameter]) for parameter in entry.parameters
         )
-        outputs = evaluate_function(module.entry, entry_arguments)
-        trace = {
-            node.id: context.values[node.id]
-            for node in module.nodes
-            if node.id in context.values
-        }
-        return EvaluationResult(outputs, trace)
+        try:
+            outputs = evaluate_function(module.entry, entry_arguments)
+            trace = {
+                node.id: context.values[node.id]
+                for node in module.nodes
+                if node.id in context.values
+            }
+            return EvaluationResult(outputs, trace)
+        finally:
+            # This visitor is recursive too. Releasing its closure drops the
+            # run context even when evaluation raises; a returned trace owns
+            # its independent mapping and intentionally retains its values.
+            evaluate_function = None
 
 
 def materialize_constant_assets(module: IRModule, weights: WeightResolver) -> Mapping[str, Any]:
@@ -188,6 +242,7 @@ def materialize_constant_recipe(module: IRModule, recipe, weights: WeightResolve
         inputs={},
         weights=weights,
         constant_assets={},
+        type_nodes=recipe.nodes,
     )
     return _evaluate_constant_recipe(recipe, context, EvaluatorDumpWriter(module))
 
@@ -232,6 +287,7 @@ def iter_materialized_constant_assets(
             inputs={},
             weights=weights,
             constant_assets={},
+            type_nodes=recipe.nodes,
         )
         materialized = _evaluate_constant_recipe(recipe, context, dump_writer)
         values = dict(zip(recipe.outputs, materialized, strict=True))
@@ -264,15 +320,16 @@ def _evaluate_constant_recipe(
     """Evaluate one frozen recipe without retaining another recipe's values."""
 
     local: dict[str, Any] = {}
-    for node in recipe.nodes:
-        arguments = tuple(local[value] for value in node.inputs)
-        dump_token = dump_writer.before(f"@constant:{recipe.id}", node, arguments)
-        with context.call_scope(node, arguments, lambda node_id: local[node_id]):
-            value = get_definition(node.op).evaluate(node, arguments, context)
-        context.validate_value(node, value)
-        dump_writer.after(dump_token, f"@constant:{recipe.id}", node, value)
-        local[node.id] = value
-        context.record_value(node, value)
+    with context.type_scope(recipe.nodes):
+        for node in recipe.nodes:
+            arguments = tuple(local[value] for value in node.inputs)
+            dump_token = dump_writer.before(f"@constant:{recipe.id}", node, arguments)
+            with context.call_scope(node, arguments, lambda node_id: local[node_id]):
+                value = get_definition(node.op).evaluate(node, arguments, context)
+            context.validate_value(node, value)
+            dump_writer.after(dump_token, f"@constant:{recipe.id}", node, value)
+            local[node.id] = value
+            context.record_value(node, value)
     return tuple(local[value] for value in recipe.outputs)
 
 
@@ -402,6 +459,7 @@ def torch_dtype(dtype: DataType):
         DType.BOOL: torch.bool,
         DType.INT32: torch.int32,
         DType.INT64: torch.int64,
+        DType.UINT8: torch.uint8,
         DType.BFLOAT16: torch.bfloat16,
         DType.FLOAT16: torch.float16,
         DType.FLOAT32: torch.float32,

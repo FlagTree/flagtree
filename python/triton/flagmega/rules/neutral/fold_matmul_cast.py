@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Select an FP32 MatMul result at a private widening boundary.
 
-This is a relaxed numerical rewrite: the F16/BF16 result rounding is removed,
-not hidden inside an epilogue. Run before vectorization/distribution so the
-new output dtype participates in layout and collective planning.
+This is a relaxed numerical rewrite for inferred output precision: F16/BF16
+rounding is removed, not hidden inside an epilogue. An explicit output dtype
+is a requested numerical boundary and must survive a later widening cast.
+Run before vectorization/distribution so the new output dtype participates in
+layout and collective planning.
 """
 
 from dataclasses import replace
@@ -21,7 +23,9 @@ def fold_matmul_cast_rule():
 
     def rewrite(match, module):
         root, matmul = match["root"], match["matmul"]
-        if (not isinstance(matmul.type, TensorType) or matmul.type.dtype not in {DType.FLOAT16, DType.BFLOAT16}
+        if (module.metadata.get("floating_point_contract") == "strict"
+                or not isinstance(matmul.type, TensorType) or matmul.type.dtype not in {DType.FLOAT16, DType.BFLOAT16}
+                or matmul.attrs.get("output_data_type") is not None
                 or any(matmul.id in function.outputs for function in module.functions)):
             return root
         prepared = MatMul.prepare(tuple(module.node_map[value] for value in matmul.inputs),
@@ -30,7 +34,12 @@ def fold_matmul_cast_rule():
             return root
         return RewriteResult(
             replace(matmul, id=root.id, type=prepared.result_type, attrs=prepared.attrs,
-                    metadata={**matmul.metadata, **root.metadata, "formed_by": "FoldMatMulCast"}))
+                    metadata={**matmul.metadata, **root.metadata,
+                              "formed_by": "FoldMatMulCast",
+                              # Keep the producer identity for later vector and
+                              # packing selection after the private cast node
+                              # becomes the public MatMul result.
+                              "vectorization_root": matmul.id}))
 
     return RewriteRule("FoldMatMulCast", pattern, rewrite)
 

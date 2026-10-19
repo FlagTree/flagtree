@@ -10,14 +10,15 @@ authority, including explicit per-route rounding that forbids split-K.
 from itertools import combinations, product
 
 from triton.flagmega.errors import IRSchemaError
-from triton.flagmega.ir import DistributedType, Node, SBP
+from triton.flagmega.ir import SBP, DistributedType, Node
 from triton.flagmega.ir.distributed_inference import tensor_of
 from triton.flagmega.ir.ops.core import tensor_nbytes
 from triton.flagmega.ir.ops.nn._sparse_experts import lanes, role_axes, scale_policy
-from triton.flagmega.ir.ops.nn.sparse_experts_gate_up import SparseExpertsGateUp
-from triton.flagmega.ir.ops.nn.sparse_experts_down import SparseExpertsDown
-from triton.flagmega.ir.ops.nn.sparse_experts_dispatch import SparseExpertsDispatch
+from triton.flagmega.ir.ops.nn.partitioned_sparse_experts_down import PartitionedSparseExpertsDown
 from triton.flagmega.ir.ops.nn.sparse_experts_combine import SparseExpertsCombine
+from triton.flagmega.ir.ops.nn.sparse_experts_dispatch import SparseExpertsDispatch
+from triton.flagmega.ir.ops.nn.sparse_experts_down import SparseExpertsDown
+from triton.flagmega.ir.ops.nn.sparse_experts_gate_up import SparseExpertsGateUp
 from triton.flagmega.passes.auto_distributed.candidates import DistributedCandidate, DistributedCandidateProviderBase
 
 
@@ -99,6 +100,15 @@ class SparseExpertsGateUpCandidateProvider(DistributedCandidateProviderBase):
                         }))
             except IRSchemaError:
                 continue
+        if not results:
+            # Block-scaled FP8 expert banks may not expose a legal split unit
+            # on the scale grid.  A fully replicated stage remains a valid
+            # semantic candidate; the scale-aware lowering owns the local
+            # dequantization rather than forcing an invalid expert-axis split.
+            try:
+                results.append(_candidate(context, definition, tensors, {}))
+            except IRSchemaError:
+                pass
         return tuple(results)
 
 
@@ -134,6 +144,11 @@ class SparseExpertsDownCandidateProvider(DistributedCandidateProviderBase):
                         }))
             except IRSchemaError:
                 continue
+        if not results:
+            try:
+                results.append(_candidate(context, definition, tensors, {}))
+            except IRSchemaError:
+                pass
         return tuple(results)
 
 
@@ -155,6 +170,34 @@ class SparseExpertsDispatchCandidateProvider(DistributedCandidateProviderBase):
             try:
                 role_axes(token, route, hidden)
                 result.append(_candidate(context, d, tensors, {"value": (token, hidden), "router_expert_ids": (token, route)}))
+            except IRSchemaError:
+                continue
+        return tuple(result)
+
+
+class PartitionedSparseExpertsDownCandidateProvider(DistributedCandidateProviderBase):
+    op_names = frozenset({PartitionedSparseExpertsDown.op_name})
+    allows_partial_inputs = False
+    is_exhaustive = True
+
+    def _enumerate_candidates(self, context):
+        d = PartitionedSparseExpertsDown
+        tensors = _source_tensors(context, d)
+        output = tensor_of(context.source_call.type)
+        partition = _axis_policies(context, output, 0, ((d.activations, 2, 1, 1), (d.down_weight, 1, 1, 1)))
+        token = _axis_policies(context, output, 1, ((d.activations, 0, 1, 1), (d.router_expert_ids, 0, 1, 1)))
+        route = _axis_policies(context, output, 2, ((d.router_expert_ids, 1, 1, 1),))
+        hidden = _axis_policies(context, output, 3, ((d.down_weight, 2, 1, lanes(output.dtype)),))
+        b = SBP.broadcast()
+        result = []
+        for p, t, r, h in product(partition, token, route, hidden):
+            try:
+                role_axes(p, t, r, h)
+                scalar_hidden = scale_policy(h, lanes(output.dtype), 1)
+                result.append(_candidate(context, d, tensors, {
+                    "activations": (t, r, p, b), "router_expert_ids": (t, r),
+                    "down_weight": (b, p, scalar_hidden, b),
+                }))
             except IRSchemaError:
                 continue
         return tuple(result)
@@ -189,4 +232,5 @@ class SparseExpertsCombineCandidateProvider(DistributedCandidateProviderBase):
 
 
 __all__ = ["SparseExpertsGateUpCandidateProvider", "SparseExpertsDownCandidateProvider",
-           "SparseExpertsDispatchCandidateProvider", "SparseExpertsCombineCandidateProvider"]
+           "SparseExpertsDispatchCandidateProvider", "SparseExpertsCombineCandidateProvider",
+           "PartitionedSparseExpertsDownCandidateProvider"]

@@ -4,6 +4,7 @@
 
 from triton.flagmega.targets.base import Target, get_target, register_target, target_names
 from triton.flagmega.targets.nvidia_sm90 import NvidiaSm90Target, Sm90Capability
+from triton.flagmega.targets.nvidia_sm120 import NvidiaSm120Target, NvidiaSm120Machine, Sm120Capability
 from triton.flagmega.targets.ntt import NttTarget
 from triton.flagmega.targets.ntt_options import NttTargetOptions, PyNttTargetOptions
 from triton.flagmega.targets.pyntt import PyNttTarget
@@ -17,6 +18,7 @@ from triton.flagmega.targets.iluvatar_bi_v150 import (
 from triton.flagmega.targets.nvidia_sm89 import NvidiaSm89Target
 
 register_target(NvidiaSm90Target())
+register_target(NvidiaSm120Target())
 register_target(IluvatarBiV150Target())
 register_target(NvidiaSm89Target())
 
@@ -31,6 +33,9 @@ __all__ = [
     "PyNttTarget",
     "NvidiaSm90Target",
     "NvidiaSm90Machine",
+    "NvidiaSm120Target",
+    "NvidiaSm120Machine",
+    "Sm120Capability",
     "Sm90Capability",
     "Target",
     "get_target",
