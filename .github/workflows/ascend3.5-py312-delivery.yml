@@ -138,7 +138,7 @@ jobs:
 
       - name: FlagTree push tag
         shell: bash
-        if: ${{ inputs.PYTHON_VER == "3.12" }}
+        if: ${{ inputs.PYTHON_VER == '3.12' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
