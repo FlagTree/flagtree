@@ -1202,6 +1202,18 @@ def adjust_block_size_tl_load(nargs, current, config, bs_name, ts_name, min_bs=1
     ts = nargs[ts_name]
     if not isinstance(bs, int) or not isinstance(ts, int):
         return
+    if ts <= 0:
+        # The dependency analysis can resolve the extent of this load to a
+        # non-positive scalar that is not a tensor dimension at all (for
+        # example an `init_blocks=0` argument of the kernel, or an empty
+        # tensor). Fitting the block size to such an extent rewrites it to
+        # `min_bs`, which can violate an invariant the kernel states itself
+        # (e.g. `tl.static_assert(BLOCK_SIZE_K > BLOCK_SIZE_T)`); the adjusted
+        # config then fails to compile at launch instead of being pruned. Leave
+        # the config untouched when there is nothing to fit.
+        if knobs.autotuning.print:
+            print(f"[AABS] skip {bs_name}: {ts_name} resolved to {ts}, not a tensor extent")
+        return
     if bs > ts:  # block_size > tensor_size
         from triton import next_power_of_2
         updated_bs = next_power_of_2(ts)
@@ -1230,6 +1242,10 @@ def adjust_block_size_tma(nargs, current, config, desc_name, bs_names):
     for shape_size, bs_name in zip(desc_base.shape, bs_names):
         bs = current[bs_name]
         if not isinstance(shape_size, int) or not isinstance(bs, int):
+            continue
+        if shape_size <= 0:
+            if knobs.autotuning.print:
+                print(f"[AABS] skip {bs_name}: descriptor dim is {shape_size}, not a tensor extent")
             continue
         if bs > shape_size:
             update_bs(nargs, current, config, bs_name, next_power_of_2(shape_size), "TMA", f"> {shape_size}")
