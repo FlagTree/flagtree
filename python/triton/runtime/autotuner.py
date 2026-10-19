@@ -214,11 +214,10 @@ class Autotuner(KernelInterface):
         self.seen_tuned_metas[meta_key] = rett  # flagtree aabs: deduplicate tuned meta
         return rett
 
-    def check_disk_cache(self, tuning_key, configs, bench_fn):
-        # We can't serialize prehooks, so just give up and run the benchmarks.
+    def _get_disk_cache(self, tuning_key, configs):
+        # We can't serialize prehooks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
-            bench_fn()
-            return False
+            return None
 
         from triton.compiler.compiler import make_backend
 
@@ -237,12 +236,24 @@ class Autotuner(KernelInterface):
         cache_key = hashlib.sha256("-".join(cache_key).encode("utf-8")).hexdigest()
         cache = get_cache_manager(cache_key)
         file_name = f"{fn.__name__[:150]}.autotune.json"
+        return cache, file_name
+
+    def check_disk_cache(self, tuning_key, configs, bench_fn):
+        disk_cache = self._get_disk_cache(tuning_key, configs)
+        if disk_cache is None:
+            bench_fn()
+            return False
+
+        cache, file_name = disk_cache
         path = cache.get_file(file_name)
         if path:
             with open(path, "r") as cached_configs:
-                timings = json.load(cached_configs)["configs_timings"]
-                timings = {Config(**config): timing for config, timing in timings}
-                self.cache[tuning_key] = builtins.min(timings, key=timings.get)
+                cached_result = json.load(cached_configs)
+                timings = {Config(**config): timing for config, timing in cached_result["configs_timings"]}
+                if "best_config" in cached_result:
+                    self.cache[tuning_key] = Config(**cached_result["best_config"])
+                else:
+                    self.cache[tuning_key] = builtins.min(timings, key=timings.get)
                 self.configs_timings = timings
             return True
 
@@ -256,10 +267,29 @@ class Autotuner(KernelInterface):
             }), file_name, binary=False)
         return False
 
+    def _cache_fallback_result(self, tuning_key, configs, config):
+        self.cache[tuning_key] = config
+        if not self.cache_results:
+            return
+        disk_cache = self._get_disk_cache(tuning_key, configs)
+        if disk_cache is None:
+            return
+        cache, file_name = disk_cache
+        cached_result = {"key": tuning_key, "configs_timings": []}
+        path = cache.get_file(file_name)
+        if path:
+            with open(path, "r") as cached_configs:
+                cached_result = json.load(cached_configs)
+        # The fallback has launched successfully but has not been benchmarked.
+        # Store the selection explicitly rather than inventing a timing for it.
+        cached_result["best_config"] = config.__dict__
+        cache.put(json.dumps(cached_result), file_name, binary=False)
+
     def run(self, *args, **kwargs):
         self.seen_tuned_metas = {}  # flagtree aabs: deduplicate tuned meta
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
+        key = None
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
             _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
@@ -309,12 +339,17 @@ class Autotuner(KernelInterface):
             # into one whose constexprs no longer satisfy the kernel's own
             # constraints, so the winning launch fails to compile even though the
             # timing run for that config was pruned. That is a tuning problem,
-            # not a user error: retry the configs as they were declared instead
-            # of aborting the process.
-            for fallback in self.configs:
-                if fallback is config:
+            # not a user error. Re-prune copies of the declared configs so that
+            # fallback preserves input-dependent validity constraints without
+            # reusing the configs modified by AABS.
+            fallback_configs = self.prune_configs(kwargs)
+            for fallback in fallback_configs:
+                if fallback == config:
                     continue
                 try:
+                    if fallback.pre_hook is not None:
+                        full_nargs = {**self.nargs, **kwargs, **fallback.all_kwargs()}
+                        fallback.pre_hook(full_nargs)
                     ret = self.fn.run(
                         *args,
                         **kwargs,
@@ -323,6 +358,8 @@ class Autotuner(KernelInterface):
                 except (OutOfResources, CompileTimeAssertionFailure, PTXASError, BackendCompilerError):
                     continue
                 self.best_config = fallback
+                if key is not None:
+                    self._cache_fallback_result(key, fallback_configs, fallback)
                 break
             else:
                 raise

@@ -503,12 +503,15 @@ def test_aabs_skips_nonpositive_extent(device):
         do_bench=do_bench,
     )
     @triton.jit
-    def _kernel(src, dst, topk: tl.constexpr, init_blocks, BLOCK_SIZE_K: tl.constexpr,
-                BLOCK_SIZE_T: tl.constexpr):
+    def _kernel(src, dst, topk: tl.constexpr, init_blocks, BLOCK_SIZE_K: tl.constexpr, BLOCK_SIZE_T: tl.constexpr):
         tl.static_assert(BLOCK_SIZE_K > BLOCK_SIZE_T)
         off = tl.arange(0, BLOCK_SIZE_K)
         x = tl.load(src + off, mask=off < init_blocks, other=0.0)
         tl.store(dst, tl.max(x, axis=0))
 
-    _kernel[(1,)](src, dst, 16, 0)
+    _kernel[(1, )](src, dst, 16, 0)
     assert dst.item() == 0.0
+    # A successful fallback must not hide a regression in the extent guard.
+    assert _kernel.fn.configs_timings
+    assert all(config.kwargs["BLOCK_SIZE_K"] in (128, 2048) for config in _kernel.fn.configs_timings)
+    assert all(all(timing < float("inf") for timing in timings) for timings in _kernel.fn.configs_timings.values())
