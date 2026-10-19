@@ -67,7 +67,7 @@ jobs:
         run: |
           set -x
           export FLAGTREE_BACKEND=enflame
-          MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v
+          MAX_JOBS=32 python3 -m pip install . --no-build-isolation -v --break-system-packages
 
       - name: Clear cache if ClearCache label present
         if: steps.check_backend.outputs.should_skip != 'true'
@@ -75,7 +75,7 @@ jobs:
         uses: flagos-ai/FlagTree/.github/actions/clear-cache-if-labeled@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          backend: enflame-qwen3.6
+          backend: enflame
 
       - name: Start the service
         if: ${{ steps.check_backend.outputs.should_skip != 'true' }}
