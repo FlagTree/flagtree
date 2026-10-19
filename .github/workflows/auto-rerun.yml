@@ -24,6 +24,8 @@ on:
   workflow_run:
     workflows:
       - "Amd3.6-Build-And-Test"
+      - "Amd3.6-Gems-Baseline"
+      - "Amd3.6-Gems-Test"
       - "Enflame3.6-GCU300-Build-And-Test"
       - "Enflame3.6-GCU300-Gems-Baseline"
       - "Enflame3.6-GCU300-Gems-Test"
