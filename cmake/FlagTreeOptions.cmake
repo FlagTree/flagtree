@@ -246,7 +246,7 @@ macro(flagtree_configure_core_source)
     add_subdirectory(lib)
     if(FLAGTREE_BACKEND STREQUAL "xpu")
       # Core TritonAnalysis must compile against the shared analysis headers.
-      # XPU-specific consumers resolve their Utility.h from spec_cpp/include.
+      # XPU-specific consumers resolve their Utility.h from the backend include.
       if(TARGET TritonAnalysis)
         target_include_directories(TritonAnalysis BEFORE PRIVATE
           ${PROJECT_SOURCE_DIR}/include
