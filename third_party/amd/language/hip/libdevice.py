@@ -202,11 +202,15 @@ def fast_sinf(arg0, _semantic=None):
         }, is_pure=True, _semantic=_semantic)
 
 
-# NVIDIA maps mul_rn to __nv_fmul_rn; RDNA's native IEEE multiply already rounds
-# to nearest, so a plain fmul is the correct round-to-nearest product.
+# NVIDIA maps mul_rn to __nv_fmul_rn: a separately rounded product that a later
+# add cannot absorb. A plain fmul here rounds to nearest, but under
+# enable_fp_fusion it can still contract into a following FMA, skipping the
+# product's rounding. Route the product through __ocml_fma_f32 with a zero
+# addend -- fma(a, b, 0) is the single-rounded product, and the ocml call
+# boundary keeps a subsequent add from fusing with it (RoPE depends on this).
 @core.extern
 def mul_rn(arg0, arg1, _semantic=None):
-    return _semantic.mul(arg0, arg1, False)
+    return fma(arg0, arg1, 0.0, _semantic=_semantic)
 
 
 @core.extern
