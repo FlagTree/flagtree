@@ -245,6 +245,13 @@ macro(flagtree_configure_core_source)
     add_subdirectory(include)
     add_subdirectory(lib)
     if(FLAGTREE_BACKEND STREQUAL "xpu")
+      # Core TritonAnalysis must compile against the shared analysis headers.
+      # XPU-specific consumers resolve their Utility.h from spec_cpp/include.
+      if(TARGET TritonAnalysis)
+        target_include_directories(TritonAnalysis BEFORE PRIVATE
+          ${PROJECT_SOURCE_DIR}/include
+          ${PROJECT_BINARY_DIR}/include)
+      endif()
       add_subdirectory(third_party/nvidia/lib/Dialect/NVGPU/IR)
       add_subdirectory(third_party/nvidia/lib/Dialect/NVWS/IR)
       add_subdirectory(third_party/nvidia/lib/Dialect/NVWS/Transforms)
