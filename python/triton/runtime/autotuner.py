@@ -297,11 +297,35 @@ class Autotuner(KernelInterface):
         if config.pre_hook is not None:
             full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
             config.pre_hook(full_nargs)
-        ret = self.fn.run(
-            *args,
-            **kwargs,
-            **config.all_kwargs(),
-        )
+        from ..compiler.errors import CompileTimeAssertionFailure
+        try:
+            ret = self.fn.run(
+                *args,
+                **kwargs,
+                **config.all_kwargs(),
+            )
+        except (OutOfResources, CompileTimeAssertionFailure, PTXASError, BackendCompilerError):
+            # A tuning pass (AABS in particular) may rewrite the winning config
+            # into one whose constexprs no longer satisfy the kernel's own
+            # constraints, so the winning launch fails to compile even though the
+            # timing run for that config was pruned. That is a tuning problem,
+            # not a user error: retry the configs as they were declared instead
+            # of aborting the process.
+            for fallback in self.configs:
+                if fallback is config:
+                    continue
+                try:
+                    ret = self.fn.run(
+                        *args,
+                        **kwargs,
+                        **fallback.all_kwargs(),
+                    )
+                except (OutOfResources, CompileTimeAssertionFailure, PTXASError, BackendCompilerError):
+                    continue
+                self.best_config = fallback
+                break
+            else:
+                raise
         self.nargs = None
         return ret
 
