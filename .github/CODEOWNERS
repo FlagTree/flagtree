@@ -23,6 +23,9 @@ python @zhzhcookie @sunnycase
 bin @zhzhcookie @sunnycase
 include @zhzhcookie @sunnycase
 lib @zhzhcookie @sunnycase
+third_party/nvidia @zhzhcookie @sunnycase
+third_party/amd @zhzhcookie @sunnycase
+third_party/proton @zhzhcookie @sunnycase
 
 # -----------
 # tle
