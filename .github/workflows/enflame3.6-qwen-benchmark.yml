@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-name: enflame3.6-Qwen-Benchmark
+name: Enflame3.6-Qwen-Benchmark
 
 on:
   push:

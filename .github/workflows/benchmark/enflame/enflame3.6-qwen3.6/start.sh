@@ -51,6 +51,10 @@ bash "${SCRIPT_DIR}/clear_fuser_process.sh"
 start=$(date +%s)
 
 export VLLM_PLUGINS=fl
+export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=1800
+export TORCH_GCU_ENABLE_INT64_AND_UINT64=1
+export ENABLE_I64_CHECK=0
+export TORCHGCU_INDUCTOR_ENABLE=1
 
 nohup vllm serve ./Qwen3.6-27B/  \
     --tensor-parallel-size 4 \
