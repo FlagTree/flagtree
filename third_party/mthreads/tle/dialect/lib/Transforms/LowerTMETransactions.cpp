@@ -9,14 +9,12 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -141,75 +139,6 @@ static bool haveEquivalentPredicates(Value lhs, Value rhs) {
          lhsConstant.getValue() == rhsConstant.getValue();
 }
 
-// Direct copies can share one completion barrier when their declared byte
-// budget covers the complete batch. Infer the same metadata emitted by pipes.
-static void inferDirectCompletionGroups(ModuleOp module,
-                                        ArrayRef<Block *> blocks) {
-  int64_t nextGroup = 0;
-  module.walk([&](ttmg::AsyncTMECopyGlobalToLocalOp copy) {
-    if (auto attr = copy->getAttrOfType<DenseI64ArrayAttr>(
-            ttmg::kTLECompletionGroupAttr))
-      if (attr.size() != 0)
-        nextGroup = std::max(nextGroup, attr[0] + 1);
-  });
-  struct Pending {
-    int64_t expected = 0;
-    int64_t bytes = 0;
-    SmallVector<std::pair<ttmg::AsyncTMECopyGlobalToLocalOp, int64_t>> copies;
-  };
-  for (Block *block : blocks) {
-    llvm::DenseMap<Value, Pending> pending;
-    for (Operation &op : *block) {
-      auto copy = dyn_cast<ttmg::AsyncTMECopyGlobalToLocalOp>(&op);
-      if (!copy) {
-        if (!isMemoryEffectFree(&op))
-          pending.clear();
-        continue;
-      }
-      if (copy->hasAttr(ttmg::kTLECompletionGroupAttr))
-        continue;
-      auto declared =
-          copy->getAttrOfType<IntegerAttr>(ttmg::kTLEExpectBytesAttr);
-      if (!declared || declared.getInt() <= 0)
-        continue;
-      auto type = cast<ttg::MemDescType>(copy.getResult().getType());
-      int64_t bytes = type.getElementType().getIntOrFloatBitWidth() / 8;
-      for (int32_t dim : copy.getBlockShape())
-        bytes *= dim;
-      if (bytes <= 0 || declared.getInt() <= bytes)
-        continue;
-      Pending &group = pending[copy.getBarId()];
-      if (group.copies.empty())
-        group.expected = declared.getInt();
-      if (group.expected != declared.getInt()) {
-        pending.erase(copy.getBarId());
-        continue;
-      }
-      group.bytes += bytes;
-      group.copies.push_back({copy, bytes});
-      if (group.bytes == group.expected) {
-        int64_t count = group.copies.size();
-        for (auto [index, member] : llvm::enumerate(group.copies)) {
-          auto [operation, memberBytes] = member;
-          operation->setAttr(
-              ttmg::kTLEExpectBytesAttr,
-              IntegerAttr::get(IntegerType::get(module.getContext(), 32),
-                               memberBytes));
-          operation->setAttr(
-              ttmg::kTLECompletionGroupAttr,
-              DenseI64ArrayAttr::get(module.getContext(),
-                                     {nextGroup, static_cast<int64_t>(index),
-                                      count, group.expected}));
-        }
-        ++nextGroup;
-        pending.erase(copy.getBarId());
-      } else if (group.bytes > group.expected) {
-        pending.erase(copy.getBarId());
-      }
-    }
-  }
-}
-
 class LowerTMETransactionsPass
     : public impl::TritonMUSAGPUTLELowerTMETransactionsBase<
           LowerTMETransactionsPass> {
@@ -225,8 +154,6 @@ class LowerTMETransactionsPass
           seenBlocks.insert(copy->getBlock()).second)
         blocks.push_back(copy->getBlock());
     });
-
-    inferDirectCompletionGroups(module, blocks);
 
     SmallVector<std::unique_ptr<CompletionGroupInstance>> groups;
     for (Block *block : blocks) {
