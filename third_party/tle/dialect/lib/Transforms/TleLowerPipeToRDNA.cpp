@@ -45,6 +45,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "tle/dialect/include/IR/Dialect.h"
+#include "tle/dialect/include/Transforms/PipeReaderContract.h"
 #include "tle/dialect/include/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -541,24 +542,33 @@ struct TritonTleLowerPipeToRDNA
     if (ops.empty())
       return;
 
-    // Pre-scan: size each pipe's barriers by the partitions its endpoints run
-    // in. `full` is sized by the total writer thread count and `empty` by the
-    // total reader thread count; a drain adds its own rendezvous barrier. With
-    // warp specialization a pipe can have several distinct writer/reader
-    // partitions (e.g. named readers), and EVERY one must arrive before the
-    // barrier flips -- so accumulate once per distinct endpoint partition
-    // instead of overwriting (a 128- and a 32-thread reader need 160 arrivals,
-    // not 32). Two ops of one endpoint (a reader's wait and release) must agree
-    // on the thread count.
+    // Pre-scan: size each pipe's barriers by the participants its endpoints run
+    // on. `full` is sized by the total writer thread count and `empty` by the
+    // total reader thread count; a drain adds its own rendezvous barrier.
+    //
+    // Readers are identified by their LOGICAL reader name (the pipe contract:
+    // `tle.pipe.create {readers = [...]}` + per-op `reader_name`), NOT by the
+    // physical region they run in -- mirroring the NVWS lowering so every
+    // backend sizes the empty barrier identically. Each DISTINCT declared reader
+    // arrives before a slot can be reused, so the empty barrier sums the distinct
+    // readers (two 128-thread named readers need 256, even in one partition). An
+    // unnamed pipe has a single reader identity ("" ). getPipeReaderName enforces
+    // the same reader-declaration diagnostics as NVWS. Writers are summed per
+    // distinct partition. Two ops of one participant (a reader's wait+release)
+    // must agree on the thread count.
     std::map<std::string, PipeCounts> countsByKey;
     std::map<std::string, std::map<Region *, int32_t>> writerEndpoints;
-    std::map<std::string, std::map<Region *, int32_t>> readerEndpoints;
+    std::map<std::string, std::map<std::string, int32_t>> readerCounts;
+    std::map<std::string, SmallVector<std::string>> declaredReaders;
+    for (Operation *op : ops)
+      if (auto create = dyn_cast<PipeCreateOp>(op))
+        declaredReaders[getPipeKey(op)] = getDeclaredReaderNames(create);
     auto endpointRegion = [](Operation *op) -> Region * {
       auto partition = getEnclosingWarpSpecializePartition(op);
       return partition ? partition->second : nullptr; // nullptr: default/outer
     };
-    auto recordEndpoint = [&](std::map<Region *, int32_t> &endpoints,
-                              Operation *op) -> LogicalResult {
+    auto recordWriter = [&](std::map<Region *, int32_t> &endpoints,
+                            Operation *op) -> LogicalResult {
       FailureOr<int32_t> cnt = getThreadCount(op);
       if (failed(cnt))
         return failure();
@@ -568,14 +578,30 @@ struct TritonTleLowerPipeToRDNA
                << *cnt << " (already counted " << inserted.first->second << ")";
       return success();
     };
+    auto recordReader = [&](const std::string &key,
+                            Operation *op) -> LogicalResult {
+      FailureOr<std::string> name = getPipeReaderName(declaredReaders[key], op);
+      if (failed(name))
+        return failure(); // reader-declaration diagnostic already emitted
+      FailureOr<int32_t> cnt = getThreadCount(op);
+      if (failed(cnt))
+        return failure();
+      auto inserted = readerCounts[key].try_emplace(*name, *cnt);
+      if (!inserted.second && inserted.first->second != *cnt)
+        return op->emitOpError("uses reader ")
+               << *name << " thread count " << *cnt
+               << " but that reader already has thread count "
+               << inserted.first->second;
+      return success();
+    };
     for (Operation *op : ops) {
       std::string key = getPipeKey(op);
       PipeCounts &c = countsByKey[key];
       if (isa<PipeWriterCommitOp, PipeWriterAcquireOp, PipeWriterCloseOp>(op)) {
-        if (failed(recordEndpoint(writerEndpoints[key], op)))
+        if (failed(recordWriter(writerEndpoints[key], op)))
           return signalPassFailure();
       } else if (isa<PipeReaderWaitOp, PipeReaderReleaseOp>(op)) {
-        if (failed(recordEndpoint(readerEndpoints[key], op)))
+        if (failed(recordReader(key, op)))
           return signalPassFailure();
       } else if (isa<PipeDrainOp>(op)) {
         FailureOr<int32_t> cnt = getThreadCount(op);
@@ -586,18 +612,18 @@ struct TritonTleLowerPipeToRDNA
       }
       // create: fallback filled below.
     }
-    // Every distinct writer/reader partition arrives on the barrier, so sum
-    // their thread counts.
+    // Every distinct writer partition / declared reader arrives on the barrier,
+    // so sum their thread counts.
     for (auto &entry : writerEndpoints) {
       int32_t sum = 0;
       for (auto &endpoint : entry.second)
         sum += endpoint.second;
       countsByKey[entry.first].producerCnt = sum;
     }
-    for (auto &entry : readerEndpoints) {
+    for (auto &entry : readerCounts) {
       int32_t sum = 0;
-      for (auto &endpoint : entry.second)
-        sum += endpoint.second;
+      for (auto &reader : entry.second)
+        sum += reader.second;
       countsByKey[entry.first].consumerCnt = sum;
     }
     // Degenerate pipes (missing a writer or reader) fall back to the create op's
