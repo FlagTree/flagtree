@@ -7,6 +7,10 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+// TLE-only: these lower the amdgpu Init/Arrive/WaitBarrier ops that exist solely
+// as the tle.pipe mbarrier emulation (created by TleLowerPipeToRDNA). A non-TLE
+// build has no such ops, so the whole lowering is guarded.
+#ifdef __TLE__
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -214,3 +218,5 @@ void mlir::triton::AMD::populateBarrierOpToLLVMPatterns(
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, targetInfo, benefit);
 }
+
+#endif // __TLE__

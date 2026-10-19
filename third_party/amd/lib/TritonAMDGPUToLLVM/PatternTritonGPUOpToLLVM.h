@@ -61,10 +61,14 @@ void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
+#ifdef __TLE__
+// Lowers the amdgpu Init/Arrive/WaitBarrier ops of the tle.pipe mbarrier
+// emulation; declared only when the TLE plugin is built.
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      const TargetInfo &targetInfo,
                                      PatternBenefit benefit);
+#endif // __TLE__
 
 #ifdef __TLE__
 // RDNA lowering of tle.distributed_barrier (group_kind grid / grid_axis).
