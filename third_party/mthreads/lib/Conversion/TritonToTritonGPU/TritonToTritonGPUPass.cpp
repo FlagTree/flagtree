@@ -1605,20 +1605,23 @@ public:
     TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp,
                                          numCTAs, enableSourceRemat);
     TritonGPUConversionTarget target(*context, typeConverter);
-    // rewrite patterns
-    RewritePatternSet patterns(context);
-    // add rules
-    populateArithPatternsAndLegality(typeConverter, patterns, target);
-    populateMathPatternsAndLegality(typeConverter, patterns, target);
-    populateTritonPatterns(typeConverter, patterns, numCTAs);
-    // TODO: can we use
-    //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
-    populateSCFPatterns(typeConverter, patterns);
-    populateCFPatterns(typeConverter, patterns);
+    auto populatePatterns = [&](TritonGPUTypeConverter &converter,
+                                RewritePatternSet &patterns,
+                                TritonGPUConversionTarget &target) {
+      populateArithPatternsAndLegality(converter, patterns, target);
+      populateMathPatternsAndLegality(converter, patterns, target);
+      populateTritonPatterns(converter, patterns, numCTAs);
+      // TODO: can we use
+      // mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
+      populateSCFPatterns(converter, patterns);
+      populateCFPatterns(converter, patterns);
 #ifdef __TLE__
-    populateMUSATlePatterns(typeConverter, patterns);
+      populateMUSATlePatterns(converter, patterns);
 #endif
-    patterns.insert<GenericOpPattern<ub::PoisonOp>>(typeConverter, context);
+      patterns.insert<GenericOpPattern<ub::PoisonOp>>(converter, context);
+    };
+    RewritePatternSet patterns(context);
+    populatePatterns(typeConverter, patterns, target);
 
     Builder b(&getContext());
     mod->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));
@@ -1629,6 +1632,32 @@ public:
 #ifdef __TLE__
     if (failed(applyMusaTleEncodingHints(mod)))
       return signalPassFailure();
+    // Worker regions may use fewer warps than the default partition. Convert
+    // their tensors with that partition's warp count before the module-wide
+    // conversion; already encoded worker values retain their layouts there.
+    SmallVector<std::pair<Region *, int32_t>> workers;
+    mod.walk([&](WarpSpecializeOp ws) {
+      if (!ws->hasAttr("musa_tle.static_warp_specialize"))
+        return;
+      for (auto [region, warps] :
+           llvm::zip_equal(ws.getPartitionRegions(), ws.getPartitionNumWarps()))
+        if (warps != numWarps)
+          workers.emplace_back(region, warps);
+    });
+    for (auto [region, warps] : workers) {
+      TritonGPUTypeConverter workerConverter(context, warps, threadsPerWarp,
+                                             numCTAs, enableSourceRemat);
+      TritonGPUConversionTarget workerTarget(*context, workerConverter);
+      RewritePatternSet workerPatterns(context);
+      populatePatterns(workerConverter, workerPatterns, workerTarget);
+      SmallVector<Operation *> operations;
+      for (Block &block : *region)
+        for (Operation &op : block)
+          operations.push_back(&op);
+      if (failed(applyPartialConversion(operations, workerTarget,
+                                        std::move(workerPatterns))))
+        return signalPassFailure();
+    }
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
 #else

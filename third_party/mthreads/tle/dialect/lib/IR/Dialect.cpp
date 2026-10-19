@@ -468,6 +468,29 @@ LogicalResult BarrierIndexOp::verify() {
   return success();
 }
 
+// A wait observes shared writes published by other static partitions.
+void BarrierWaitOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), ttg::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), ttg::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+}
+
+void BarrierArriveOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), ttg::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), ttg::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+}
+
 LogicalResult BarrierWaitOp::verify() { return success(); }
 
 LogicalResult BarrierArriveOp::verify() {
