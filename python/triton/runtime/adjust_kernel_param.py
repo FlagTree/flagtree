@@ -1371,22 +1371,22 @@ def auto_adjust_block_sizes(nargs, fn, configs, current, config):
     if ge_k_map:  # tl.dot with general tl.load
         if FLAGTREE_BACKEND == "":
             if knobs.autotuning.print:
-                print("[AABS] 4. adjust bs in tl.dot with general tl.load")
+                print("[AABS] 4. adjust bs in tl.dot with general tl.load on nvidia")
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 16)
         elif FLAGTREE_BACKEND == "ppu":
             if knobs.autotuning.print:
-                print("[AABS] 4. adjust bs in tl.dot with general tl.load")
-            adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 32)
+                print(f"[AABS] 4. adjust bs in tl.dot with general tl.load on {FLAGTREE_BACKEND}")
+            adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 16)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_m_map, 16)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_n_map, 16)
         elif FLAGTREE_BACKEND == "hcu":
             if knobs.autotuning.print:
-                print("[AABS] 4. adjust bs in tl.dot with general tl.load")
+                print(f"[AABS] 4. adjust bs in tl.dot with general tl.load on {FLAGTREE_BACKEND}")
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_m_map, 16)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_n_map, 16)
         elif FLAGTREE_BACKEND == "metax":
             if knobs.autotuning.print:
-                print("[AABS] 4. adjust bs in tl.dot with general tl.load")
+                print(f"[AABS] 4. adjust bs in tl.dot with general tl.load on {FLAGTREE_BACKEND}")
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_m_map, 16)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_n_map, 16)
         elif FLAGTREE_BACKEND == "sunrise":
@@ -1396,21 +1396,21 @@ def auto_adjust_block_sizes(nargs, fn, configs, current, config):
             # at least min_dot_size so AABS never produces a config that violates
             # the dot constraint checked in semantic.py.
             if knobs.autotuning.print:
-                print("[AABS] 4. adjust bs in tl.dot with general tl.load")
+                print(f"[AABS] 4. adjust bs in tl.dot with general tl.load on {FLAGTREE_BACKEND}")
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 16)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_m_map, 8)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_n_map, 8)
         elif FLAGTREE_BACKEND == "iluvatar":
             if knobs.autotuning.print:
-                print("[AABS] 4. adjust bs in tl.dot with general tl.load")
+                print(f"[AABS] 4. adjust bs in tl.dot with general tl.load on {FLAGTREE_BACKEND}")
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 16)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_m_map, 16)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_n_map, 16)
         else:
             pass
         if knobs.autotuning.print:
-            print("[AABS] 4. adjust bs in tl.dot with general tl.load for minimax_m3 index_topk")
-        # adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 32)
+            print("[AABS] 4. adjust bs in tl.dot with general tl.load")
+        adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 32)
 
     if knobs.autotuning.print:
         nargs_str = ''
