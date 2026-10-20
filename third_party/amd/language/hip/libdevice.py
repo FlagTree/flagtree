@@ -204,13 +204,26 @@ def fast_sinf(arg0, _semantic=None):
 
 # NVIDIA maps mul_rn to __nv_fmul_rn: a separately rounded product that a later
 # add cannot absorb. A plain fmul here rounds to nearest, but under
-# enable_fp_fusion it can still contract into a following FMA, skipping the
-# product's rounding. Route the product through __ocml_fma_f32 with a zero
-# addend -- fma(a, b, 0) is the single-rounded product, and the ocml call
-# boundary keeps a subsequent add from fusing with it (RoPE depends on this).
+# enable_fp_fusion it can contract into a following FMA, dropping the product's
+# rounding that RoPE relies on. An fma(a, b, 0) trick cannot both block that
+# fusion and keep the sign of a zero product. Emit the hardware multiply via
+# inline asm: it is round-to-nearest, preserves the sign of a zero product, and
+# is opaque to the contraction pass. `v` operands cover fp32 and the fp64 VGPR
+# pair; `is_pure` keeps it CSE-able.
 @core.extern
 def mul_rn(arg0, arg1, _semantic=None):
-    return fma(arg0, arg1, 0.0, _semantic=_semantic)
+    # inline_asm_elementwise does not type-check or promote its operands, so a
+    # mixed fp32/fp64 call would emit mismatched operand widths. Promote both to
+    # their common float type first (as _semantic.mul does) and pick the matching
+    # multiply from the promoted type.
+    arg0, arg1 = _semantic.binary_op_type_checking_impl(arg0, arg1)
+    if arg0.dtype == core.dtype("fp64"):
+        return core.inline_asm_elementwise("v_mul_f64 $0, $1, $2", "=v,v,v",
+                                           [arg0, arg1], dtype=core.dtype("fp64"),
+                                           is_pure=True, pack=1, _semantic=_semantic)
+    return core.inline_asm_elementwise("v_mul_f32_e64 $0, $1, $2", "=v,v,v",
+                                       [arg0, arg1], dtype=core.dtype("fp32"),
+                                       is_pure=True, pack=1, _semantic=_semantic)
 
 
 @core.extern
