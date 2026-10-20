@@ -85,6 +85,24 @@ enum BarrierIndex {
   kNumBarriers = 16
 };
 
+// Original FlagTree implementation before the Triton #9366-style backport
+// (kept for review context):
+//
+// static void createBarrier(TritonLLVMIRRewriter &b, unsigned barIdx,
+//                           unsigned numThreads) {
+//   assert(barIdx < kNumBarriers && "not enough barriers");
+//   // If a partition has only 1 warp, use `bar.warp.sync`.
+//   if (numThreads == 32)
+//     LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
+//   else
+//     NVVM::BarrierOp::create(b, b.getLoc(), b.i32_val(barIdx),
+//                             b.i32_val(numThreads));
+// }
+//
+// Adapted from https://github.com/triton-lang/triton/pull/9366 (commit
+// f1ece2c, "ws function calls"). Accepting the barrier id as an SSA value lets
+// an outlined helper receive its caller's warp-group barrier as a hidden
+// argument. The unsigned overload preserves existing constant-id call sites.
 static void createBarrier(TritonLLVMIRRewriter &b, Value barIdx,
                           unsigned numThreads) {
   // If a partition has only 1 warp, use `bar.warp.sync`.
@@ -285,6 +303,60 @@ static void createRegRealloc(TritonLLVMIRRewriter &b, int curRegs,
   NVVM::SetMaxRegisterOp::create(b, b.getLoc(), adjRegs, action);
 }
 
+// Original function-local barrier lowering before the Triton #9366-style
+// backport (kept for review context):
+//
+// // Assign hardware barriers to each warp group and rewrite warp group
+// // barriers into `barrier.sync` instructions. There is a maximum number of
+// // barriers.
+// clang-format off
+// static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
+//                                               ArrayRef<WarpSpecializeOp> wsOps,
+//                                               unsigned threadsPerWarp,
+//                                               unsigned defaultWarpGroupSize) {
+//   // HACK: Turn all `nvvm.barrier0` ops into warp group barriers.
+//   func.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+//     // Walk into default regions but not partition regions.
+//     if (isa<WarpSpecializePartitionsOp>(op))
+//       return WalkResult::skip();
+//
+//     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
+//       TritonLLVMIRRewriter b(bar.getLoc(), bar);
+//       createBarrier(b, kDefaultWarpGroupBarrierIdx, defaultWarpGroupSize);
+//       bar.erase();
+//       return WalkResult::skip();
+//     }
+//     return WalkResult::advance();
+//   });
+//
+//   // Each partition executes simultaneously, so each will get a different
+//   // barrier ID, but note this means there is a maximum of 16 barriers.
+//   for (WarpSpecializeOp op : wsOps) {
+//     for (auto [idx, partition] : llvm::enumerate(op.getPartitionRegions())) {
+//       unsigned barIdx = idx + kNumReservedBarriers;
+//       if (barIdx >= kNumBarriers) {
+//         return func.emitError("cannot support more than ")
+//                << (kNumBarriers - kNumReservedBarriers)
+//                << " warp group partitions";
+//       }
+//       unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
+//       partition->walk([&](NVVM::Barrier0Op bar) {
+//         TritonLLVMIRRewriter b(bar.getLoc(), bar);
+//         createBarrier(b, barIdx, warpGroupSize);
+//         bar.erase();
+//       });
+//     }
+//   }
+//
+//   return success();
+// }
+// clang-format on
+//
+// Adapted from https://github.com/triton-lang/triton/pull/9366 (commit
+// f1ece2c, "ws function calls"). The new lowering passes a hidden i32 barrier
+// id through calls so barriers in outlined Triton helpers use the calling warp
+// group. This NVIDIA-only FlagTree backport rewrites only helpers marked with
+// ws_num_warps, preserving the ABI of internal functions emitted by TLE Raw.
 static std::string mangleWarpSpecializeFunctionName(StringRef name) {
   return (name + "_ws").str();
 }
@@ -545,6 +617,18 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
   unsigned defaultNumWarps = lookupNumWarps(func);
 
+  // Original function-local rewrite before the #9366-style backport (kept for
+  // review context):
+  //
+  // // Before lowering away `ttg.warp_specialize`, lower warp group barriers.
+  // unsigned defaultWarpGroupSize = threadsPerWarp * defaultNumWarps;
+  // if (failed(rewriteWarpGroupBarriers(func, wsOps, threadsPerWarp,
+  //                                     defaultWarpGroupSize)))
+  //   return failure();
+  //
+  // Barrier rewriting now runs once at module scope before any kernel is
+  // lowered, so helper signatures and every call site stay consistent.
+
   auto totalNumWarpsAttr =
       module->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
   if (!totalNumWarpsAttr) {
@@ -790,12 +874,21 @@ struct ConvertWarpSpecializeToLLVM
     if (failed(runPipeline(pm, mod)))
       return signalPassFailure();
 
+    // Adapted from https://github.com/triton-lang/triton/pull/9366: rewrite
+    // barrier context through outlined helper calls at module scope before
+    // lowering the warp-specialize regions themselves.
     unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     if (failed(rewriteWarpGroupBarriers(mod, threadsPerWarp)))
       return signalPassFailure();
 
     SmallVector<LLVM::LLVMFuncOp> kernels;
     for (auto func : mod.getOps<LLVM::LLVMFuncOp>()) {
+      // Original kernel selection (kept for review context):
+      // if (func.isPublic())
+      //   kernels.push_back(func);
+      //
+      // The call-aware rewrite identifies kernels by external linkage, so use
+      // the same criterion when lowering their warp-specialize regions.
       if (func.getLinkage() == LLVM::Linkage::External)
         kernels.push_back(func);
     }

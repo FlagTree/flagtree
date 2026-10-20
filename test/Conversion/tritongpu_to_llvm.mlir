@@ -12,6 +12,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// Backport regression coverage for the behavior introduced by
+// https://github.com/triton-lang/triton/pull/11673. Verify that a default-group
+// helper without an explicit ttg.num-warps attribute records the module
+// fallback for function-call-aware warp-specialize lowering.
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // Helpers called by the default warp group have no explicit ttg.num-warps
   // attribute. Preserve the module fallback so warp-specialize lowering can

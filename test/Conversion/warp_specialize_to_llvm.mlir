@@ -47,6 +47,12 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
 
 // -----
 
+// Adapted from https://github.com/triton-lang/triton/pull/9366 (commit
+// f1ece2c, "ws function calls"). The upstream regression checks propagation of
+// a hidden warp-group barrier through outlined helpers. FlagTree additionally
+// covers nested scf.for/scf.if calls, existing argument attributes, unchanged
+// TLE Raw helper ABI, external calls, and a non-specialized kernel that shares
+// the rewritten helper.
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} {
 
 llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
