@@ -1,13 +1,15 @@
-"""AMD RDNA (Radeon AI PRO R9700 / gfx1201) recipe for Qwen3-1.7B decode.
+"""AMD RDNA recipe for Qwen3-1.7B decode (gfx1201 / R9700 and gfx1100 / W7900).
 
 The FlagMega distribution recipe is mesh-topology based (an 8x16 "bb" block
-grid), so it is vendor-agnostic: this module reuses the measured distribution
-CHOICES and the residual/norm layout helpers from the sibling nvidia-h800
-tutorial. Only three things are AMD-specific:
+grid), so it is vendor- AND gfx-agnostic: this module reuses the measured
+distribution CHOICES and the residual/norm layout helpers from the sibling
+nvidia-h800 tutorial, and the one recipe serves both RDNA3 (gfx1100) and RDNA4
+(gfx1201). Only three things are AMD-specific:
 
-  1. ``create_target`` wraps ``AmdGfx1201Target`` instead of ``NvidiaSm90Target``
-     (same batch-1 kernel-parameter tweaks -- tile/reduction sizes, not NV
-     hardware features).
+  1. ``create_target(arch=...)`` wraps ``AmdGfx1100Target`` / ``AmdGfx1201Target``
+     instead of ``NvidiaSm90Target`` (same batch-1 kernel-parameter tweaks --
+     tile/reduction sizes, not NV hardware features). The gfx target machine is
+     the only difference between the two RDNA parts.
   2. ``residual_layout="sharded-casts"`` + ``norm_layout="replicated-residual"``
      keep the residual/norm shards full-mesh contiguous, which avoids the
      gather-reduce owner-group codegen path that the default auto-distribution
@@ -37,8 +39,13 @@ from triton.flagmega.passes.auto_distributed import (
 )
 from triton.flagmega.passes.auto_distributed.materializer import distribution_selection_state
 from triton.flagmega.selection import override_plan
+from triton.flagmega.targets.amd_gfx1100 import AmdGfx1100Target
 from triton.flagmega.targets.amd_gfx1201 import AmdGfx1201Target
 from triton.flagmega.targets.portable_triton_implementations import portable_triton_implementation_model
+
+# The distribution recipe below is mesh-topology based, so one tutorial serves
+# both RDNA parts; only the gfx target machine differs.
+_TARGETS = {"gfx1100": AmdGfx1100Target, "gfx1201": AmdGfx1201Target}
 
 from local_optimizations.distribution_recipe import (  # noqa: E402  (sibling tutorial)
     CHOICES,
@@ -47,13 +54,17 @@ from local_optimizations.distribution_recipe import (  # noqa: E402  (sibling tu
 )
 
 
-def create_target(*, glu_reduction_group: int = 32) -> AmdGfx1201Target:
-    """An R9700/gfx1201 target with the reviewed batch-1 kernel-parameter tweaks.
+def create_target(*, arch: str = "gfx1201", glu_reduction_group: int = 32):
+    """An RDNA target (``gfx1201``/R9700 or ``gfx1100``/W7900) with the reviewed
+    batch-1 kernel-parameter tweaks.
 
-    The implementation model is reused from NVIDIA (bf16 kernels are portable);
-    only the reduction/tile parameters are specialized, exactly as the H800
-    tutorial does -- these are software tile sizes, not NV hardware features.
+    The distribution recipe and the tile/reduction tweaks are mesh-topology and
+    software choices shared across RDNA3 and RDNA4; only the gfx target machine
+    differs. The implementation model is reused from NVIDIA (bf16 kernels are
+    portable).
     """
+    if arch not in _TARGETS:
+        raise ValueError(f"arch must be one of {sorted(_TARGETS)}, got {arch!r}")
     if glu_reduction_group not in {32, 64, 128}:
         raise ValueError("The reviewed GLU reduction experiments use 32/64/128 elements")
     model = portable_triton_implementation_model()
@@ -70,12 +81,42 @@ def create_target(*, glu_reduction_group: int = 32) -> AmdGfx1201Target:
             parameters["elements_per_program"] = 256
         return replace(implementation, parameters=parameters)
 
-    return AmdGfx1201Target(triton_implementation_model=replace(
+    return _TARGETS[arch](triton_implementation_model=replace(
         model, implementations=tuple(configure(value) for value in model.implementations)))
 
 
+# Split-K GEMV points: splitting the reduction over y (partial_p_sum) AND sharding
+# the output over x (s_c/s_bc_h1) runs the GEMV on all 128 CTAs instead of the 16
+# that own a single x-row, flooding the CUs. On R9700 this is ~3x faster for the
+# 152K-vocab lm_head and ~1.3x for the MLP down-projection -- the default
+# output-only shards under-parallelize these big reductions.
+_SPLIT_K_POINTS = (
+    "distribution.logits.vectorized.compute",
+    # Real-importer (VLLM_INDUCTOR_LEVEL3) names the wide per-layer projections:
+    "distribution.decode_layer_after_attention.projection_wide.vectorized.compute",
+    "distribution.decode_layer_output.projection_wide.vectorized.compute",
+    # Synthetic import_qwen3_model name (harmless no-op on the real graph):
+    "distribution.decode_layer_mlp_down.vectorized.compute",
+)
+
+
+def _split_k_choices(points):
+    fixed = {}
+    for point_id in _SPLIT_K_POINTS:
+        point = points.get(point_id)
+        if point is None:
+            continue
+        for cand in point.candidates:
+            cid = cand.id
+            if "partial_p_sum" in cid and ("_s_c_h1" in cid or "_s_bc_h1" in cid):
+                fixed[point_id.removeprefix("distribution.")] = cid
+                break
+    return fixed
+
+
 def select_distribution(module, target, *, residual_layout="sharded-casts",
-                        norm_layout="replicated-residual", exclusive_axes=(0, 1)):
+                        norm_layout="replicated-residual", exclusive_axes=(0, 1),
+                        split_k_logits=True):
     """Apply the (mesh-agnostic) Qwen3-1.7B distribution recipe for an RDNA mesh."""
     points = {point.id: point for point in module.selection_points if point.kind == "distribution"}
     choices = []
@@ -104,12 +145,14 @@ def select_distribution(module, target, *, residual_layout="sharded-casts",
             exclusive=norm_layout in {"exclusive", "exclusive-residual"},
             exclusive_axes=exclusive_axes,
         ))
+    if split_k_logits:
+        fixed.update(_split_k_choices(points))
     result = solve_search_graph(graph, fixed_selections=fixed)
     _, records = distribution_selection_state(result, policy=target.distribution_policy.identity)
     return override_plan(
         module,
         [(record.point_id, record.candidate_id) for record in records],
-        rationale=("R9700 batch-1 Qwen3-1.7B; sharded-casts residual + replicated-residual norm; "
+        rationale=("RDNA batch-1 Qwen3-1.7B; sharded-casts residual + replicated-residual norm; "
                    "RDNA portable GEMV (no TMA)"),
     )
 
