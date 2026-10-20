@@ -17,9 +17,11 @@ extern "C" {
 // Operands (tle_raw.call order with output_indices=[5]):
 //   inputs:  symm (GM), out (GM), symm_off, out_off, n
 //   outputs: dummy (UB)
-__aiv__ void _mlir_ciface_cannshmem_ar_oneshot(memref_t<__gm__ half, 1> *symm, memref_t<__gm__ half, 1> *out,
-                                               int64_t symm_off, int64_t out_off, int64_t n,
-                                               memref_t<__ubuf__ half, 1> *dummy) {
+__aiv__ void
+_mlir_ciface_cannshmem_ar_oneshot(memref_t<__gm__ half, 1> *symm,
+                                  memref_t<__gm__ half, 1> *out,
+                                  int64_t symm_off, int64_t out_off, int64_t n,
+                                  memref_t<__ubuf__ half, 1> *dummy) {
   (void)dummy;
   __gm__ half *local = symm->aligned + symm->offset;
   __gm__ half *gout = out->aligned + out->offset;
@@ -30,12 +32,14 @@ __aiv__ void _mlir_ciface_cannshmem_ar_oneshot(memref_t<__gm__ half, 1> *symm, m
   TBuf<> tbuf;
   pipe.InitBuffer(tbuf, kChunk * sizeof(half) * 2);
   LocalTensor<half> acc = tbuf.Get<half>(kChunk);
-  LocalTensor<half> tmp = tbuf.GetWithOffset<half>(kChunk, kChunk * sizeof(half));
+  LocalTensor<half> tmp =
+      tbuf.GetWithOffset<half>(kChunk, kChunk * sizeof(half));
 
   aclshmemx_barrier_all_vec();
 
   for (int64_t off = 0; off < n; off += kChunk) {
-    uint32_t len = static_cast<uint32_t>((n - off) < static_cast<int64_t>(kChunk) ? (n - off) : kChunk);
+    uint32_t len = static_cast<uint32_t>(
+        (n - off) < static_cast<int64_t>(kChunk) ? (n - off) : kChunk);
     uint32_t len_align = (len + 15u) & ~15u;
 
     GlobalTensor<half> g_local;
@@ -48,7 +52,8 @@ __aiv__ void _mlir_ciface_cannshmem_ar_oneshot(memref_t<__gm__ half, 1> *symm, m
       if (pe == me) {
         continue;
       }
-      __gm__ half *rbase = (__gm__ half *)aclshmem_ptr((__gm__ void *)local, pe);
+      __gm__ half *rbase =
+          (__gm__ half *)aclshmem_ptr((__gm__ void *)local, pe);
       GlobalTensor<half> g_remote;
       g_remote.SetGlobalBuffer(rbase + symm_off + off);
       DataCopy(tmp, g_remote, len_align);
@@ -70,4 +75,4 @@ __aiv__ void _mlir_ciface_cannshmem_ar_oneshot(memref_t<__gm__ half, 1> *symm, m
   aclshmemx_barrier_all_vec();
 }
 
-}  // extern "C"
+} // extern "C"

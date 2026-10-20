@@ -11,14 +11,16 @@ extern "C" {
 __aicore__ int _mlir_ciface_aclshmem_my_pe(void);
 __aicore__ int _mlir_ciface_aclshmem_n_pes(void);
 __aicore__ void _mlir_ciface_aclshmem_barrier_all(void);
-__aicore__ void _mlir_ciface_aclshmem_ptr_float(memref_t<__gm__ float, 1> *symmPtr,
-                                                memref_t<__gm__ float, 1> *ptr, int pe);
+__aicore__ void
+_mlir_ciface_aclshmem_ptr_float(memref_t<__gm__ float, 1> *symmPtr,
+                                memref_t<__gm__ float, 1> *ptr, int pe);
 
 // Operands (tle_raw.call order with output_indices=[1]):
 //   inputs:  symm (GM), n
 //   outputs: out (UB)
-__aiv__ void _mlir_ciface_cannshmem_ring_read(memref_t<__gm__ float, 1> *symm, int64_t n,
-                                              memref_t<__ubuf__ float, 1> *out) {
+__aiv__ void
+_mlir_ciface_cannshmem_ring_read(memref_t<__gm__ float, 1> *symm, int64_t n,
+                                 memref_t<__ubuf__ float, 1> *out) {
   const int me = _mlir_ciface_aclshmem_my_pe();
   const int npes = _mlir_ciface_aclshmem_n_pes();
   const int peer = (me + 1) % npes;

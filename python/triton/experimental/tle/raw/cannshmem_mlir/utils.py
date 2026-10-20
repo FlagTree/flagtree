@@ -17,7 +17,6 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
 """Device-bitcode resolve for library=\"cannshmem_mlir\".
 
 Late-links AscendNPU-IR Shmem template BC (``_mlir_ciface_aclshmem_*``).
@@ -32,10 +31,7 @@ from typing import Optional
 
 # Re-export shared host helpers for tutorials that imported from cannshmem_mlir.
 from triton.experimental.tle.raw.cannshmem.utils import (  # noqa: F401
-    bench_us,
-    cleanup_symmetric_tensor,
-    create_symmetric_tensor,
-    init_cannshmem_by_torch_pg,
+    bench_us, cleanup_symmetric_tensor, create_symmetric_tensor, init_cannshmem_by_torch_pg,
 )
 
 # library="cannshmem_mlir": Ascend backend late-links libdevice_cannshmem_mlir*.bc
@@ -62,8 +58,7 @@ def _package_lib_dir() -> Path:
 
 def resolve_cannshmem_mlir_device_bitcode() -> Optional[Path]:
     """Resolve a single cannshmem_mlir device bitcode (first match)."""
-    for env in ("FLAGTREE_CANNSHMEM_MLIR_DEVICE_BC", "FLAGTREE_CANNSHMEM_DEVICE_BC",
-                "FLAGTREE_SHMEM_DEVICE_BC"):
+    for env in ("FLAGTREE_CANNSHMEM_MLIR_DEVICE_BC", "FLAGTREE_CANNSHMEM_DEVICE_BC", "FLAGTREE_SHMEM_DEVICE_BC"):
         value = os.environ.get(env)
         if value:
             path = Path(value)
@@ -90,8 +85,7 @@ def get_cannshmem_mlir_link_bitcodes() -> list[str]:
     """Extra --link-aicore-bitcode paths when library=cannshmem_mlir is enabled."""
     if not is_cannshmem_mlir_device_bc_enabled():
         return []
-    for env in ("FLAGTREE_CANNSHMEM_MLIR_DEVICE_BC", "FLAGTREE_CANNSHMEM_DEVICE_BC",
-                "FLAGTREE_SHMEM_DEVICE_BC"):
+    for env in ("FLAGTREE_CANNSHMEM_MLIR_DEVICE_BC", "FLAGTREE_CANNSHMEM_DEVICE_BC", "FLAGTREE_SHMEM_DEVICE_BC"):
         value = os.environ.get(env)
         if value:
             path = Path(value)
@@ -114,9 +108,8 @@ def get_cannshmem_mlir_link_bitcodes() -> list[str]:
     alias = lib / "libdevice_cannshmem_mlir.bc"
     if alias.is_file():
         return [str(alias.resolve())]
-    raise RuntimeError(
-        "library='cannshmem_mlir' enabled but no device bitcode found; "
-        "run raw/cannshmem_mlir/build_device_bc.sh or set FLAGTREE_CANNSHMEM_MLIR_DEVICE_BC")
+    raise RuntimeError("library='cannshmem_mlir' enabled but no device bitcode found; "
+                       "run raw/cannshmem_mlir/build_device_bc.sh or set FLAGTREE_CANNSHMEM_MLIR_DEVICE_BC")
 
 
 def get_cannshmem_link_bitcodes() -> list[str]:

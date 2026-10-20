@@ -91,8 +91,8 @@ def _template_include_dirs(extra: Sequence[Path] = ()) -> List[str]:
         triton_root = Path(triton.__file__).resolve().parent  # .../triton
         candidates = [
             # Editable / in-tree: <repo>/python/triton -> <repo>/third_party/...
-            triton_root.parent.parent / "third_party" / "ascend" / "AscendNPU-IR" / "bishengir" / "lib" /
-            "Template" / "include",
+            triton_root.parent.parent / "third_party" / "ascend" / "AscendNPU-IR" / "bishengir" / "lib" / "Template" /
+            "include",
             # Some installs keep AscendNPU-IR next to the package.
             triton_root / "backends" / "ascend" / "AscendNPU-IR" / "bishengir" / "lib" / "Template" / "include",
         ]
@@ -100,8 +100,7 @@ def _template_include_dirs(extra: Sequence[Path] = ()) -> List[str]:
         flash = os.getenv("FLAGTREE_ROOT")
         if flash:
             candidates.append(
-                Path(flash) / "third_party" / "ascend" / "AscendNPU-IR" / "bishengir" / "lib" / "Template" /
-                "include")
+                Path(flash) / "third_party" / "ascend" / "AscendNPU-IR" / "bishengir" / "lib" / "Template" / "include")
         for default in candidates:
             if default.is_dir():
                 dirs.append(default)

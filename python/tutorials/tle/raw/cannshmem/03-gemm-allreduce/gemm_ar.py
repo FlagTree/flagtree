@@ -240,9 +240,21 @@ def _kw():
 
 def _run_fused_mix(a, b, symm, out):
     mix_fused_gemm_ar_kernel[(1, 1, 1)](
-        a, b, symm, out, M, N, K,
-        a.stride(0), a.stride(1), b.stride(0), b.stride(1),
-        TILE_ELEMS=TILE_ELEMS, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+        a,
+        b,
+        symm,
+        out,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        TILE_ELEMS=TILE_ELEMS,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
         **_kw(),
     )
 
@@ -266,9 +278,21 @@ def _run_fused_soft(a, b, symm, out):
         with torch.npu.stream(s_gemm):
             s_gemm.wait_event(ar_done[stage])
             gemm_tile_kernel[(1, )](
-                a, b, symm, start_m, symm_off, M, N, K,
-                a.stride(0), a.stride(1), b.stride(0), b.stride(1),
-                BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+                a,
+                b,
+                symm,
+                start_m,
+                symm_off,
+                M,
+                N,
+                K,
+                a.stride(0),
+                a.stride(1),
+                b.stride(0),
+                b.stride(1),
+                BLOCK_M=BLOCK_M,
+                BLOCK_N=BLOCK_N,
+                BLOCK_K=BLOCK_K,
                 **_kw(),
             )
             gemm_done[stage].record(s_gemm)
@@ -276,7 +300,12 @@ def _run_fused_soft(a, b, symm, out):
         with torch.npu.stream(s_ar):
             s_ar.wait_event(gemm_done[stage])
             ar_tile_kernel[(1, )](
-                symm, out, symm_off, out_off, TILE_ELEMS=TILE_ELEMS, **_kw(),
+                symm,
+                out,
+                symm_off,
+                out_off,
+                TILE_ELEMS=TILE_ELEMS,
+                **_kw(),
             )
             ar_done[stage].record(s_ar)
 
@@ -295,10 +324,22 @@ def _run_fused(a, b, symm, out):
 
 def _run_sequential_raw(a, b, c_local, symm, out):
     sequential_gemm_kernel[(1, )](
-        a, b, c_local, M, N, K,
-        a.stride(0), a.stride(1), b.stride(0), b.stride(1),
-        c_local.stride(0), c_local.stride(1),
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K, **_kw(),
+        a,
+        b,
+        c_local,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        c_local.stride(0),
+        c_local.stride(1),
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
+        **_kw(),
     )
     symm.copy_(c_local.reshape(-1))
     sequential_ar_kernel[(1, )](symm, out, N_ELEMS=M * N, **_kw())
@@ -316,8 +357,7 @@ def main():
     b = torch.randn(K, N, dtype=torch.float16, generator=g).to(DEVICE).contiguous()
 
     c_local = torch.empty(M, N, dtype=torch.float16, device=DEVICE)
-    symm = create_symmetric_tensor(
-        torch.empty(STAGES * TILE_ELEMS, dtype=torch.float16, device=DEVICE))
+    symm = create_symmetric_tensor(torch.empty(STAGES * TILE_ELEMS, dtype=torch.float16, device=DEVICE))
     symm_full = create_symmetric_tensor(torch.empty(M * N, dtype=torch.float16, device=DEVICE))
     out_fused = torch.empty(M * N, dtype=torch.float16, device=DEVICE)
     out_seq = torch.empty(M * N, dtype=torch.float16, device=DEVICE)
@@ -357,13 +397,10 @@ def main():
 
     us_fused = bench_us(lambda: _run_fused(a, b, symm, out_fused), warmup=2, iters=5)
     us_seq = bench_us(lambda: _run_sequential_raw(a, b, c_local, symm_full, out_seq), warmup=2, iters=5)
-    us_mm = bench_us(
-        lambda: dist.all_reduce(torch.mm(a, b), op=dist.ReduceOp.SUM), warmup=2, iters=5)
+    us_mm = bench_us(lambda: dist.all_reduce(torch.mm(a, b), op=dist.ReduceOp.SUM), warmup=2, iters=5)
     us_npu = None
     if has_npu:
-        us_npu = bench_us(
-            lambda: torch_npu.npu_mm_all_reduce_base(a, b, hcom, reduce_op="sum"),
-            warmup=2, iters=5)
+        us_npu = bench_us(lambda: torch_npu.npu_mm_all_reduce_base(a, b, hcom, reduce_op="sum"), warmup=2, iters=5)
 
     if rank == 0:
         print(f"shape=({M},{K})x({K},{N}) world={world} stages={STAGES} tiles={NUM_TILES} mode={FUSED_MODE}")

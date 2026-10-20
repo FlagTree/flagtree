@@ -17,7 +17,6 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
 """Host helpers + native device includes for library=\"cannshmem\".
 
 ``library=\"cannshmem\"`` adds official cann/shmem header paths so AscendC can
@@ -101,14 +100,12 @@ def get_cannshmem_include_dirs() -> List[str]:
         return []
     home = resolve_cannshmem_home()
     if home is None:
-        raise RuntimeError(
-            "library='cannshmem' enabled but cann/shmem headers not found; "
-            "build from https://gitcode.com/cann/shmem and set "
-            "FLAGTREE_CANNSHMEM_HOME to install/shmem (or the repo root)")
+        raise RuntimeError("library='cannshmem' enabled but cann/shmem headers not found; "
+                           "build from https://gitcode.com/cann/shmem and set "
+                           "FLAGTREE_CANNSHMEM_HOME to install/shmem (or the repo root)")
     if not (home / "src" / "host_device").is_dir():
-        raise RuntimeError(
-            f"cann/shmem home {home} is missing src/host_device (incomplete wheel?); "
-            "use a source build install/ and set FLAGTREE_CANNSHMEM_HOME")
+        raise RuntimeError(f"cann/shmem home {home} is missing src/host_device (incomplete wheel?); "
+                           "use a source build install/ and set FLAGTREE_CANNSHMEM_HOME")
     dirs: List[Path] = []
     # include/: public shmem.h; src/device: hpp bodies; src/: host_device/* relative includes
     for sub in (home / "include", home / "src" / "device", home / "src"):

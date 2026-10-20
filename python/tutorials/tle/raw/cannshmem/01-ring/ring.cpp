@@ -12,8 +12,9 @@ extern "C" {
 // Operands (tle_raw.call order with output_indices=[1]):
 //   inputs:  symm (GM), n
 //   outputs: out (UB)
-__aiv__ void _mlir_ciface_cannshmem_ring_read(memref_t<__gm__ float, 1> *symm, int64_t n,
-                                              memref_t<__ubuf__ float, 1> *out) {
+__aiv__ void
+_mlir_ciface_cannshmem_ring_read(memref_t<__gm__ float, 1> *symm, int64_t n,
+                                 memref_t<__ubuf__ float, 1> *out) {
   const int me = aclshmem_my_pe();
   const int npes = aclshmem_n_pes();
   const int peer = (me + 1) % npes;
