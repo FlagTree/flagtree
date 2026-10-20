@@ -1376,7 +1376,7 @@ def auto_adjust_block_sizes(nargs, fn, configs, current, config):
         elif FLAGTREE_BACKEND == "ppu":
             if knobs.autotuning.print:
                 print(f"[AABS] 4. adjust bs in tl.dot with general tl.load on {FLAGTREE_BACKEND}")
-            adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 16)
+            adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 32)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_m_map, 16)
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_n_map, 16)
         elif FLAGTREE_BACKEND == "hcu":
@@ -1408,9 +1408,6 @@ def auto_adjust_block_sizes(nargs, fn, configs, current, config):
             adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_n_map, 16)
         else:
             pass
-        if knobs.autotuning.print:
-            print("[AABS] 4. adjust bs in tl.dot with general tl.load")
-        adjust_block_size_general_dot_mn_dim(nargs, current, config, ge_k_map, 32)
 
     if knobs.autotuning.print:
         nargs_str = ''
