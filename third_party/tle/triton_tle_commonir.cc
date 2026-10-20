@@ -1,5 +1,5 @@
 // [metax+CommonIR] Slim CommonIR-only TLE bindings.
-// Mirrors only the FLAGTREE_COMMON_IR tile.* builder methods from triton_tle.cc.
+// Mirrors only the __FLAGTREE_COMMON_IR__ tile.* builder methods from triton_tle.cc.
 // Depends on FLIR CommonIR (tile) only — no TLE-raw/Lite and no ttng Hopper.
 #include "Python.h"
 #include "ir.h"

@@ -24,7 +24,7 @@
 #include "Python.h"
 #include "Transforms/Passes.h"
 #include "ir.h" // TritonOpBuilder
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
 #include "mlir-ext/Dialect/CommonIR/IR/CommonIRDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "CommonIRToTTGIR/Passes.h"
@@ -34,6 +34,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinDialect.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Value.h"
@@ -46,6 +47,7 @@
 #include "pybind11/pytypes.h"
 #include "pybind11/stl.h"
 #include "tle/dialect/include/IR/Dialect.h"
+#include "tle/dialect/include/IR/ExactSMEM.h"
 #include "tle/dialect/include/IR/VerifyUtils.h"
 #include "tle/dialect/include/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -71,11 +73,11 @@ namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 namespace tle = triton::tle;
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
 namespace tile = triton::tile;
 #endif
 
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
 static std::string attrToLowerString(Attribute attr) {
   if (!attr)
     return "";
@@ -122,6 +124,28 @@ extern tle::DSLRegionOp createTLERawRegionDeferred(
     const std::vector<Value> &args,
     const std::vector<int64_t> &aliasOperandIndices, std::string_view hint,
     std::string_view dsl_file_name, std::string_view extern_func_name);
+
+static Value resolveWarpSpecializeCapture(Value value) {
+  while (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    auto partitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
+        blockArg.getOwner()->getParentOp());
+    if (!partitions)
+      break;
+    auto warpSpecialize =
+        dyn_cast<ttg::WarpSpecializeOp>(partitions->getParentOp());
+    if (!warpSpecialize)
+      break;
+    auto captures = warpSpecialize.getExplicitCaptures();
+    unsigned index = blockArg.getArgNumber();
+    if (index >= captures.size())
+      break;
+    Value capture = captures[index];
+    if (capture == value)
+      break;
+    value = capture;
+  }
+  return value;
+}
 
 void init_triton_tle_ir(py::module &&m) {
 
@@ -274,9 +298,74 @@ void init_triton_tle_ir(py::module &&m) {
              return self.create<ttg::LocalAllocOp>(memDesc);
            })
       .def("create_local_alloc",
-           [](TritonOpBuilder &self, Type resultTy, Value value) -> Value {
-             return self.create<ttg::LocalAllocOp>(resultTy, value);
+           [](TritonOpBuilder &self, Type resultTy,
+              std::optional<Value> value) -> Value {
+             return self.create<ttg::LocalAllocOp>(resultTy,
+                                                   value.value_or(Value()));
            })
+      .def("mark_logical_tensor_descriptor",
+           [](TritonOpBuilder &self, Value value,
+              std::vector<int64_t> logicalShape) {
+             Value descriptorValue = resolveWarpSpecializeCapture(value);
+             auto op = dyn_cast_or_null<triton::MakeTensorDescOp>(
+                 descriptorValue.getDefiningOp());
+             if (!op)
+               throw py::value_error("logical tensor descriptor must be "
+                                     "defined by make_tensor_descriptor");
+             ArrayRef<int64_t> requested(logicalShape);
+             auto pending = op->getAttrOfType<DenseI64ArrayAttr>(
+                 "tle.logical_descriptor_pending");
+             auto candidate = op->getAttrOfType<DenseI64ArrayAttr>(
+                 "tle.logical_descriptor_candidate");
+             auto active = op->getAttrOfType<DenseI64ArrayAttr>(
+                 "tle.logical_descriptor_shape");
+             if ((!pending && !candidate && !active) ||
+                 (pending && pending.asArrayRef() != requested) ||
+                 (candidate && candidate.asArrayRef() != requested) ||
+                 (active && active.asArrayRef() != requested))
+               throw py::value_error("logical tensor descriptor shape does not "
+                                     "match its frontend metadata");
+             op->removeAttr("tle.logical_descriptor_candidate");
+             op->removeAttr("tle.logical_descriptor_pending");
+             op->setAttr("tle.logical_descriptor_shape",
+                         self.getBuilder().getDenseI64ArrayAttr(logicalShape));
+           })
+      .def("mark_logical_tensor_descriptor_pending",
+           [](TritonOpBuilder &self, Value value,
+              std::vector<int64_t> logicalShape) {
+             cast<triton::MakeTensorDescOp>(value.getDefiningOp())
+                 ->setAttr(
+                     "tle.logical_descriptor_pending",
+                     self.getBuilder().getDenseI64ArrayAttr(logicalShape));
+           })
+      .def("validate_logical_tensor_descriptors",
+           [](TritonOpBuilder &, mlir::ModuleOp &module) {
+             bool hasPendingDescriptor = false;
+             module.walk([&](Operation *op) {
+               hasPendingDescriptor |=
+                   op->hasAttr("tle.logical_descriptor_pending");
+             });
+             if (hasPendingDescriptor)
+               throw py::value_error(
+                   "non-power-of-two tensor descriptors require tle.gpu.copy");
+           })
+#ifdef __TLE_TILED_SMEM__
+      .def("mark_logical_alloc_candidate",
+           [](TritonOpBuilder &self, Value value,
+              std::vector<int64_t> logicalShape, int32_t nonPowerAxis) {
+             Operation *op = value.getDefiningOp();
+             if (!op || !isa<ttg::LocalAllocOp>(op))
+               throw py::value_error(
+                   "logical alloc candidate must be a ttg.local_alloc");
+             auto &builder = self.getBuilder();
+             op->setAttr("tle.logical_alloc_shape",
+                         builder.getDenseI64ArrayAttr(logicalShape));
+             op->setAttr("tle.logical_non_power_axis",
+                         builder.getI32IntegerAttr(nonPowerAxis));
+             op->setAttr("tle.storage_plan",
+                         builder.getStringAttr("candidate"));
+           })
+#endif // __TLE_TILED_SMEM__
       .def("create_tma_copy",
            [](TritonOpBuilder &self, Value src, Value dst,
               std::vector<Value> &indices) {
@@ -310,6 +399,29 @@ void init_triton_tle_ir(py::module &&m) {
                                          expectBytesAttr);
 #endif
             return;
+          })
+      .def(
+          "create_tma_copy",
+          [](TritonOpBuilder &self, Value src, Value dst,
+             std::vector<Value> &indices, py::object barrier,
+             int32_t expectBytes, std::vector<int64_t> copyShape) {
+#ifdef __HCU__
+            if (!barrier.is_none() || expectBytes > 0)
+              throw py::value_error(
+                  "TMA completion barrier is only supported on NVIDIA backend");
+            auto op = self.create<ttg::TMACopyOp>(src, dst, indices);
+#else
+             Value barrierValue;
+             if (!barrier.is_none())
+               barrierValue = py::cast<Value>(barrier);
+             IntegerAttr expectBytesAttr;
+             if (expectBytes > 0)
+               expectBytesAttr = self.getBuilder().getI32IntegerAttr(expectBytes);
+             auto op = self.create<ttg::TMACopyOp>(
+                 src, dst, indices, barrierValue, expectBytesAttr);
+#endif
+            op->setAttr(tle::kLogicalCopyShapeAttr,
+                        self.getBuilder().getDenseI64ArrayAttr(copyShape));
           })
       .def("create_local_load",
            [](TritonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
@@ -365,7 +477,19 @@ void init_triton_tle_ir(py::module &&m) {
              return self.create<tle::LocalPointersOp>(resultTy, memDesc,
                                                       indices);
            })
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __TLE_TILED_SMEM__
+      .def("mark_logical_pointer_copy",
+           [](TritonOpBuilder &self, Value value,
+              std::vector<int64_t> logicalShape) {
+             auto op = value.getDefiningOp<tle::LocalPointersOp>();
+             if (!op)
+               throw py::value_error(
+                   "logical pointer copy marker requires tle.local_pointers");
+             op->setAttr(tle::kLogicalCopyShapeAttr,
+                         self.getBuilder().getDenseI64ArrayAttr(logicalShape));
+           })
+#endif // __TLE_TILED_SMEM__
+#ifdef __FLAGTREE_COMMON_IR__
       .def("tile_get_string_attr",
            [](TritonOpBuilder &self, const std::string &name) -> Attribute {
              return self.getBuilder().getStringAttr(name);
@@ -476,6 +600,12 @@ void init_triton_tle_ir(py::module &&m) {
            [](TritonOpBuilder &self, Type resultType, Value src,
               Value index) -> Value {
              return self.create<ttg::MemDescIndexOp>(resultType, src, index);
+           })
+      .def("create_memdesc_wgmma_view",
+           [](TritonOpBuilder &self, Type resultType, Value src,
+              std::vector<int32_t> order) -> Value {
+             return self.create<tle::MemDescWGMMAViewOp>(resultType, src,
+                                                         order);
            })
       .def("create_memdesc_trans",
            [](TritonOpBuilder &self, Value src,
@@ -886,11 +1016,11 @@ void init_triton_tle_ir(py::module &&m) {
              std::optional<tle::FlagCXCoopKind> coopKind) -> OpState {
             auto &builder = self.getBuilder();
             static const std::unordered_set<std::string> valid = {
-                "cluster", "device", "node"};
+                "cluster", "chiplet", "device", "node"};
             if (valid.find(space) == valid.end()) {
               throw std::invalid_argument(
                   "Invalid space: " + space +
-                  ". Expected one of: cluster, device, node.");
+                  ". Expected one of: cluster, chiplet, device, node.");
             }
 
             auto spaceAttr = builder.getStringAttr(space);
@@ -923,9 +1053,11 @@ void init_triton_tle_ir(py::module &&m) {
              return self.create<tle::GetWorldRankOp>(resultTy, src);
            })
       .def("get_n_pes",
-           [](TritonOpBuilder &self, Type resultTy, Value src) -> Value {
+           [](TritonOpBuilder &self, Type resultTy,
+              std::optional<Value> src) -> Value {
              auto &builder = self.getBuilder();
-             return self.create<tle::GetNumPesOp>(resultTy, src);
+             return self.create<tle::GetNumPesOp>(resultTy,
+                                                  src.value_or(Value()));
            })
       .def("get_memdesc_type",
            [](TritonOpBuilder &self, std::vector<int64_t> shape,
@@ -956,9 +1088,13 @@ void init_triton_tle_ir(py::module &&m) {
              } else {
                llvm_unreachable("Unknown storage type");
              }
-             return ttg::MemDescType::get(shape, elementType, encoding,
-                                          memorySpace, /*mutableMemory=*/true,
-                                          allocShape);
+             auto type = ttg::MemDescType::getChecked(
+                 [&] { return emitError(UnknownLoc::get(context)); }, shape,
+                 elementType, encoding, memorySpace, /*mutableMemory=*/true,
+                 allocShape);
+             if (!type)
+               throw py::value_error("invalid memdesc shape or allocShape");
+             return type;
            });
 }
 
@@ -1087,6 +1223,10 @@ void init_triton_tle_passes(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_lower_async_load",
                      tle::createTritonTleLowerAsyncLoad);
   ADD_PASS_WRAPPER_0("add_lower_wgmma", tle::createTritonTleLowerWGMMA);
+#ifdef __TLE_TILED_SMEM__
+  ADD_PASS_WRAPPER_0("add_plan_logical_domains",
+                     tle::createTritonTlePlanLogicalDomains);
+#endif // __TLE_TILED_SMEM__
   ADD_PASS_WRAPPER_0("add_lower_pipe_to_nvws",
                      tle::createTritonTleLowerPipeToNvws);
   ADD_PASS_WRAPPER_0("add_lower_barriers", tle::createTritonTleLowerBarriers);
@@ -1103,7 +1243,7 @@ void init_triton_tle_passes(py::module &&m) {
                      tle::createTritonTleLowerInsertTile);
 }
 
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
 void init_triton_tle_passes_commonir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_1("add_to_ttgir",
                             mlir::triton::createTleCommonIRToTTGIR, bool);
@@ -1177,7 +1317,7 @@ void init_triton_tle_dsa(py::module m);
 
 void init_triton_tle(py::module &&m) {
   m.def("is_common_ir_enabled", []() {
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
     return true;
 #else
     return false;
@@ -1187,12 +1327,11 @@ void init_triton_tle(py::module &&m) {
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
-    // TODO: move our td defines here
-    // registry.insert<mlir::triton::tle::tleDialect>();
-    // context.appendDialectRegistry(registry);
+    registry.insert<mlir::triton::tle::TleDialect>();
+    context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
   m.def("load_tile_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::tile::CommonIRDialect>();
@@ -1205,7 +1344,7 @@ void init_triton_tle(py::module &&m) {
   init_triton_tle_utils(m.def_submodule("utils"));
   init_triton_tle_ir(m.def_submodule("ir"));
   init_triton_tle_passes(m.def_submodule("passes"));
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
   init_triton_tle_passes_commonir(m.def_submodule("passes").def_submodule("commonir"));
 #endif
   init_tle_raw_ir(m.def_submodule("raw_ir"));

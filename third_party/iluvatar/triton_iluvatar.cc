@@ -10,7 +10,7 @@
 #include "TritonILUVATARGPUTransforms/Passes.h"
 
 #include "Dialect/TritonILUVATARGPU/IR/Dialect.h"
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
 #include "mlir-ext/Dialect/CommonIR/IR/CommonIRDialect.h"
 #include "tle/include/CommonIRToTTGIR/Passes.h"
 #endif
@@ -378,7 +378,7 @@ void init_iluvatar_tle_raw_passes(py::module &&m) {
 }
 #endif
 
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
 void init_triton_iluvatar_passes_commonir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_1("add_to_ttgir",
                             mlir::triton::createTleCommonIRToTTGIR, bool);
@@ -400,7 +400,7 @@ void init_triton_iluvatar(py::module &&m) {
   init_triton_iluvatar_tle_passes(tle.def_submodule("passes"));
   init_triton_iluvatar_tle_raw_passes(tle.def_submodule("raw_passes"));
 #endif
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
   init_triton_iluvatar_passes_commonir(passes.def_submodule("commonir"));
 #endif
 
@@ -409,7 +409,7 @@ void init_triton_iluvatar(py::module &&m) {
       (unsigned)llvm::CallingConv::ILUVATAR_KERNEL;
 
   m.def("is_common_ir_enabled", []() {
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
     return true;
 #else
     return false;
@@ -424,14 +424,14 @@ void init_triton_iluvatar(py::module &&m) {
     registry.insert<mlir::DLTIDialect>();
     mlir::triton::iluvatar_tle::registerDialects(registry);
 #endif
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
     registry.insert<mlir::triton::tile::CommonIRDialect>();
 #endif
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
   });
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
   m.def("load_tile_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::tile::CommonIRDialect>();

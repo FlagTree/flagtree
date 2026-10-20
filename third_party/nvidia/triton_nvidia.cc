@@ -2,7 +2,7 @@
 #include "Dialect/NVWS/IR/Dialect.h"
 #include "NVGPUToLLVM/Passes.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
 #include "CommonIRToTTGIR/Passes.h"
 #endif
 #include "cublas_instance.h"
@@ -97,7 +97,7 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
                      mlir::triton::createNVWSInsertTmemAref);
 }
 
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
 void init_triton_nvidia_passes_commonir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_1("add_to_ttgir", mlir::triton::createCommonIRToTTGIR,
                             bool);
@@ -200,7 +200,7 @@ void init_triton_nvidia(py::module &&m) {
 #ifdef __TLE__
   init_nvidia_tle_raw_passes(passes.def_submodule("tle_raw"));
 #endif
-#ifdef FLAGTREE_COMMON_IR
+#ifdef __FLAGTREE_COMMON_IR__
   init_triton_nvidia_passes_commonir(passes.def_submodule("commonir"));
 #endif
 
