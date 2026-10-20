@@ -6,10 +6,7 @@ import triton.experimental.tle.language as tle
 from triton._flagtree_backend import FLAGTREE_BACKEND
 from triton.experimental.tle import get_supported_primitives
 
-
-pytestmark = pytest.mark.skipif(
-    FLAGTREE_BACKEND != "hcu", reason="requires the FlagTree HCU backend"
-)
+pytestmark = pytest.mark.skipif(FLAGTREE_BACKEND != "hcu", reason="requires the FlagTree HCU backend")
 
 
 @triton.jit
