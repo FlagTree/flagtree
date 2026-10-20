@@ -1,10 +1,10 @@
 P800 * 4
-harbor.baai.ac.cn/plugin/kunlunxin001-gems5.4.0-tree0.7.0rc2-triton3.6.0-cx0.13.0-plugin0.3.0-vllm0.24.0-cp310-pt29-x64-v5.0.21.47:202610111719
+harbor.baai.ac.cn/flagtree/flagtree-xpu3.6-py310-torch2.9.0-ubuntu22.04:202610-vllm0.24.0-plugin-gems
 Driver Version: 5.0.21.47
 vllm==0.24.0+empty
 torch==2.9.0+cu129
 
-[2026/10/19] vllm-plugin-fl==0.3.0rc2.post1+ge15ddd4 (2026/10/11), flag_gems==v5.4.0-rc2.post1 (2026/09/14), flagtree===0.7.1a1+xpu3.6 (2026/10/13)
+[2026/10/19] vllm-plugin-fl==0.3.0rc2.post1+ge15ddd4 (2026/10/11), flag_gems==5.4.0rc2.post1 (2026/09/14), flagtree===0.7.1a1+xpu3.6 (2026/10/13)
 # 服务冷启动时间: 13分31秒, 服务热启动时间: 5分41秒
 # 输入长度: 1K, 输出长度: 1K, 并发数: 4
   Output token throughput (tok/s): 43.56
