@@ -2208,21 +2208,23 @@ def _add_norm_stats_call(raw) -> dict[str, object]:
             result_abi, "add_stats_local_offsets", row_coordinate=row_coordinate
         )
         local_capacity = int(domain["capacity"])
-        # A token-sharded result pads its last owner-local rows (a non-divisible
-        # token count leaves inactive rows on some owners). The per-element value
-        # loads/stores are masked, but the once-per-row statistics store is not,
-        # so an inactive row would publish its zero square sum past the canonical
-        # statistics buffer. Gate that store on the row's active extent too.
-        stats_row_active = (
-            " & ".join(
-                f"(({coordinate}) < ({emit_active_extent(result_abi, index)}))"
-                for index, coordinate in enumerate(
-                    _unflattened_coordinates(result_local_shape[:-1], "add_stats_row")
+        # A token-sharded result pads its owner-local rows: a non-divisible token
+        # count leaves inactive rows on some owners, and -- with fewer tokens than
+        # token owners -- a single-capacity shard (local_m == 1) may own no token
+        # at all. The per-element value stores are masked, but the once-per-row
+        # statistics store is not, so an inactive row would publish its zero
+        # square sum past the canonical statistics buffer. Gate that store on the
+        # row's active extent too, indexing the loop row for M>1 and local row 0
+        # for the single-capacity case.
+        stats_row_active = " & ".join(
+            f"(({coordinate}) < ({emit_active_extent(result_abi, index)}))"
+            for index, coordinate in enumerate(
+                _unflattened_coordinates(
+                    result_local_shape[:-1],
+                    "add_stats_row" if local_m != 1 else "0",
                 )
-            ) or "True"
-            if local_m != 1
-            else "True"
-        )
+            )
+        ) or "True"
         for name, abi in (("input", source_abi), ("addend", residual_abi)):
             if (
                 int(abi.get("scalar_lane_count", 1)) != lane_count
@@ -2742,13 +2744,17 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
         domain_abi, allow_redundant_axes=partition_axes,
     )
     # A token's RMS reduces the square sums of every owner holding a DISTINCT
-    # piece of that token's normalized suffix -- the gather-reduce partial axes
-    # and any axes splitting the suffix shape[axis:] -- but NOT the axes that
-    # split the OUTER (token) rows, whose owners hold different tokens, nor the
-    # broadcast axes that merely replicate the same piece. Each owner publishes
-    # its square sum at its own full-mesh slot; the finalize reduces the group
-    # that shares this CTA's token (outer) coordinate (mirrors the sibling stats
-    # kernel's preserved/reduction-axis reduction).
+    # piece of that token's normalized suffix -- the work-partitioned gather
+    # axes and any axes splitting the suffix shape[axis:] -- but NOT the axes
+    # that split the OUTER (token) rows, whose owners hold different tokens, nor
+    # the broadcast axes that merely replicate the same piece. A partial axis can
+    # itself become the output token split (a reduce-scatter result); that axis
+    # splits the domain, so it is excluded from partition_axes and must stay
+    # preserved. Using partition_axes (partial axes NOT splitting the domain)
+    # rather than every partial axis keeps that case correct. Each owner
+    # publishes its square sum at its own full-mesh slot; the finalize reduces
+    # the group sharing this CTA's token (outer) coordinate (mirrors the sibling
+    # stats kernel's preserved/reduction-axis reduction).
     suffix_split_axes = {
         int(mesh_axis)
         for policy in domain_distributed["axis_policies"][axis:]
@@ -2757,7 +2763,7 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
         for mesh_axis in stage.get("hierarchy_axes", ())
     }
     stats_reduction_axes = tuple(
-        sorted(set(partial_axes) | suffix_split_axes)
+        sorted(set(partition_axes) | suffix_split_axes)
     )
     stats_reduction_count = prod(
         (hierarchy[index] for index in stats_reduction_axes), start=1

@@ -124,8 +124,32 @@ def test_local_partial_rms_accepts_a_materialized_statistics_result():
     call = _add_norm_stats_call(_raw(stats_partial=None))
     assert call["mode"] == "local_partial_rms"
     assert call["stats_writer_active"] == "True"
-    # A single owner-local row (decode) is always active.
-    assert call["stats_row_active"] == "True"
+    # Even a single owner-local row is gated on its own active extent (local row
+    # 0), not hardcoded active -- a token-starved shard with capacity one may own
+    # no token. Here the one row is active so the predicate is trivially true.
+    assert "add_stats_row" not in call["stats_row_active"]
+    assert "0" in call["stats_row_active"]
+
+
+def test_local_partial_rms_masks_the_single_row_of_a_token_starved_shard():
+    # With fewer tokens than token owners a shard has local capacity one but an
+    # active extent of zero (it owns no token). local_m == 1, yet its elected
+    # statistics writer must not store its zero square sum past the canonical
+    # buffer, so the once-per-row store is still gated on local row 0's activity.
+    raw = _raw(stats_partial=None)
+    for role, formal in (("inputs", "input"), ("inputs", "addend"), ("outputs", "result_0")):
+        for parameter in raw[role]:
+            if parameter["buffers"][0]["formal"] == formal:
+                abi = parameter["buffers"][0]["abi"]
+                # One local row, but this shard owns no active token.
+                abi["active_shape_expressions"] = ("0", "16")
+
+    call = _add_norm_stats_call(raw)
+    assert call["local_m"] == 1
+    # The single-row store is predicated on local row 0's active extent, which is
+    # zero here, so the inactive shard writes nothing.
+    assert call["stats_row_active"] != "True"
+    assert "add_stats_row" not in call["stats_row_active"]
 
 
 def test_local_partial_rms_masks_inactive_padded_statistics_rows():
