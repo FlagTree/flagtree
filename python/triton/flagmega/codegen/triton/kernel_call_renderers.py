@@ -2292,6 +2292,14 @@ def _add_norm_stats_call(raw) -> dict[str, object]:
         raise CodegenError(
             "AddNormStats participant_scope must be all_programs or single_program."
         )
+    attrs = raw.get("semantic_attrs", {})
+    axis = int(attrs.get("axis", -1))
+    axis = axis + len(shape) if axis < 0 else axis
+    # One RMS statistic per OUTER row: the dimensions before `axis` are
+    # independent normalization groups (tokens), while the suffix shape[axis:]
+    # is reduced per row. elements // norm_size is the owner-local outer-row
+    # count; a single-outer-row input keeps norm_size == elements.
+    norm_size = prod(shape[axis:], start=1) * lane_count
     owner_index, local_owner_count = _chip_local_owner_group(result_abi, owner_count)
     return {
         "source": _pointer(source),
@@ -2300,6 +2308,7 @@ def _add_norm_stats_call(raw) -> dict[str, object]:
         "stats": _pointer(stats),
         "partials": None if partials is None else _pointer(partials),
         "elements": prod(shape) * lane_count,
+        "norm_size": norm_size,
         "tile": int(raw["parameters"]["tile"]),
         "owner_count": local_owner_count,
         "owner_index": owner_index,

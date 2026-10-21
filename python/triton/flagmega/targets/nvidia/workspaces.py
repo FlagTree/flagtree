@@ -143,7 +143,18 @@ def _requirements(node, candidate, module, mesh_hierarchy):
         workspace("norm_stats_partials", DType.FLOAT32, partials_shape, 128)
 
     if family == "add_norm_stats" and variant == "rms":
-        workspace("norm_stats_partials", DType.FLOAT32, (mesh_size,), 128)
+        # One RMS partial per (outer row, block owner): the dimensions before
+        # the normalized axis are independent per-token statistics. A single
+        # outer row keeps the flat (mesh_size,) layout.
+        value = tensor_of(node.type.fields[0]) if isinstance(node.type, TupleType) else None
+        outer_rows = 1
+        if value is not None:
+            axis = int(node.attrs.get("axis", -1))
+            axis = axis + len(value.shape) if axis < 0 else axis
+            if value.shape[:axis]:
+                outer_rows = prod(dim.fixed_value for dim in value.shape[:axis])
+        partials_shape = (mesh_size,) if outer_rows == 1 else (outer_rows, mesh_size)
+        workspace("norm_stats_partials", DType.FLOAT32, partials_shape, 128)
 
     if (
         node.op == "ntt.matmul_norm_stats"

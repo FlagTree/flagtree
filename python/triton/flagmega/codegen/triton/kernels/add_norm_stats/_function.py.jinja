@@ -51,13 +51,15 @@ def {{ call.symbol }}({{ call.signature }}):
     _flagmega_add_norm_stats_rms(
         {{ call.source }}, {{ call.residual }}, {{ call.result }},
         {{ call.partials }}, {{ call.stats }}, {{ call.owner_index }},
-        {{ call.elements }}, {{ call.owner_count }}, {{ call.tile }},
+        {{ call.elements }}, {{ call.norm_size }}, {{ call.owner_count }},
+        {{ call.tile }},
     )
 {% else %}
     if {{ call.participant_active }}:
         _flagmega_add_norm_stats_persistent_rms(
             {{ call.source }}, {{ call.residual }}, {{ call.result }},
-            {{ call.stats }}, {{ call.elements }}, {{ call.tile }},
+            {{ call.stats }}, {{ call.elements }}, {{ call.norm_size }},
+            {{ call.tile }},
         )
 {% endif %}
 
