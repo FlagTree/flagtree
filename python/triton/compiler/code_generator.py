@@ -1546,12 +1546,12 @@ class CodeGenerator(ast.NodeVisitor):
             self.local_defs = prev_defs
             self.caller_context = prev_caller_context
 
-    # flagtree tle: check supported
     def _get_tle_backend_name(self):
         from triton._flagtree_backend import get_active_backend_name
 
         return get_active_backend_name()
 
+    # flagtree tle: check supported
     def _require_tle_primitive(self, primitive):
         from triton.experimental.tle import primitive_name
 
