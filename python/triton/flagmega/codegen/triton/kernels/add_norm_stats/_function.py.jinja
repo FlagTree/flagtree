@@ -44,7 +44,7 @@ def {{ call.symbol }}({{ call.signature }}):
     tl.store(
         {{ call.stats }} + ({{ call.stats_offset }}),
         tl.sum(add_stats_square_sum, axis=0),
-        mask={{ call.stats_writer_active }},
+        mask=({{ call.stats_writer_active }}) & ({{ call.stats_row_active }}),
     )
 {% endfilter %}
 {% elif call.partials is not none %}

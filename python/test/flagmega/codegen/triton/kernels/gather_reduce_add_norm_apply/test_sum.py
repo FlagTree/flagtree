@@ -197,11 +197,15 @@ def test_renderer_materializes_private_stats_with_one_grid_barrier(
     assert "axis=1" in source
     assert "for gather_partial_member in tl.range" not in source
     assert "tl.sum(gather_square_sum, axis=0)" in source
-    assert call["stats_writer_index"] == "((shard_y) * 16 + (shard_x))"
     assert call["work_partition_count"] == 128
-    assert (
-        f"+ {128 if use_mean else 0} + {call['stats_writer_index']}" in source
-    )
+    # Each owner publishes its square sum at its own full-mesh slot (shard_index),
+    # outside the participant election, so the finalize can reduce exactly the
+    # group that shares a token's outer shard. This fusion is not token-sharded,
+    # so the reduction spans every owner and the lane maps to itself.
+    assert call["stats_owner_count"] == 128
+    assert call["stats_partial_owner"] == "(norm_owner_offsets)"
+    assert f"+ {128 if use_mean else 0} + shard_index" in source
+    assert f"+ {128 if use_mean else 0} + norm_stats_owner" in source
     if use_mean:
         assert "tl.sum(gather_mean_sum, axis=0)" in source
     assert "collective" not in call

@@ -85,17 +85,22 @@ def test_m_gt_1_matmul_auto_selects_wmma(target_name):
     assert tir_default(1) != "tir.dense_matmul.mma"
 
 
+# A spread of token counts exercises the batched norm-statistics epilogue across
+# different owner-local row counts and ragged (non-power-of-two, non-divisible)
+# token layouts -- the regime that reached review repeatedly because the only
+# existing coverage ran a single decode row.
+@pytest.mark.parametrize("num_tokens", [3, 5, 33, 128])
 @pytest.mark.parametrize("target_name", AMD_TARGETS)
-def test_prefill_full_lowering_completes(target_name):
-    # A short multi-token prefill lowers through code generation end to end,
-    # including the after-attention fused residual/RMS-norm. Before the batched
+def test_prefill_full_lowering_completes(target_name, num_tokens):
+    # A multi-token prefill lowers through code generation end to end, including
+    # the after-attention fused residual/RMS-norm. Before the batched
     # norm-statistics epilogue existed this raised an IRVerificationError
     # ("No reviewed Triton TIR candidate ... ntt.gather_reduce_add_norm_apply"):
     # the fused combine's provider only offered a single decode row.
     module = import_qwen3_model(
         full_checkpoint_wmma(num_hidden_layers=2),
         execution_phase="prefill",
-        num_tokens=3,
+        num_tokens=num_tokens,
     )
     compiled = Compiler(CompileOptions(target=target_name)).compile(module)
     assert describe_tir_package(compiled.module)

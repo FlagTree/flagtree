@@ -106,19 +106,21 @@ def _requirements(node, candidate, module, mesh_hierarchy):
         collective_owner_count = int(
             candidate.parameters.get("owner_count", mesh_size)
         )
-        # One (components, owner) statistics slab per owner-local leading token.
-        # M==1 (decode) keeps the flat single-row layout; M>1 (prefill) prepends
-        # the row axis so each token reduces its own independent RMS.
+        # One (components, owner) statistics slab per owner-local outer (token)
+        # row. The outer rows are the dimensions BEFORE the normalization axis;
+        # the suffix shape[axis:] is reduced into a single statistic. M==1
+        # (decode) keeps the flat single-row layout; M>1 (prefill) prepends the
+        # row axis so each token reduces its own independent RMS.
         value_type = node.type.fields[0] if isinstance(node.type, TupleType) else node.type
         local_value = (
             local_tensor_type(value_type)
             if isinstance(value_type, DistributedType)
             else value_type
         )
-        local_rows = (
-            prod(dim.fixed_value for dim in local_value.shape[:-1])
-            if local_value.shape[:-1]
-            else 1
+        axis = int(node.attrs.get("axis", 0))
+        axis = axis + len(local_value.shape) if axis < 0 else axis
+        local_rows = prod(
+            (dim.fixed_value for dim in local_value.shape[:axis]), start=1
         )
         partials_shape = (
             (components, collective_owner_count)

@@ -2208,6 +2208,21 @@ def _add_norm_stats_call(raw) -> dict[str, object]:
             result_abi, "add_stats_local_offsets", row_coordinate=row_coordinate
         )
         local_capacity = int(domain["capacity"])
+        # A token-sharded result pads its last owner-local rows (a non-divisible
+        # token count leaves inactive rows on some owners). The per-element value
+        # loads/stores are masked, but the once-per-row statistics store is not,
+        # so an inactive row would publish its zero square sum past the canonical
+        # statistics buffer. Gate that store on the row's active extent too.
+        stats_row_active = (
+            " & ".join(
+                f"(({coordinate}) < ({emit_active_extent(result_abi, index)}))"
+                for index, coordinate in enumerate(
+                    _unflattened_coordinates(result_local_shape[:-1], "add_stats_row")
+                )
+            ) or "True"
+            if local_m != 1
+            else "True"
+        )
         for name, abi in (("input", source_abi), ("addend", residual_abi)):
             if (
                 int(abi.get("scalar_lane_count", 1)) != lane_count
@@ -2257,6 +2272,7 @@ def _add_norm_stats_call(raw) -> dict[str, object]:
                 stats_abi, stats_coordinates
             ),
             "stats_writer_active": _canonical_writer_active(stats_abi),
+            "stats_row_active": stats_row_active,
             "tile": _bounded_vector_tile(
                 raw["parameters"]["tile"],
                 local_capacity,
@@ -2605,7 +2621,7 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
     # token: a flat (components, owner) buffer for M==1 (decode), or a prepended
     # row axis for M>1 (prefill), matching the kernel's apply_row loop.
     workspace_rows = prod(
-        _static_shape(value_abi, "local_capacity_shape")[:-1], start=1
+        _static_shape(value_abi, "local_capacity_shape")[:axis], start=1
     )
     expected_stats_shape = (
         (stats_components, owner_count)
@@ -2661,15 +2677,16 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
         else value_abi
     )
     local_shape = _static_shape(domain_abi, "local_capacity_shape")
-    # M==1 (decode) normalizes one owner-local row; M>1 (prefill) iterates an
-    # explicit token loop (apply_row), one independent RMS per leading row. The
-    # row-aware domain scopes capacity to a single row; the leading token index
-    # is supplied by the apply_row loop variable (mirrors the sibling stats
-    # kernel's gather_row form).
-    local_rows = prod(local_shape[:-1], start=1)
+    # Normalization is over the suffix shape[axis:]; the dimensions before axis
+    # are independent statistics rows (tokens). M==1 (decode) is one owner-local
+    # row; M>1 (prefill) iterates an explicit token loop (apply_row), one RMS per
+    # outer row, each reducing the WHOLE owner-local suffix (not just the last
+    # axis). The row-aware domain splits leading rows from the flattened suffix.
+    local_rows = prod(local_shape[:axis], start=1)
     row_coordinate = "apply_row" if local_rows != 1 else None
     gather_domain = _scalar_local_domain(
-        domain_abi, "gather_local_offsets", row_coordinate=row_coordinate
+        domain_abi, "gather_local_offsets",
+        row_coordinate=row_coordinate, reduction_axis=axis,
     )
     scalar_capacity = int(gather_domain["capacity"])
     lane_coordinate = gather_domain["lane_coordinate"]
@@ -2724,6 +2741,30 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
     stats_writer_index, stats_owner_count = _distributed_unique_writer_index(
         domain_abi, allow_redundant_axes=partition_axes,
     )
+    # A token's RMS reduces the square sums of every owner holding a DISTINCT
+    # piece of that token's normalized suffix -- the gather-reduce partial axes
+    # and any axes splitting the suffix shape[axis:] -- but NOT the axes that
+    # split the OUTER (token) rows, whose owners hold different tokens, nor the
+    # broadcast axes that merely replicate the same piece. Each owner publishes
+    # its square sum at its own full-mesh slot; the finalize reduces the group
+    # that shares this CTA's token (outer) coordinate (mirrors the sibling stats
+    # kernel's preserved/reduction-axis reduction).
+    suffix_split_axes = {
+        int(mesh_axis)
+        for policy in domain_distributed["axis_policies"][axis:]
+        if isinstance(policy, Mapping) and policy.get("kind") == "split"
+        for stage in policy.get("stages", ())
+        for mesh_axis in stage.get("hierarchy_axes", ())
+    }
+    stats_reduction_axes = tuple(
+        sorted(set(partial_axes) | suffix_split_axes)
+    )
+    stats_reduction_count = prod(
+        (hierarchy[index] for index in stats_reduction_axes), start=1
+    )
+    stats_partial_owner = _group_owner_expression_for_axes(
+        domain_abi, stats_reduction_axes, "norm_owner_offsets", allow_empty=True,
+    )
     return {
         "partial": emit_storage_pointer(
             partial_abi, str(partial["runtime_argument"])
@@ -2747,7 +2788,8 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
         "work_partition_index": work_partition_index,
         "work_partition_count": work_partition_count,
         "stats_writer_index": stats_writer_index,
-        "stats_owner_count": stats_owner_count,
+        "stats_owner_count": stats_reduction_count,
+        "stats_partial_owner": stats_partial_owner,
         "local_capacity": scalar_capacity,
         "active": active,
         "partial_offset": partial_offset,
@@ -7402,6 +7444,7 @@ def _scalar_local_domain(
     flat_coordinate: str,
     *,
     row_coordinate: str | None = None,
+    reduction_axis: int | None = None,
 ) -> dict[str, object]:
     """Build an owner-local domain whose induction variable counts scalars.
 
@@ -7409,9 +7452,13 @@ def _scalar_local_domain(
     perform scalar arithmetic must additionally iterate the element-type lanes
     and pass the lane coordinate to physical addressing.
 
-    With ``row_coordinate`` the domain iterates the LAST axis only (``capacity``
-    is one owner-local row), while the leading rows are indexed by the caller's
-    ``row_coordinate`` loop variable -- the per-row (M>1 prefill) form.
+    With ``row_coordinate`` the domain splits the leading rows (indexed by the
+    caller's ``row_coordinate`` loop variable) from a flattened reduction suffix
+    (``capacity`` covers one such suffix). The split falls at ``reduction_axis``
+    -- the last axis when unset (single-axis normalization), or an earlier axis
+    for suffix normalization, so the whole ``shape[reduction_axis:]`` contributes
+    to one row's reduction. ``_unflattened_coordinates`` is the identity on a
+    single-axis suffix, so the default stays byte-identical to the last-axis form.
     """
 
     shape = _static_shape(abi, "local_capacity_shape")
@@ -7429,8 +7476,10 @@ def _scalar_local_domain(
         else f"(({flat_coordinate}) % {lane_count})"
     )
     if row_coordinate is not None:
-        row_coordinates = _unflattened_coordinates(shape[:-1], row_coordinate)
-        local_coordinates = (*row_coordinates, physical_flat)
+        split = len(shape) - 1 if reduction_axis is None else reduction_axis
+        row_coordinates = _unflattened_coordinates(shape[:split], row_coordinate)
+        suffix_coordinates = _unflattened_coordinates(shape[split:], physical_flat)
+        local_coordinates = (*row_coordinates, *suffix_coordinates)
         active = " & ".join(
             f"(({coordinate}) < ({emit_active_extent(abi, axis)}))"
             for axis, coordinate in enumerate(local_coordinates)
@@ -7440,7 +7489,7 @@ def _scalar_local_domain(
             for axis in range(len(shape))
         )
         return {
-            "capacity": shape[-1] * lane_count,
+            "capacity": prod(shape[split:], start=1) * lane_count,
             "local_coordinates": local_coordinates,
             "logical_coordinates": logical_coordinates,
             "lane_coordinate": lane_coordinate,
