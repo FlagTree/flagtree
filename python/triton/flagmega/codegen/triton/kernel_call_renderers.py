@@ -2187,12 +2187,15 @@ def _add_norm_stats_call(raw) -> dict[str, object]:
             if isinstance(stats_distributed, Mapping)
             else None
         )
-        if (
-            not isinstance(stats_partial, Mapping)
-            or stats_partial.get("reduce_op") != "sum"
-        ):
+        # The owner-local square sum is a Sum-partial only when the RMS reduction
+        # axis is split across owners. When the whole normalized feature axis is
+        # owner-local, NormStats materializes the statistics (partial is None):
+        # the same local square sum is then already the complete per-token
+        # statistic and is written straight to the output's own (token-sharded)
+        # slot. Reject only a non-Sum partial, which this kernel cannot combine.
+        if isinstance(stats_partial, Mapping) and stats_partial.get("reduce_op") != "sum":
             raise CodegenError(
-                "AddNormStats local_partial_rms requires an explicit Sum-partial "
+                "AddNormStats local_partial_rms can only combine a Sum-partial "
                 "statistics result."
             )
         # M==1 (decode) flattens one owner-local row; M>1 (prefill) iterates an
@@ -2501,19 +2504,16 @@ def _gather_reduce_add_norm_stats_call(raw) -> dict[str, object]:
             logical_coordinates,
             lane_coordinate=lane_coordinate,
         ),
-        "stats_offset": (
-            emit_global_scalar_offset(
-                stats_abi, ("0",) * len(_static_shape(stats_abi, "logical_shape"))
-            )
-            if stats_local_m == 1
-            # M>1: write the per-row loop variable into the statistics OUTPUT's
-            # own (token-sharded) local slot. The row is the output-local token
-            # index, mapped to its physical offset via the output's own domain.
-            else emit_local_scalar_offset(
-                stats_abi,
-                stats_finalize_domain["local_coordinates"],
-                lane_coordinate=stats_finalize_domain["lane_coordinate"],
-            )
+        # Write each statistics row into the OUTPUT's own (token-sharded) local
+        # slot via its local-to-physical mapping. For stats_local_m==1 the single
+        # local row 0 still belongs to a different global token on each owner, so
+        # a global (0,0,0) destination would make every owner clobber stats[0]
+        # and leave the other tokens unwritten -- stats_finalize_domain already
+        # names local row 0 for that case (row_coordinate "0").
+        "stats_offset": emit_local_scalar_offset(
+            stats_abi,
+            stats_finalize_domain["local_coordinates"],
+            lane_coordinate=stats_finalize_domain["lane_coordinate"],
         ),
         "tile": work_tile,
         "partial_reduction_width": _bounded_vector_tile(
@@ -2558,11 +2558,6 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
             f"GatherReduceAddNormApply axis {attrs.get('axis')!r} is outside "
             f"rank {len(logical_shape)}."
         )
-    if prod(logical_shape[:axis], start=1) != 1:
-        raise CodegenError(
-            "GatherReduceAddNormApply sum requires one logical outer row; "
-            "select a row-indexed implementation for batched input."
-        )
     if str(partial_abi.get("storage_kind")) != "compact_per_owner":
         raise CodegenError(
             "GatherReduceAddNormApply requires compact per-owner partial input."
@@ -2606,14 +2601,25 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
         )
     use_mean = bool(attrs.get("use_mean", False))
     stats_components = 2 if use_mean else 1
+    # The statistics workspace carries one (components, owner) slab per leading
+    # token: a flat (components, owner) buffer for M==1 (decode), or a prepended
+    # row axis for M>1 (prefill), matching the kernel's apply_row loop.
+    workspace_rows = prod(
+        _static_shape(value_abi, "local_capacity_shape")[:-1], start=1
+    )
+    expected_stats_shape = (
+        (stats_components, owner_count)
+        if workspace_rows == 1
+        else (workspace_rows, stats_components, owner_count)
+    )
     if (
-        _static_shape(stats_abi, "logical_shape") != (stats_components, owner_count)
+        _static_shape(stats_abi, "logical_shape") != expected_stats_shape
         or str(stats_abi.get("scalar_dtype")) != "float32"
         or int(stats_abi.get("scalar_lane_count", 1)) != 1
     ):
         raise CodegenError(
             "GatherReduceAddNormApply statistics workspace must be float32 "
-            f"[{stats_components}, {owner_count}]."
+            f"{list(expected_stats_shape)}."
         )
     lane_count = int(partial_abi.get("scalar_lane_count", 1))
     lane_shape = tuple(partial_abi.get("scalar_lane_shape", ()))
@@ -2655,19 +2661,21 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
         else value_abi
     )
     local_shape = _static_shape(domain_abi, "local_capacity_shape")
-    scalar_capacity = prod(local_shape, start=1) * lane_count
-    flat = "gather_local_offsets"
-    physical_flat = flat if lane_count == 1 else f"(({flat}) // {lane_count})"
-    lane_coordinate = None if lane_count == 1 else f"(({flat}) % {lane_count})"
-    local_coordinates = _unflattened_coordinates(local_shape, physical_flat)
-    logical_coordinates = tuple(
-        emit_logical_coordinate(domain_abi, index, local_coordinates)
-        for index in range(len(local_shape))
+    # M==1 (decode) normalizes one owner-local row; M>1 (prefill) iterates an
+    # explicit token loop (apply_row), one independent RMS per leading row. The
+    # row-aware domain scopes capacity to a single row; the leading token index
+    # is supplied by the apply_row loop variable (mirrors the sibling stats
+    # kernel's gather_row form).
+    local_rows = prod(local_shape[:-1], start=1)
+    row_coordinate = "apply_row" if local_rows != 1 else None
+    gather_domain = _scalar_local_domain(
+        domain_abi, "gather_local_offsets", row_coordinate=row_coordinate
     )
-    active = " & ".join(
-        f"(({coordinate}) < ({emit_active_extent(domain_abi, index)}))"
-        for index, coordinate in enumerate(local_coordinates)
-    ) or "True"
+    scalar_capacity = int(gather_domain["capacity"])
+    lane_coordinate = gather_domain["lane_coordinate"]
+    local_coordinates = gather_domain["local_coordinates"]
+    logical_coordinates = gather_domain["logical_coordinates"]
+    active = gather_domain["active"]
     domain = {
         "local_coordinates": local_coordinates,
         "logical_coordinates": logical_coordinates,
@@ -2783,6 +2791,10 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
         "epsilon": repr(float(attrs.get("epsilon", 0.0))),
         "use_mean": use_mean,
         "has_bias": bool(attrs.get("has_bias", True)),
+        "local_m": local_rows,
+        # Per-row block of the statistics workspace: one (components, owner_count)
+        # slab per leading token. M==1 keeps the flat single-row layout.
+        "row_stats_stride": (2 if use_mean else 1) * owner_count,
         "stats_square_base": owner_count if use_mean else 0,
         "round_before_scale": bool(attrs.get("round_before_scale", False)),
         "output_type": _triton_dtype(str(value_abi["scalar_dtype"])),

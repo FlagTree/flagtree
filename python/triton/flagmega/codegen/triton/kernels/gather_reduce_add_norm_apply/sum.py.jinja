@@ -6,6 +6,10 @@
 @triton.jit(noinline=True)
 def {{ call.symbol }}__partials({{ call.signature }}):
 {{ entry.mesh_coordinates() }}
+{% if call.local_m != 1 %}
+    for apply_row in tl.range(0, {{ call.local_m }}):
+{% endif %}
+{% filter indent(4 if call.local_m != 1 else 0, first=True) %}
     gather_mean_sum = tl.zeros(({{ call.tile }},), tl.float32)
     gather_square_sum = tl.zeros(({{ call.tile }},), tl.float32)
     if {{ call.participant_active }}:
@@ -67,20 +71,26 @@ def {{ call.symbol }}__partials({{ call.signature }}):
             )
 {% if call.use_mean %}
         tl.store(
-            {{ call.stats_partials }} + {{ call.stats_writer_index }},
+            {{ call.stats_partials }}
+            + {% if call.local_m != 1 %}apply_row * {{ call.row_stats_stride }} + {% endif %}{{ call.stats_writer_index }},
             tl.sum(gather_mean_sum, axis=0),
         )
 {% endif %}
         tl.store(
             {{ call.stats_partials }}
-            + {{ call.stats_square_base }} + {{ call.stats_writer_index }},
+            + {% if call.local_m != 1 %}apply_row * {{ call.row_stats_stride }} + {% endif %}{{ call.stats_square_base }} + {{ call.stats_writer_index }},
             tl.sum(gather_square_sum, axis=0),
         )
+{% endfilter %}
 
 
 @triton.jit(noinline=True)
 def {{ call.symbol }}__finalize({{ call.signature }}):
 {{ entry.mesh_coordinates() }}
+{% if call.local_m != 1 %}
+    for apply_row in tl.range(0, {{ call.local_m }}):
+{% endif %}
+{% filter indent(4 if call.local_m != 1 else 0, first=True) %}
 {% if call.use_mean %}
     norm_mean_sum = 0.0
 {% endif %}
@@ -95,7 +105,8 @@ def {{ call.symbol }}__finalize({{ call.signature }}):
 {% if call.use_mean %}
         norm_mean_sum += tl.sum(
             tl.load(
-                {{ call.stats_partials }} + norm_owner_offsets,
+                {{ call.stats_partials }}
+                + {% if call.local_m != 1 %}apply_row * {{ call.row_stats_stride }} + {% endif %}norm_owner_offsets,
                 mask=norm_owner_mask,
                 other=0.0,
             ),
@@ -105,7 +116,7 @@ def {{ call.symbol }}__finalize({{ call.signature }}):
         norm_square_sum += tl.sum(
             tl.load(
                 {{ call.stats_partials }}
-                + {{ call.stats_square_base }} + norm_owner_offsets,
+                + {% if call.local_m != 1 %}apply_row * {{ call.row_stats_stride }} + {% endif %}{{ call.stats_square_base }} + norm_owner_offsets,
                 mask=norm_owner_mask,
                 other=0.0,
             ),
@@ -162,6 +173,7 @@ def {{ call.symbol }}__finalize({{ call.signature }}):
                 norm_output.to({{ call.output_type }}).to({{ call.norm_output_type }}),
                 mask=gather_mask,
             )
+{% endfilter %}
 
 
 {{ entry.phase_schedule(call, ("partials", "finalize")) }}

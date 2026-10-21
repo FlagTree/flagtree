@@ -106,12 +106,26 @@ def _requirements(node, candidate, module, mesh_hierarchy):
         collective_owner_count = int(
             candidate.parameters.get("owner_count", mesh_size)
         )
-        workspace(
-            "norm_stats_partials",
-            DType.FLOAT32,
-            (components, collective_owner_count),
-            128,
+        # One (components, owner) statistics slab per owner-local leading token.
+        # M==1 (decode) keeps the flat single-row layout; M>1 (prefill) prepends
+        # the row axis so each token reduces its own independent RMS.
+        value_type = node.type.fields[0] if isinstance(node.type, TupleType) else node.type
+        local_value = (
+            local_tensor_type(value_type)
+            if isinstance(value_type, DistributedType)
+            else value_type
         )
+        local_rows = (
+            prod(dim.fixed_value for dim in local_value.shape[:-1])
+            if local_value.shape[:-1]
+            else 1
+        )
+        partials_shape = (
+            (components, collective_owner_count)
+            if local_rows == 1
+            else (local_rows, components, collective_owner_count)
+        )
+        workspace("norm_stats_partials", DType.FLOAT32, partials_shape, 128)
 
     if family == "add_norm_stats" and variant == "rms":
         workspace("norm_stats_partials", DType.FLOAT32, (mesh_size,), 128)

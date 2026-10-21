@@ -263,6 +263,42 @@ def test_token_sharded_single_row_stats_index_partials_per_token():
     assert "gather_stats_owner * 4 +" in source
 
 
+def test_token_sharded_single_row_stats_writes_each_owner_its_own_token():
+    # Prefill, one token per owner: the statistics OUTPUT is token-sharded so a
+    # single local row (stats_local_m == 1) belongs to a DIFFERENT global token
+    # on each owner. The finalize must write that token through the output's own
+    # local-to-physical mapping. A global (0, 0) destination would make every
+    # owner store its sum into stats[0] and leave the other tokens unwritten
+    # (the observed [sum, NaN, NaN, NaN]).
+    partial = _abi(
+        (4, 2048),
+        local_shape=(4, 2048),
+        storage_kind="compact_per_owner",
+        coordinate_space="local",
+        partial_axes=(0, 1),
+        owner_stride=2048,
+    )
+    stats = _abi(
+        (4, 1),
+        local_shape=(1, 1),
+        coordinates=("local_coord_0 + shard_index", "local_coord_1"),
+        axis_policies=(
+            {"kind": "split", "stages": ({"hierarchy_axes": (0, 1)},)},
+            {"kind": "broadcast"},
+        ),
+    )
+    stats["scalar_dtype"] = "float32"
+    stats["scalar_itemsize"] = 4
+    call = _gather_reduce_add_norm_stats_call(
+        _raw(partial, partial_axes=(0, 1), partial_owner_count=128, stats_abi=stats)
+    )
+
+    assert call["stats_local_m"] == 1
+    # The destination is the owner's own token (shard-dependent), not a constant
+    # global (0, 0) slot shared by every owner.
+    assert "shard_index" in call["stats_offset"]
+
+
 def test_partial_value_without_per_owner_storage_is_rejected():
     partial = _abi((1, 2048), partial_axes=(0, 1))
 
