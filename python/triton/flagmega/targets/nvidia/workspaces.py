@@ -110,17 +110,30 @@ def _requirements(node, candidate, module, mesh_hierarchy):
         # row. The outer rows are the dimensions BEFORE the normalization axis;
         # the suffix shape[axis:] is reduced into a single statistic. M==1
         # (decode) keeps the flat single-row layout; M>1 (prefill) prepends the
-        # row axis so each token reduces its own independent RMS.
+        # row axis so each token reduces its own independent RMS. The renderer
+        # iterates the FINER of the partial-input / value-output local domains
+        # (by scalar capacity) and indexes the workspace by THAT domain's outer
+        # rows; equal total capacity need not mean equal row count, so size from
+        # the selected domain, not the output, or the store overruns the buffer.
         value_type = node.type.fields[0] if isinstance(node.type, TupleType) else node.type
+        partial_type = module.node_map[node.inputs[0]].type
         local_value = (
             local_tensor_type(value_type)
             if isinstance(value_type, DistributedType)
             else value_type
         )
+        local_partial = (
+            local_tensor_type(partial_type)
+            if isinstance(partial_type, DistributedType)
+            else partial_type
+        )
+        partial_capacity = prod((dim.fixed_value for dim in local_partial.shape), start=1)
+        value_capacity = prod((dim.fixed_value for dim in local_value.shape), start=1)
+        domain_local = local_partial if partial_capacity <= value_capacity else local_value
         axis = int(node.attrs.get("axis", 0))
-        axis = axis + len(local_value.shape) if axis < 0 else axis
+        axis = axis + len(domain_local.shape) if axis < 0 else axis
         local_rows = prod(
-            (dim.fixed_value for dim in local_value.shape[:axis]), start=1
+            (dim.fixed_value for dim in domain_local.shape[:axis]), start=1
         )
         partials_shape = (
             (components, collective_owner_count)

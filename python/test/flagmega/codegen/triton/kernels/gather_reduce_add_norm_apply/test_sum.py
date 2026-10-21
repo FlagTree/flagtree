@@ -376,3 +376,32 @@ def test_renderer_rejects_materialized_partial_storage():
 
     with pytest.raises(CodegenError, match="compact per-owner"):
         _gather_reduce_add_norm_apply_call(raw)
+
+
+def test_renderer_sizes_statistics_from_the_selected_iteration_domain():
+    # A split input and split output can tie in scalar capacity while differing
+    # in outer-row count. The renderer selects the finer-or-equal (here the
+    # input) domain and loops over ITS outer rows, so the statistics workspace
+    # must be sized from that domain, not the output. Before the fix the
+    # workspace-shape check used the output's rows and rejected the correctly
+    # sized (input-row) workspace (and the allocator undersized it, overrunning
+    # the buffer at runtime).
+    partial = _abi(
+        (4, 4),
+        storage_kind="compact_per_owner",
+        coordinate_space="local",
+        partial_axes=(0, 1),
+        owner_stride=4,
+    )
+    value = _abi((4, 8), local_shape=(2, 8))
+    parameter = _abi((8,))
+    workspace = _abi((4, 1, 128), dtype="float32")
+    raw = _raw(partial=partial, value=value, parameter=parameter)
+    raw["semantic_attrs"]["axis"] = 1
+    raw["workspaces"] = (_parameter("norm_stats_partials", workspace),)
+
+    call = _gather_reduce_add_norm_apply_call(raw)
+
+    # The iteration domain is the equal-capacity partial input (4 outer rows),
+    # not the output's 2; the workspace is validated and indexed by those rows.
+    assert call["local_m"] == 4

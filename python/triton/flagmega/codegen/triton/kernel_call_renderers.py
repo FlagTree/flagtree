@@ -2621,10 +2621,20 @@ def _gather_reduce_add_norm_apply_call(raw) -> dict[str, object]:
     stats_components = 2 if use_mean else 1
     # The statistics workspace carries one (components, owner) slab per leading
     # token: a flat (components, owner) buffer for M==1 (decode), or a prepended
-    # row axis for M>1 (prefill), matching the kernel's apply_row loop.
-    workspace_rows = prod(
-        _static_shape(value_abi, "local_capacity_shape")[:axis], start=1
+    # row axis for M>1 (prefill), matching the kernel's apply_row loop. Both
+    # phases loop over the FINER of the partial-input / value-output local
+    # domains (by scalar capacity, selected below); equal total capacity need
+    # not mean equal outer-row count (a split-input / split-output reduce
+    # scatter), so size and validate the workspace from that selected domain,
+    # not the output, or the row-indexed store runs off the workspace.
+    _partial_local = _static_shape(partial_abi, "local_capacity_shape")
+    _value_local = _static_shape(value_abi, "local_capacity_shape")
+    _domain_local = (
+        _partial_local
+        if prod(_partial_local, start=1) <= prod(_value_local, start=1)
+        else _value_local
     )
+    workspace_rows = prod(_domain_local[:axis], start=1)
     expected_stats_shape = (
         (stats_components, owner_count)
         if workspace_rows == 1
