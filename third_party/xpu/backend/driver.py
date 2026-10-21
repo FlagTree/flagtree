@@ -1014,7 +1014,7 @@ class XPULauncher(object):
         if self._implicit_dist:
             from triton.backends.xpu.distributed import get_implicit_context
             ctx = get_implicit_context()
-            expanded[:0] = [int(ctx[1]), int(ctx[0])]
+            expanded[:0] = [int(ctx.comm_ptr), int(ctx.mem_ptr)]
         self.launch(*fixed, *expanded)
 
 
