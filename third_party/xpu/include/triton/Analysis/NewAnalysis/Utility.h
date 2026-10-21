@@ -1,7 +1,7 @@
 #ifndef TRITONXPU_ANALYSIS_UTILITY_H
 #define TRITONXPU_ANALYSIS_UTILITY_H
 
-#include "triton/Analysis/Utility.h"
+#include "third_party/xpu/include/triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "triton/Dialect/TritonXPU/IR/Dialect.h"
