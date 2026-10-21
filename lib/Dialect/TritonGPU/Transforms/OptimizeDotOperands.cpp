@@ -114,6 +114,7 @@ static Value stripMemDescViews(Value value) {
 
 static bool isBackedByLocalAlloc(Value value, llvm::DenseSet<Value> &active);
 
+#ifdef __TLE__
 // PPU only: true for a memdesc defined directly by a local_alloc with a
 // non-trivial swizzled shared encoding (max phase > 1, i.e. chosen explicitly
 // rather than the plain default) that is written by local_store: that layout
@@ -138,6 +139,7 @@ static bool keepsStoredSwizzledLayout(Value memDesc) {
       return true;
   return false;
 }
+#endif
 
 static bool isForIterArgBackedByLocalAlloc(BlockArgument arg,
                                            llvm::DenseSet<Value> &active) {

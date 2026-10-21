@@ -10,14 +10,14 @@
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "ppu:80", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-DAG: #[[ENC:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0]}>
+  // CHECK-DAG: #[[$ENC:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0]}>
   // CHECK-LABEL: @keep_stored_swizzled_ppu
   tt.func @keep_stored_swizzled_ppu(%q: tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>,
                 %kv: tensor<64x64xbf16, #blocked>) -> tensor<64x64xf32, #mma> {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #[[ENC]], #smem, mutable>
+    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #[[$ENC]], #smem, mutable>
     %alloc = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
-    // CHECK: ttg.local_store %{{.*}}, %[[ALLOC]] : tensor<64x64xbf16, #{{.*}}> -> !ttg.memdesc<64x64xbf16, #[[ENC]], #smem, mutable>
+    // CHECK: ttg.local_store %{{.*}}, %[[ALLOC]] : tensor<64x64xbf16, #{{.*}}> -> !ttg.memdesc<64x64xbf16, #[[$ENC]], #smem, mutable>
     ttg.local_store %kv, %alloc : tensor<64x64xbf16, #blocked> -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
     %load = ttg.local_load %alloc : !ttg.memdesc<64x64xbf16, #shared, #smem, mutable> -> tensor<64x64xbf16, #blocked>
     // CHECK: %[[TRANS:.*]] = ttg.memdesc_trans %[[ALLOC]] {order = array<i32: 1, 0>}
@@ -40,14 +40,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "ppu:80", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-DAG: #[[ENC:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+  // CHECK-DAG: #[[$ENC:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
   // CHECK-LABEL: @retag_plain_default_ppu
   tt.func @retag_plain_default_ppu(%q: tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>,
                 %kv: tensor<64x64xbf16, #blocked>) -> tensor<64x64xf32, #mma> {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #[[ENC]], #smem, mutable>
+    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #[[$ENC]], #smem, mutable>
     %alloc = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
-    // CHECK: ttg.local_store %{{.*}}, %[[ALLOC]] : tensor<64x64xbf16, #{{.*}}> -> !ttg.memdesc<64x64xbf16, #[[ENC]], #smem, mutable>
+    // CHECK: ttg.local_store %{{.*}}, %[[ALLOC]] : tensor<64x64xbf16, #{{.*}}> -> !ttg.memdesc<64x64xbf16, #[[$ENC]], #smem, mutable>
     ttg.local_store %kv, %alloc : tensor<64x64xbf16, #blocked> -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
     %load = ttg.local_load %alloc : !ttg.memdesc<64x64xbf16, #shared, #smem, mutable> -> tensor<64x64xbf16, #blocked>
     // CHECK: %[[TRANS:.*]] = ttg.memdesc_trans %[[ALLOC]] {order = array<i32: 1, 0>}
@@ -69,14 +69,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-DAG: #[[ENC:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+  // CHECK-DAG: #[[$ENC:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
   // CHECK-LABEL: @retag_stored_swizzled_cuda
   tt.func @retag_stored_swizzled_cuda(%q: tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>,
                 %kv: tensor<64x64xbf16, #blocked>) -> tensor<64x64xf32, #mma> {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #[[ENC]], #smem, mutable>
+    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #[[$ENC]], #smem, mutable>
     %alloc = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
-    // CHECK: ttg.local_store %{{.*}}, %[[ALLOC]] : tensor<64x64xbf16, #{{.*}}> -> !ttg.memdesc<64x64xbf16, #[[ENC]], #smem, mutable>
+    // CHECK: ttg.local_store %{{.*}}, %[[ALLOC]] : tensor<64x64xbf16, #{{.*}}> -> !ttg.memdesc<64x64xbf16, #[[$ENC]], #smem, mutable>
     ttg.local_store %kv, %alloc : tensor<64x64xbf16, #blocked> -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
     %load = ttg.local_load %alloc : !ttg.memdesc<64x64xbf16, #shared, #smem, mutable> -> tensor<64x64xbf16, #blocked>
     // CHECK: %[[TRANS:.*]] = ttg.memdesc_trans %[[ALLOC]] {order = array<i32: 1, 0>}
