@@ -22,11 +22,46 @@
 
 import sys
 import importlib
+import functools
+import tokenize
+from io import StringIO
 
 from triton._flagtree_backend import FLAGTREE_BACKEND
 
 
 class BaseHintHandler:
+
+    @staticmethod
+    def get_node_hints(code_generator, node):
+        line_flagtree_hints = getattr(code_generator, 'flagtree_line_hints', {})
+        return line_flagtree_hints.get(node.lineno) or line_flagtree_hints.get(node.end_lineno)
+
+    @staticmethod
+    def maps_line_numbers_to_comment_hints(jit_fn):
+        return dict(BaseHintHandler._maps_line_numbers_to_comment_hints_from_source(jit_fn.src))
+
+    @staticmethod
+    @functools.lru_cache(maxsize=256)
+    def _maps_line_numbers_to_comment_hints_from_source(code_str):
+        # Maps line numbers to comment hints
+        line_flagtree_hints = {}
+        g = tokenize.generate_tokens(StringIO(code_str).readline)
+        for tok_type, tok_text, start, end, _ in g:
+            if tok_type == tokenize.COMMENT:
+                comment = tok_text.replace(" ", "").strip()
+                if comment.startswith('#@hint:'):
+                    flagtree_hints = comment[len('#@hint:'):].strip()
+                    # Record the line number of the comment
+                    line_num = start[0]
+                    line_flagtree_hints[line_num] = flagtree_hints
+
+        return line_flagtree_hints
+
+    @staticmethod
+    def attach_line_number_to_comment_mapping(tree, line_flagtree_hints):
+        if tree.body:
+            tree.body[0].line_flagtree_hints = line_flagtree_hints
+
     # dynamicly find method
     def trigger(self, hook_name, *args, **kwargs):
         if hasattr(self, hook_name):
@@ -85,6 +120,9 @@ class HintManager:
             except ImportError:
                 # print(f"[FlagTree] Warning: Failed to load Nvidia Hint Handler: {e}", file=sys.stderr)
                 return BaseHintHandler()
+        elif backend == 'mthreads':
+            module = importlib.import_module("triton.backends.mthreads.mthreads_hint_handler")
+            return module.MthreadsHintHandler()
         elif backend == 'sunrise':
             try:
                 module = importlib.import_module("triton.backends.sunrise.sunrise_hint_handler")

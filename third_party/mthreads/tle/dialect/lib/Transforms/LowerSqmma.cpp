@@ -43,7 +43,7 @@ struct SelectedSqmmaConfig {
 
 static std::optional<SelectedSqmmaConfig>
 selectSqmmaConfig(unsigned m, unsigned n, unsigned k, unsigned numWarps,
-                  musa::SQMMAEltType operandType) {
+                  musa::SQMMAEltType operandType, bool forceM16) {
   if (numWarps < 4 || numWarps % 4 != 0)
     return std::nullopt;
   const auto *sqTraits = musa::getMusaSqmmaArchTraits(musa::MusaArch::PH1);
@@ -54,7 +54,7 @@ selectSqmmaConfig(unsigned m, unsigned n, unsigned k, unsigned numWarps,
   unsigned bestCount = std::numeric_limits<unsigned>::max();
   unsigned bestVolume = 0;
   for (unsigned instM : kMN) {
-    if (m % instM != 0)
+    if ((forceM16 && instM != 16) || m % instM != 0)
       continue;
     for (unsigned instN : kMN) {
       if (n % instN != 0 ||
@@ -77,7 +77,8 @@ selectSqmmaConfig(unsigned m, unsigned n, unsigned k, unsigned numWarps,
           unsigned count = (m / tileM) * (n / tileN) * (k / instK);
           unsigned volume = instM * instN * instK;
           // On a full tie keep each row inside one squad for row reductions.
-          bool preferMSplit = warpsN == 1 && best && best->warpsPerCTA[1] != 1;
+          bool preferMSplit = warpsN == 1 && (instM >= 32 || forceM16) &&
+                              best && best->warpsPerCTA[1] != 1;
           if (!best || count < bestCount ||
               (count == bestCount &&
                (volume > bestVolume ||
@@ -393,11 +394,14 @@ struct TritonMUSAGPUTLELowerSqmmaPass
         return signalPassFailure();
       }
       unsigned numWarps = ttg::maybeLookupNumWarps(dot).value_or(0);
-      auto config =
-          selectSqmmaConfig(aTy.getShape()[0], bTy.getShape()[1],
-                            aTy.getShape()[1], numWarps, *operandType);
+      bool forceM16 = dot->hasAttrOfType<UnitAttr>("musa_tle.sqmma_m16");
+      auto config = selectSqmmaConfig(aTy.getShape()[0], bTy.getShape()[1],
+                                      aTy.getShape()[1], numWarps, *operandType,
+                                      forceM16);
       if (!config) {
-        dot.emitOpError("cannot select a supported SQMMA configuration");
+        dot.emitOpError(
+            forceM16 ? "sqmma_m16 hint has no supported SQMMA configuration"
+                     : "cannot select a supported SQMMA configuration");
         return signalPassFailure();
       }
       auto accTy = cast<RankedTensorType>(dot.getC().getType());

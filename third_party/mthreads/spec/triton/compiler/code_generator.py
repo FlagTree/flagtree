@@ -21,6 +21,7 @@ from ..runtime.jit import get_jit_fn_file_line, get_full_name, JITCallable, Boun
 from .._utils import apply_with_path, set_iterable_path, is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
+from .hint_manager import hint_trigger
 
 
 def check_identifier_legality(name, type):
@@ -320,6 +321,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         self.lscope = {}
         self.jit_fn = jit_fn
+        self.flagtree_line_hints = hint_trigger("maps_line_numbers_to_comment_hints", jit_fn) or {}
         # TODO: we currently generate illegal names for non-kernel functions involving constexprs!
         if is_kernel:
             function_name = function_name[function_name.rfind('.') + 1:]
@@ -1397,7 +1399,9 @@ class CodeGenerator(ast.NodeVisitor):
         prev_lscope = self.lscope
         prev_defs = self.local_defs
         prev_caller_context = self.caller_context
+        prev_line_hints = self.flagtree_line_hints
         try:
+            self.flagtree_line_hints = hint_trigger("maps_line_numbers_to_comment_hints", fn) or {}
             self.gscope = mapped_gscope
             self.lscope = {}
             self.local_defs = {}
@@ -1422,8 +1426,10 @@ class CodeGenerator(ast.NodeVisitor):
             self.lscope = prev_lscope
             self.local_defs = prev_defs
             self.caller_context = prev_caller_context
+            self.flagtree_line_hints = prev_line_hints
 
     def call_Function(self, node, fn, args, kws):
+        flagtree_hints = hint_trigger("get_node_hints", self, node)
         if isinstance(fn, (BoundJITMethod, BoundConstexprFunction)):
             args.insert(0, fn.__self__)
             fn = fn.__func__
@@ -1454,6 +1460,7 @@ class CodeGenerator(ast.NodeVisitor):
                     extra_kwargs['_generator'] = self
             try:
                 ret = fn(*args, **extra_kwargs, **kws)
+                hint_trigger("attach_result_hints", fn, flagtree_hints, ret, self.semantic)
                 # builtin functions return plain tuples for readability
                 if isinstance(ret, tuple):
                     ret = language.tuple(ret)

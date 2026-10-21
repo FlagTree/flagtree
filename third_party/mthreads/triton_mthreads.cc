@@ -275,7 +275,7 @@ void init_triton_musa_passes_ttgpuir(py::module m) {
 }
 
 void init_triton_mthreads(py::module &&m) {
-  m.def("supports_tle_sqmma_m16_m_split", []() {
+  m.def("supports_tle_sqmma_m16_hint", []() {
 #ifdef __TLE__
     return true;
 #else
