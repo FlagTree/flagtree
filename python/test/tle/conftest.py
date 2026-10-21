@@ -27,16 +27,11 @@ def _required_primitives(item):
 
 
 def pytest_runtest_setup(item):
-    from triton._flagtree_backend import get_active_backend_name
+    from triton._flagtree_backend import FLAGTREE_BACKEND
 
     required = _required_primitives(item)
     if not required:
         return
-    try:
-        backend_name = get_active_backend_name()
-    except Exception as exc:
-        pytest.skip(f"cannot determine TLE primitive support for the active backend: {exc}")
-        return
-    missing = sorted(primitive for primitive in required if not is_primitive_supported(backend_name, primitive))
+    missing = sorted(primitive for primitive in required if not is_primitive_supported(FLAGTREE_BACKEND, primitive))
     if missing:
-        pytest.skip(f"backend {backend_name!r} does not support required TLE primitive(s): {', '.join(missing)}")
+        pytest.skip(f"backend {FLAGTREE_BACKEND!r} does not support required TLE primitive(s): {', '.join(missing)}")

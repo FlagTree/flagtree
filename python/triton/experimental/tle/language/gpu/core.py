@@ -456,9 +456,10 @@ def alloc(
         if logical_candidate and unwrapped_shape[logical_non_power_axis] % 16 != 0:
             raise ValueError("tle.gpu.alloc non-power-of-two payload dimension must be a multiple of 16")
         if logical_candidate:
-            from triton._flagtree_backend import get_active_backend_name
-            if get_active_backend_name() != "nvidia":
-                raise ValueError("logical non-power-of-two alloc requires the NVIDIA backend")
+            from triton._flagtree_backend import FLAGTREE_BACKEND
+            if FLAGTREE_BACKEND:
+                raise ValueError(
+                    f"logical non-power-of-two alloc requires the NVIDIA backend, but got {FLAGTREE_BACKEND!r}")
             if not hasattr(_semantic.builder, "mark_logical_alloc_candidate"):
                 raise ValueError("non-power-of-two alloc requires a build with __TLE_TILED_SMEM__ enabled")
             if storage != tle.smem:
