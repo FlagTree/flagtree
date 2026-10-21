@@ -1,0 +1,6 @@
+# Intermediate ccec outputs from build_device_bc.sh
+Shmem*.cpp
+Shmem*.bc
+*.noinline.bc
+# Keep packaged device bitcodes
+!libdevice_cannshmem_mlir*.bc
