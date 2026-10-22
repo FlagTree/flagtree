@@ -1,6 +1,6 @@
 # flagtree tle
 import triton.language.core as tl
-
+from triton.language.core import tensor
 # -----------------------
 # Non-Atomic Memory Operations
 # -----------------------
@@ -56,3 +56,31 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
                 cache_modifier=cache_modifier, eviction_policy=eviction_policy, volatile=volatile, _semantic=_semantic)
     x.handle.set_attr("tt.load.async", _semantic.builder.get_bool_attr(is_async))
     return x
+
+@tl.builtin
+def make_partition_view(base: tensor, shape, strides, tile, padding_value="zero", _semantic=None) -> "tl.tensor_view":
+    """Create a tiled partition view over a scalar base pointer.
+
+    ``padding_value`` must be one of ``"zero"``, ``"nan"``, ``"inf"``, or ``"-inf"``.
+    """
+    return _semantic.make_partition_view(base, shape, strides, tile, padding_value)
+
+
+@tl.builtin
+def make_strided_view(base: tensor, shape, strides, tile, traversal_strides,
+                      padding_value="zero", _semantic=None) -> "tl.tensor_view":
+    """Create a tiled pointer view whose origins advance by ``traversal_strides``.
+
+    ``padding_value`` must be one of ``"zero"``, ``"nan"``, ``"inf"``, or ``"-inf"``.
+    """
+    return _semantic.make_strided_view(base, shape, strides, tile, traversal_strides, padding_value)
+
+
+@tl.builtin
+def make_gather_scatter_view(base: tensor, shape, strides, tile, sparse_dim,
+                             padding_value="zero", _semantic=None) -> "tl.tensor_view":
+    """Create a pointer view with tensor-valued indices in selected dimensions.
+
+    ``padding_value`` must be one of ``"zero"``, ``"nan"``, ``"inf"``, or ``"-inf"``.
+    """
+    return _semantic.make_gather_scatter_view(base, shape, strides, tile, sparse_dim, padding_value)

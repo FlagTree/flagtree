@@ -670,7 +670,9 @@ class CodeGenerator(ast.NodeVisitor):
                 self.prototype.ret_types = self.ret_type.types
             else:
                 self.prototype.ret_types = [self.ret_type]
-            self.fn.reset_type(self.prototype.serialize(self.builder))
+            # Preserve parameter types that were refined while visiting the body.
+            self.fn.reset_type(
+                self.builder.get_function_ty(self.fn.type.param_types(), self.prototype.return_types_ir(self.builder)))
             self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
         self.fn.finalize()
 
@@ -1413,6 +1415,10 @@ class CodeGenerator(ast.NodeVisitor):
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
         args_val = flatten_values_to_ir(args_val)
+        # Reconcile arguments with parameter types refined by the callee body.
+        for i, param_ty in enumerate(symbol.type.param_types()):
+            if args_val[i].get_type() != param_ty:
+                args_val[i] = self.builder.convert_to_tensor_view_ptr(args_val[i])
         call_op = self.builder.call(symbol, args_val)
         if callee_ret_type == language.void:
             return None

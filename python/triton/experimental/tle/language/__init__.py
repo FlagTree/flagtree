@@ -2,13 +2,20 @@
 from importlib import import_module
 
 from .core import (
-    load, )
+    load,
+    make_partition_view,
+    make_strided_view,
+    make_gather_scatter_view
+)
 
 from . import gpu, raw
 
 __all__ = [
     "load",
     "dsa",
+    "make_partition_view",
+    "make_strided_view",
+    "make_gather_scatter_view",
 ]
 
 
