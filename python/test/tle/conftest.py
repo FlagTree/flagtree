@@ -11,7 +11,7 @@ _MARKER = "require_tle"
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
-        "run only when the active backend supports every named TLE primitive",
+        "require_tle(*primitives): run only when the active backend supports every named TLE primitive",
     )
 
 
