@@ -1,7 +1,7 @@
 import pytest
 
 from triton.experimental.tle import (
-    is_primitive_supported,
+    is_tle_supported,
     primitive_name,
 )
 
@@ -11,27 +11,25 @@ _MARKER = "require_tle"
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
-        "require_tle(*primitives): run only when the active backend supports every named TLE primitive",
+        "run only when the active backend supports every named TLE primitive",
     )
 
 
-def _required_primitives(item):
-    required = []
+def _get_required_primitives_list(item):
+    required_list = []
     for marker in item.iter_markers(name=_MARKER):
         if marker.kwargs:
             raise pytest.UsageError("require_tle accepts primitive names as positional arguments only")
         if not marker.args:
             raise pytest.UsageError("require_tle requires at least one TLE primitive name")
-        required.extend(primitive_name(primitive) for primitive in marker.args)
-    return frozenset(required)
+        required_list.extend(primitive_name(primitive) for primitive in marker.args)
+    return frozenset(required_list)
 
 
 def pytest_runtest_setup(item):
-    from triton._flagtree_backend import FLAGTREE_BACKEND
-
-    required = _required_primitives(item)
-    if not required:
+    required_list = _get_required_primitives_list(item)
+    if not required_list:  # no required_list primitives declared
         return
-    missing = sorted(primitive for primitive in required if not is_primitive_supported(FLAGTREE_BACKEND, primitive))
+    missing = sorted(primitive for primitive in required_list if not is_tle_supported(primitive))
     if missing:
-        pytest.skip(f"backend {FLAGTREE_BACKEND!r} does not support required TLE primitive(s): {', '.join(missing)}")
+        pytest.skip(f"current backend does not support tle required_list: {', '.join(missing)}")

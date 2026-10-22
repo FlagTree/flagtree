@@ -54,26 +54,26 @@ def test_backend_extension_is_resolved_from_total(monkeypatch):
 
 def test_missing_or_empty_backend_config_is_strict(monkeypatch):
     monkeypatch.setattr(tle, "_backend_config_module", lambda _backend: None)
-    assert tle.get_supported_primitives("missing") == frozenset()
-    assert not tle.is_primitive_supported("missing", "gpu.alloc")
+    assert tle.get_supported_primitives() == frozenset()
+    assert not tle.is_tle_supported("gpu.alloc")
 
     monkeypatch.setattr(tle, "_backend_config_module", lambda _backend: SimpleNamespace(TLE_SUPPORTED_PRIMITIVES=[]))
-    assert not tle.is_primitive_supported("empty", "gpu.alloc")
+    assert not tle.is_tle_supported("gpu.alloc")
 
 
 def test_primitive_outside_total_is_not_checked(monkeypatch):
     monkeypatch.setattr(tle, "_backend_config_module", lambda _backend: None)
     for primitive in ("gpu.pipe_value.reader", "ext.make_view"):
         assert primitive not in tle.TLE_PRIMITIVES
-        assert tle.is_primitive_supported("missing", primitive)
-        tle.require_tle("missing", primitive)
+        assert tle.is_tle_supported(primitive)
+        tle.require_tle(primitive)
 
 
 def test_backend_config_is_normalized(monkeypatch):
     config = SimpleNamespace(TLE_SUPPORTED_PRIMITIVES=["tle.cumsum", "language.gpu.core.alloc"])
     monkeypatch.setattr(tle, "_backend_config_module", lambda _backend: config)
-    assert tle.get_supported_primitives("test") == frozenset({"cumsum", "gpu.alloc"})
-    assert tle.is_primitive_supported("test", tle.language.gpu.alloc)
+    assert tle.get_supported_primitives() == frozenset({"cumsum", "gpu.alloc"})
+    assert tle.is_tle_supported(tle.language.gpu.alloc)
 
 
 def test_backend_config_is_loaded_from_dedicated_module(monkeypatch):
