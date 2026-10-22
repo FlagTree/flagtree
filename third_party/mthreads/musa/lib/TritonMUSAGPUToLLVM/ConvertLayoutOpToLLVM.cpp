@@ -114,6 +114,7 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
+#ifdef __TLE__
     // FP8 and BF16 SQMMA can differ in instruction K while assigning every
     // accumulator element to the same register. Preserve that accumulator
     // instead of routing an equivalent layout through shared memory.
@@ -123,6 +124,7 @@ public:
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
+#endif // __TLE__
 
     if (musa::useMusaReplicatedScratch(srcLayout, dstLayout)) {
       if (musa::isMusaSqmmaAccumulatorToBlockedLike(srcLayout, dstLayout))

@@ -206,11 +206,20 @@ LogicalResult SquadDotOp::verify() {
   auto instrShape = mmaEnc.getInstrShape();
   if (instrShape.size() != 3)
     return emitError("SQMMA result encoding must carry a 3D instrShape");
+#ifdef __TLE__
+  // C keeps its producer's register encoding across operand dtypes. Its K
+  // metadata does not select this instruction; getK() is checked against the
+  // current operand types and hardware traits below, with or without a marker.
+  if (getM() != static_cast<int32_t>(instrShape[0]) ||
+      getN() != static_cast<int32_t>(instrShape[1]))
+    return emitError("SQMMA m/n attrs must match the accumulator instrShape");
+#else
   if (getM() != static_cast<int32_t>(instrShape[0]) ||
       getN() != static_cast<int32_t>(instrShape[1]) ||
       getK() != static_cast<int32_t>(instrShape[2]))
     return emitError(
         "SQMMA m/n/k attrs must match the #ttg.musa_sqmma instrShape");
+#endif // __TLE__
   if (retTy.getEncoding() != retEnc)
     return emitError(
         "SQMMA result shape and accumulator must use the same encoding");
@@ -562,12 +571,19 @@ LogicalResult WaitBarrierOp::verify() {
 void WaitBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+#ifdef __TLE__
   effects.emplace_back(MemoryEffects::Read::get(), ttg::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), ttg::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(),
                        SideEffects::DefaultResource::get());
   effects.emplace_back(MemoryEffects::Write::get(),
                        SideEffects::DefaultResource::get());
+#else
+  effects.emplace_back(MemoryEffects::Read::get(), &getBarIdMutable(),
+                       ttg::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+#endif // __TLE__
 }
 
 static LogicalResult verifyTMECopyShapeContract(Operation *op, ValueRange coord,
