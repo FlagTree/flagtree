@@ -59,4 +59,4 @@ def test_communication_loads_the_installed_library(monkeypatch, tmp_path):
     monkeypatch.delitem(sys.modules, "triton.experimental.tle.language.communication", raising=False)
 
     communication = importlib.import_module("triton.experimental.tle.language.communication")
-    assert communication.flagcx.so_file == str(so_file)
+    assert str(communication.flagcx.so_file) == str(so_file)
