@@ -16,6 +16,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -663,18 +664,50 @@ static LogicalResult updateOperandLayout(
   return success();
 }
 
+static void setLoopAccumulator(scf::ForOp loop, unsigned index, Value init,
+                               DenseMap<Value, Value> &nativeAccumulators) {
+  loop->setOperand(3 + index, init);
+  Value argument = loop.getRegionIterArg(index);
+  Value result = loop.getResult(index);
+  argument.setType(init.getType());
+  result.setType(init.getType());
+  nativeAccumulators[argument] = argument;
+  nativeAccumulators[result] = result;
+}
+
 static LogicalResult verifyAsyncUses(musa_tle::SqmmaOp op) {
-  for (OpOperand &use : op.getD().getUses()) {
-    Operation *user = use.getOwner();
-    if (auto next = dyn_cast<musa_tle::SqmmaOp>(user)) {
-      if (use.getOperandNumber() == 2)
-        continue;
-    }
-    if (isa<musa_tle::SqmmaWaitOp, scf::YieldOp, scf::ForOp>(user))
+  SmallVector<Value> pending{op.getD()};
+  DenseSet<Value> visited;
+  while (!pending.empty()) {
+    Value value = pending.pop_back_val();
+    if (!visited.insert(value).second)
       continue;
-    return op.emitOpError(
-        "async result must be consumed by musa_tle.sqmma_wait before "
-        "ordinary tensor use");
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (isa<musa_tle::SqmmaOp>(user) && use.getOperandNumber() == 2)
+        continue;
+      if (isa<musa_tle::SqmmaWaitOp>(user))
+        continue;
+      if (auto loop = dyn_cast<scf::ForOp>(user)) {
+        if (use.getOperandNumber() >= 3) {
+          unsigned index = use.getOperandNumber() - 3;
+          pending.push_back(loop.getRegionIterArg(index));
+          pending.push_back(loop.getResult(index));
+          continue;
+        }
+      }
+      if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+        if (auto loop = dyn_cast<scf::ForOp>(yield->getParentOp())) {
+          unsigned index = use.getOperandNumber();
+          pending.push_back(loop.getRegionIterArg(index));
+          pending.push_back(loop.getResult(index));
+          continue;
+        }
+      }
+      return op.emitOpError(
+          "async result must be consumed by musa_tle.sqmma_wait before "
+          "ordinary tensor use");
+    }
   }
   return success();
 }
@@ -748,6 +781,45 @@ struct TritonMUSAGPUTLELowerSqmmaPass
         auto nativeTy = RankedTensorType::get(
             oldAccTy.getShape(), oldAccTy.getElementType(), encodings[dot]);
         Value nativeAcc = nativeAccumulators.lookup(dot.getC());
+        // An async loop carries the encoded registers through its iter_arg,
+        // yield and result; only a final wait releases them for tensor use.
+        if (!nativeAcc) {
+          if (auto argument = dyn_cast<BlockArgument>(dot.getC())) {
+            auto loop =
+                dyn_cast<scf::ForOp>(argument.getOwner()->getParentOp());
+            if (loop && argument.getArgNumber() >= loop.getNumInductionVars()) {
+              unsigned index =
+                  argument.getArgNumber() - loop.getNumInductionVars();
+              auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+              if (yield.getOperand(index).getDefiningOp<musa_tle::SqmmaOp>()) {
+                OpBuilder initBuilder(loop);
+                Value init =
+                    nativeAccumulators.lookup(loop.getInitArgs()[index]);
+                if (!init)
+                  init = ttg::ConvertLayoutOp::create(
+                      initBuilder, loop.getLoc(), nativeTy,
+                      loop.getInitArgs()[index]);
+                setLoopAccumulator(loop, index, init, nativeAccumulators);
+                nativeAcc = argument;
+              }
+            }
+          }
+        }
+        if (nativeAcc) {
+          auto carriedTy = cast<RankedTensorType>(nativeAcc.getType());
+          auto carriedEncoding =
+              dyn_cast<ttg::MUSASqmmaEncodingAttr>(carriedTy.getEncoding());
+          if (!carriedEncoding ||
+              carriedEncoding.toLinearLayout(carriedTy.getShape()) !=
+                  encodings[dot].toLinearLayout(nativeTy.getShape())) {
+            dot.emitOpError("requires compatible C register layouts for async "
+                            "accumulator reuse");
+            return signalPassFailure();
+          }
+          // C ownership is independent of K. Keep the producer's encoding;
+          // the current operands selected this instruction's K above.
+          nativeTy = carriedTy;
+        }
         if (!nativeAcc)
           nativeAcc = dot.getC();
         // An explicit SQMMA layout can describe another instruction shape.
@@ -757,14 +829,16 @@ struct TritonMUSAGPUTLELowerSqmmaPass
           nativeAcc = ttg::ConvertLayoutOp::create(builder, dot.getLoc(),
                                                    nativeTy, nativeAcc);
         Value useC = arith::ConstantIntOp::create(builder, dot.getLoc(), 1, 1);
-        auto config = cast<ttg::MUSASqmmaEncodingAttr>(nativeTy.getEncoding());
-        auto instr = config.getInstrShape();
+        auto carriedEncoding =
+            cast<ttg::MUSASqmmaEncodingAttr>(nativeTy.getEncoding());
+        auto instr = carriedEncoding.getInstrShape();
+        unsigned instructionK = encodings[dot].getInstrShape()[2];
         auto operandType = musa::getWmmaEltType(
             cast<ttg::MemDescType>(dot.getA().getType()).getElementType());
         assert(operandType && "SQMMA operand type must be verified");
         auto nativeDot = musa::SquadDotOp::create(
             builder, dot.getLoc(), nativeTy, dot.getA(), dot.getB(), nativeAcc,
-            useC, instr[0], instr[1], instr[2], musa::SQMMAEltType::f32,
+            useC, instr[0], instr[1], instructionK, musa::SQMMAEltType::f32,
             *operandType, *operandType,
             inferLayout(cast<ttg::MemDescType>(dot.getA().getType())),
             inferLayout(cast<ttg::MemDescType>(dot.getB().getType())), true,
@@ -772,6 +846,16 @@ struct TritonMUSAGPUTLELowerSqmmaPass
             static_cast<int32_t>(dot.getInputPrecision()), 0);
         nativeDot->setAttr(kExplicitSqmmaAttr, builder.getUnitAttr());
         nativeAccumulators[dot.getD()] = nativeDot.getD();
+        for (OpOperand &use :
+             llvm::make_early_inc_range(dot.getD().getUses())) {
+          if (auto loop = dyn_cast<scf::ForOp>(use.getOwner())) {
+            if (use.getOperandNumber() >= 3)
+              setLoopAccumulator(loop, use.getOperandNumber() - 3,
+                                 nativeDot.getD(), nativeAccumulators);
+          } else if (isa<scf::YieldOp>(use.getOwner())) {
+            use.set(nativeDot.getD());
+          }
+        }
         continue;
       }
 

@@ -1605,6 +1605,7 @@ public:
     TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp,
                                          numCTAs, enableSourceRemat);
     TritonGPUConversionTarget target(*context, typeConverter);
+#ifdef __TLE__
     auto populatePatterns = [&](TritonGPUTypeConverter &converter,
                                 RewritePatternSet &patterns,
                                 TritonGPUConversionTarget &target) {
@@ -1615,13 +1616,24 @@ public:
       // mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
       populateSCFPatterns(converter, patterns);
       populateCFPatterns(converter, patterns);
-#ifdef __TLE__
       populateMUSATlePatterns(converter, patterns);
-#endif
       patterns.insert<GenericOpPattern<ub::PoisonOp>>(converter, context);
     };
     RewritePatternSet patterns(context);
     populatePatterns(typeConverter, patterns, target);
+#else
+    // rewrite patterns
+    RewritePatternSet patterns(context);
+    // add rules
+    populateArithPatternsAndLegality(typeConverter, patterns, target);
+    populateMathPatternsAndLegality(typeConverter, patterns, target);
+    populateTritonPatterns(typeConverter, patterns, numCTAs);
+    // TODO: can we use
+    //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
+    populateSCFPatterns(typeConverter, patterns);
+    populateCFPatterns(typeConverter, patterns);
+    patterns.insert<GenericOpPattern<ub::PoisonOp>>(typeConverter, context);
+#endif // __TLE__
 
     Builder b(&getContext());
     mod->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));

@@ -979,12 +979,14 @@ def wgmma(
     _semantic: TLESemantic | None = None,
 ) -> tl.tensor:
     """
-    Issue an asynchronous Hopper WGMMA.
+    Issue an asynchronous WGMMA, using SQMMA on MThreads.
 
     A may be a shared-memory TLE buffer or a register tensor. B must currently
     be a shared-memory TLE buffer. ``trans_a`` and ``trans_b`` are rank-2
     descriptor/tensor transpose requests; shared-memory transposes are emitted
-    as descriptor-only views.
+    as descriptor-only views. MThreads requires shared A/B buffers. Its FP32
+    accumulator may be reused across FP16, BF16, and E4M3FN calls with the same
+    result shape and compatible C layouts.
 
     The returned accumulator is an async WGMMA dependency value. Use
     ``tle.gpu.wgmma_wait(pendings, acc)`` before consuming it with ordinary
