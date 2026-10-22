@@ -596,25 +596,6 @@ struct WarpArriveBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::musa::WarpArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto module = op->getParentOfType<ModuleOp>();
-    auto target = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);
-    int capability = 0;
-    StringRef arch = target ? target.getValue() : StringRef();
-    if (arch.consume_front("musa:") &&
-        (arch.starts_with("ph1") ||
-         (!arch.getAsInteger(10, capability) && capability >= 31))) {
-      // PH1 arrival alone does not complete the shared accesses it publishes.
-      StringRef name = "llvm.musa.lma.wait";
-      auto wait = module.lookupSymbol<LLVM::LLVMFuncOp>(name);
-      if (!wait) {
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPointToStart(module.getBody());
-        auto type = LLVM::LLVMFunctionType::get(
-            LLVM::LLVMVoidType::get(module.getContext()), {});
-        wait = LLVM::LLVMFuncOp::create(rewriter, op.getLoc(), name, type);
-      }
-      LLVM::CallOp::create(rewriter, op.getLoc(), wait, ValueRange{});
-    }
     SmallVector<Value> operands = {adaptor.getBarId()};
     LLVM::createLLVMIntrinsicCallOp(rewriter, op.getLoc(),
                                     "llvm.musa.async.arrive.none.phaseid",

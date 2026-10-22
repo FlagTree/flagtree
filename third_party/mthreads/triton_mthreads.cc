@@ -282,13 +282,6 @@ void init_triton_mthreads(py::module &&m) {
     return false;
 #endif
   });
-  m.def("supports_tle_barrier_release", []() {
-#ifdef __TLE__
-    return true;
-#else
-    return false;
-#endif
-  });
   m.def("supports_tle_barrier_memory_ordering", []() {
 #ifdef __TLE__
     return true;
