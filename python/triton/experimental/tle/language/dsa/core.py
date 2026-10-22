@@ -474,3 +474,30 @@ def workspace(base, capacity, shape, dtype, strides=None, stage_stride=None, _se
 # needed to satisfy JIT reference checks.
 setattr(workspace, TRITON_BUILTIN, True)
 setattr(workspace, TLE_BUILTIN, True)
+
+@builtin
+def tile_load(src, index=None, dst_space=None, _semantic=None, _generator=None) -> tensor:
+    """Load a tile from an encoded tensor_view via tile.load.
+
+    `dst_space` names the on-chip memory space the loaded tile lands in
+    (defaults to UB when unspecified).
+
+    Usage:
+        tile_load(view, index=(i, j))
+        tile_load(view, index=(i, j), dst_space=ascend.UB)
+    """
+    return tle_semantic.tile_load(src, index, dst_space, _semantic.builder)
+
+
+@builtin
+def tile_store(src, value=None, index=None, dst=None, src_space=None, _semantic=None, _generator=None):
+    """Store a tile into an encoded tensor_view via tile.store.
+
+    `src_space` names the on-chip memory space the value tile lives in before
+    the store DMA (defaults to UB when unspecified).
+
+    Usage:
+        tile_store(view, value=tensor_val, index=(i, j))
+        tile_store(view, value=tensor_val, index=(i, j), src_space=ascend.UB)
+    """
+    tle_semantic.tile_store(src, dst, value, index, _semantic.builder, src_space)

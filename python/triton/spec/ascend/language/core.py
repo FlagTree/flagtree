@@ -1448,6 +1448,81 @@ class tensor_descriptor_base(base_value):
         return _semantic.descriptor_scatter(self, value, x_offsets, y_offset)
 
 
+class tensor_view_type(base_type):
+    """Type of an N-dimensional logical TensorView."""
+
+    def __init__(self, element_ty: dtype, rank: int, view_kind=None, tile=(), traversal_strides=(), sparse_dims=(),
+                 padding_value="zero"):
+        self.element_ty = element_ty
+        self.rank = rank
+        self.view_kind = view_kind
+        self.tile = tuple(tile)
+        self.traversal_strides = tuple(traversal_strides)
+        self.sparse_dims = tuple(sparse_dims)
+        self.padding_value = padding_value
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_view, int]:
+        return tensor_view(handles[cursor], self.element_ty, self.rank, self.view_kind, self.tile,
+                           self.traversal_strides, self.sparse_dims, self.padding_value), cursor + 1
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        out.append(
+            builder.get_tensor_view_ty(self.element_ty.to_ir(builder), self.rank, self.view_kind or "", self.tile,
+                                       self.traversal_strides, self.sparse_dims, self.padding_value))
+
+    def __str__(self) -> str:
+        suffix = ("" if self.view_kind is None else
+                  f", {self.view_kind}, tile={self.tile}, padding={self.padding_value}")
+        return f"tensor_view<{self.element_ty}>[{self.rank}{suffix}]"
+
+    def __eq__(self, other) -> bool:
+        if type(other) is not type(self):
+            return False
+        return (self.element_ty == other.element_ty and self.rank == other.rank and self.view_kind == other.view_kind
+                and self.tile == other.tile and self.traversal_strides == other.traversal_strides
+                and self.sparse_dims == other.sparse_dims and self.padding_value == other.padding_value)
+
+    def __ne__(self, other) -> bool:
+        return not self.__eq__(other)
+
+    def mangle(self) -> str:
+        encoding = "B" if self.view_kind is None else self.view_kind.upper()
+        tile = "x".join(str(value) for value in self.tile)
+        traversal = "x".join(str(value) for value in self.traversal_strides)
+        sparse = "x".join(str(value) for value in self.sparse_dims)
+        padding = self.padding_value.upper().replace("-", "N")
+        return f"TV{self.element_ty.mangle()}R{self.rank}K{encoding}T{tile}V{traversal}S{sparse}P{padding}"
+
+
+class tensor_view(base_value):
+    """A logical tensor accessed by tiled `tl.load` and `tl.store` operations."""
+
+    def __init__(self, handle, element_ty: dtype, rank: int, view_kind=None, tile=(), traversal_strides=(),
+                 sparse_dims=(), padding_value="zero"):
+        """Internal constructor."""
+        super().__init__()
+        self.handle = handle
+        self.type = tensor_view_type(element_ty, rank, view_kind, tile, traversal_strides, sparse_dims, padding_value)
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        handles.append(self.handle)
+
+    @property
+    def dtype(self):
+        return self.type.element_ty
+
+    @property
+    def rank(self):
+        return self.type.rank
+
+    @property
+    def tile(self):
+        return self.type.tile
+
+    def __str__(self) -> str:
+        return str(self.type)
+
+
 class tensor_descriptor_type(tensor_descriptor_base_type):
 
     def __init__(self, block_type: block_type, shape_type: tuple_type, strides_type: tuple_type):
@@ -2102,7 +2177,7 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
             - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access.
 
     :param pointer: Pointer to the data to be loaded
-    :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
+    :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`,
     :param mask: if `mask[idx]` is false, do not load the data at address `pointer[idx]`
         (must be `None` with block pointers)
     :type mask: Block of `triton.int1`, optional
@@ -2183,7 +2258,7 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
 
     :param pointer: The memory location where the elements of `value` are stored
-    :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
+    :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`,
     :param value: The tensor of elements to be stored
     :type value: Block
     :param mask: If `mask[idx]` is false, do not store `value[idx]` at `pointer[idx]`
@@ -2763,8 +2838,14 @@ def histogram(input, num_bins, mask=None, _semantic=None, _generator=None):
 
 @_tensor_member_fn
 @builtin
-def gather(src, index, axis, _semantic=None):
-    """Gather from a tensor along a given dimension.
+def gather(src, index, axis=None, *coordinates, _semantic=None):
+    """Gather values from a tensor.
+
+    For a tensor of pointers, ``index``, ``axis``, and ``coordinates`` are
+    interpreted as one Python compile-time ``list[int]`` per pointer-tensor
+    dimension. Entries at the same list position form one zipped N-D
+    coordinate. For a value tensor, this retains the existing
+    ``gather(src, index, axis)`` behavior.
 
     :param src: the source tensor
     :type src: Tensor
@@ -2774,8 +2855,29 @@ def gather(src, index, axis, _semantic=None):
     :type axis: int
 
     """
+    if src.type.is_block() and src.dtype.is_ptr():
+        pointer_coordinates = (index, )
+        if axis is not None:
+            pointer_coordinates += (axis, )
+        pointer_coordinates += coordinates
+        return _semantic.tensor_view_ptr_load(src, pointer_coordinates)
+    if coordinates:
+        raise ValueError("Additional coordinates are only supported when gathering from a tensor of pointers")
+    if axis is None:
+        raise ValueError("Expected `axis` when gathering from a value tensor")
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
+
+
+@builtin
+def scatter(pointers, value, index, *coordinates, _semantic=None):
+    """Scatter a 1-D value tensor to zipped coordinates in an N-D pointer tensor.
+
+    ``index`` and every entry in ``coordinates`` must be Python compile-time
+    ``list[int]`` objects. Exactly one list is required for each dimension of
+    ``pointers``.
+    """
+    return _semantic.tensor_view_ptr_store(pointers, value, (index, ) + coordinates)
 
 
 @builtin

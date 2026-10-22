@@ -1975,6 +1975,152 @@ class TritonSemantic(Generic[TensorTy]):
         # Advanced block pointer type is the same as before
         return self.tensor(self.builder.create_advance(base.handle, offsets), base.type)
 
+    def _make_tensor_view(self, base: TensorTy, shape, strides) -> "tl.tensor_view":
+        if not base.type.is_ptr() or base.type.element_ty.is_block():
+            raise ValueError("Expected `base` to be a pointer type (but not a block pointer type or others)")
+        if base.type.element_ty == tl.int1:
+            base = self.cast(base, tl.pointer_type(tl.int8, base.type.address_space))
+        shape = self._convert_to_ir_values(shape)
+        strides = self._convert_to_ir_values(strides)
+        assert len(shape) == len(strides), "Expected `shape` and `strides` to have the same length"
+        handle = self.builder.create_tensor_view(base.handle, shape, strides)
+        return tl.tensor_view(handle, base.type.element_ty, len(shape))
+
+    def _tensor_view_constants(self, values, name, expected_length=None):
+        values = tl._unwrap_if_constexpr(values)
+        values = list(values) if hasattr(values, "__iter__") else [values]
+        values = [tl._unwrap_if_constexpr(value) for value in values]
+        if expected_length is not None and len(values) != expected_length:
+            raise ValueError(f"Expected {expected_length} entries in `{name}`, but got {len(values)}")
+        if not all(isinstance(value, int) for value in values):
+            raise ValueError(f"Expected constant integers in `{name}`")
+        return values
+
+    def _tensor_view_padding_value(self, value, element_ty):
+        value = tl._unwrap_if_constexpr(value)
+        if value not in ("zero", "nan", "inf", "-inf"):
+            raise ValueError("Expected `padding_value` to be one of: zero, nan, inf, -inf")
+        if value != "zero" and not element_ty.is_floating():
+            raise ValueError("Expected a floating-point TensorView for nan or infinity padding")
+        return value
+
+    def make_partition_view(self, base: TensorTy, shape, strides, tile, padding_value) -> "tl.tensor_view":
+        view = self._make_tensor_view(base, shape, strides)
+        tile = self._tensor_view_constants(tile, "tile", view.rank)
+        padding_value = self._tensor_view_padding_value(padding_value, view.dtype)
+        if not all(value > 0 for value in tile):
+            raise ValueError("Expected positive values in `tile`")
+        handle = self.builder.create_partition_view(view.handle, tile, padding_value)
+        return tl.tensor_view(handle, view.dtype, view.rank, "partition", tile, padding_value=padding_value)
+
+    def make_strided_view(self, base: TensorTy, shape, strides, tile,
+                          traversal_strides, padding_value) -> "tl.tensor_view":
+        view = self._make_tensor_view(base, shape, strides)
+        tile = self._tensor_view_constants(tile, "tile", view.rank)
+        traversal = self._tensor_view_constants(traversal_strides, "traversal_strides", view.rank)
+        padding_value = self._tensor_view_padding_value(padding_value, view.dtype)
+        if not all(value > 0 for value in tile + traversal):
+            raise ValueError("Expected positive values in `tile` and `traversal_strides`")
+        handle = self.builder.create_strided_view(view.handle, tile, traversal, padding_value)
+        return tl.tensor_view(handle, view.dtype, view.rank, "strided", tile, traversal,
+                              padding_value=padding_value)
+
+    def make_gather_scatter_view(self, base: TensorTy, shape, strides, tile,
+                                 sparse_dim, padding_value) -> "tl.tensor_view":
+        view = self._make_tensor_view(base, shape, strides)
+        tile = self._tensor_view_constants(tile, "tile", view.rank)
+        sparse_dims = self._tensor_view_constants(sparse_dim, "sparse_dim")
+        padding_value = self._tensor_view_padding_value(padding_value, view.dtype)
+        if not all(value > 0 for value in tile):
+            raise ValueError("Expected positive values in `tile`")
+        if not sparse_dims or len(set(sparse_dims)) != len(sparse_dims):
+            raise ValueError("Expected at least one unique dimension in `sparse_dim`")
+        if not all(0 <= value < view.rank for value in sparse_dims):
+            raise ValueError(f"Expected `sparse_dim` entries in [0, {view.rank})")
+        handle = self.builder.create_gather_scatter_view(view.handle, tile, sparse_dims, padding_value)
+        return tl.tensor_view(handle, view.dtype, view.rank, "gather_scatter", tile, (), sparse_dims,
+                              padding_value)
+
+    def _tensor_view_indices(self, view: "tl.tensor_view", index):
+        rank = view.type.rank
+        if view.type.view_kind is None:
+            raise ValueError("Expected an encoded tensor view; call `tle.make_*_view` "
+                             "before `tl.load` or `tl.store`")
+        if len(index) != rank:
+            raise ValueError(f"Expected {rank} entries in `index`, but got {len(index)}")
+        index_handles = []
+        for d, idx in enumerate(index):
+            if d in view.type.sparse_dims:
+                index_handles.append(self.to_tensor(idx).handle)
+            else:
+                index_handles.append(self._convert_elem_to_ir_value(tl._unwrap_if_constexpr(idx), require_i64=False))
+        return index_handles
+
+    def tensor_view_load(self, view: "tl.tensor_view", index) -> TensorTy:
+        index_handles = self._tensor_view_indices(view, index)
+        result_ty = tl.block_type(view.dtype, view.tile)
+        handle = self.builder.tensor_view_load(view.handle, index_handles, result_ty.to_ir(self.builder))
+        return self.tensor(handle, result_ty)
+
+    def tensor_view_store(self, view: "tl.tensor_view", value: TensorTy, index) -> TensorTy:
+        index_handles = self._tensor_view_indices(view, index)
+        if not value.type.is_block():
+            value = self.broadcast_impl_shape(value, view.tile)
+        elif tuple(value.type.get_block_shapes()) != view.tile:
+            raise ValueError(f"Expected a value with shape {view.tile}, but got {value.type.get_block_shapes()}")
+        value = self.cast(value, view.dtype)
+        self.builder.tensor_view_store(view.handle, value.handle, index_handles)
+        return self.tensor(None, tl.void)
+
+    def _tensor_view_pointer_coordinates(self, pointers: TensorTy, coordinates):
+        if not pointers.type.is_block() or not pointers.dtype.is_ptr():
+            raise ValueError("Expected an N-D tensor of pointers")
+
+        pointer_shape = pointers.type.get_block_shapes()
+        if len(coordinates) != len(pointer_shape):
+            raise ValueError(
+                f"Expected one coordinate list per pointer-tensor dimension ({len(pointer_shape)}), "
+                f"but got {len(coordinates)}")
+
+        normalized = []
+        coordinate_count = None
+        for dimension, coordinate in enumerate(coordinates):
+            coordinate = tl._unwrap_if_constexpr(coordinate)
+            if not isinstance(coordinate, (list, tl.tuple)):
+                raise ValueError(
+                    f"Expected coordinate {dimension} to be a Python compile-time `list[int]`")
+            values = [tl._unwrap_if_constexpr(value) for value in coordinate]
+            if not values:
+                raise ValueError("Expected coordinate lists to be non-empty")
+            if not all(type(value) is int for value in values):
+                raise ValueError(
+                    f"Expected coordinate {dimension} to contain only compile-time integers")
+            if coordinate_count is None:
+                coordinate_count = len(values)
+            elif len(values) != coordinate_count:
+                raise ValueError("Expected all coordinate lists to have the same length")
+            if not all(0 <= value < pointer_shape[dimension] for value in values):
+                raise ValueError(
+                    f"Coordinate {dimension} contains an index outside [0, {pointer_shape[dimension]})")
+            normalized.append(values)
+        return normalized, coordinate_count
+
+    def tensor_view_ptr_load(self, pointers: TensorTy, coordinates) -> TensorTy:
+        coordinates, coordinate_count = self._tensor_view_pointer_coordinates(pointers, coordinates)
+        result_ty = tl.block_type(pointers.dtype.element_ty, [coordinate_count])
+        handle = self.builder.tensor_view_ptr_load(pointers.handle, coordinates, result_ty.to_ir(self.builder))
+        return self.tensor(handle, result_ty)
+
+    def tensor_view_ptr_store(self, pointers: TensorTy, value, coordinates) -> TensorTy:
+        coordinates, coordinate_count = self._tensor_view_pointer_coordinates(pointers, coordinates)
+        value = self.to_tensor(value)
+        if not value.type.is_block() or tuple(value.type.get_block_shapes()) != (coordinate_count, ):
+            actual_shape = value.type.get_block_shapes() if value.type.is_block() else ()
+            raise ValueError(f"Expected a 1-D value tensor with shape ({coordinate_count},), but got {actual_shape}")
+        value = self.cast(value, pointers.dtype.element_ty)
+        self.builder.tensor_view_ptr_store(pointers.handle, value.handle, coordinates)
+        return self.tensor(None, tl.void)
+
     def make_tensor_descriptor(self, base: TensorTy, shape: List[TensorTy], strides: List[TensorTy],
                                block_shape: List[tl.constexpr], padding_option: str = "zero") -> tl.tensor_descriptor:
         ndim = len(shape)
