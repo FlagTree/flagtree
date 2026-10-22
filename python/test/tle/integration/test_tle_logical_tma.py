@@ -7,12 +7,8 @@ import triton.experimental.tle.language as tle
 from triton._flagtree_backend import FLAGTREE_BACKEND
 
 pytestmark = pytest.mark.skipif(
-<<<<<<< Updated upstream
-    FLAGTREE_BACKEND or not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9,
-=======
     FLAGTREE_BACKEND != "" or not torch.cuda.is_available()
     or torch.cuda.get_device_capability()[0] != 9,
->>>>>>> Stashed changes
     reason="logical TMA and WGMMA require NVIDIA Hopper",
 )
 
