@@ -53,6 +53,12 @@ def test_communication_loads_the_installed_library(monkeypatch, tmp_path):
     backend = types.ModuleType("triton.backends.nvidia.distributed")
     backend.flagcx_rt_conf = conf
 
+    # The module picks the backend it reads flagcx_rt_conf from at import time,
+    # by name, out of FLAGTREE_BACKEND -- so on an amd/enflame build it looks
+    # elsewhere and finds no such module, leaving `enabled` False and the
+    # attribute this test reads undefined. Only nvidia and iluvatar have a
+    # distributed.py, so pin the name rather than inherit the host's.
+    monkeypatch.setenv("FLAGTREE_BACKEND", "nvidia")
     monkeypatch.setitem(sys.modules, "triton.backends.nvidia.distributed", backend)
     monkeypatch.setitem(sys.modules, "triton.experimental.tle.language.flagcx_wrapper", None)
     monkeypatch.setitem(sys.modules, "flagcx.api", _stub("flagcx.api", _Library))
