@@ -25,7 +25,7 @@ import importlib
 from collections.abc import Callable
 from typing import Any
 
-from triton._flagtree_backend import FLAGTREE_BACKEND
+from triton import _flagtree_backend
 
 _TLE_LANGUAGE_PREFIX = "triton.experimental.tle.language."
 _TLE_PRIMITIVE_PREFIXES = (
@@ -117,9 +117,17 @@ def _backend_config_module(backend_name: str):
         return None
 
 
-def get_supported_primitives() -> frozenset[str]:
-    """Read and validate a backend's strict TLE primitive whitelist."""
-    backend_name = FLAGTREE_BACKEND or "nvidia"
+def _resolve_backend_names() -> tuple[str, ...]:
+    from triton.backends import backends
+
+    backend_name = _flagtree_backend.FLAGTREE_BACKEND
+    if backend_name and backend_name != "tileir":
+        return (backend_name, )
+    return ("nvidia", "tileir") if "tileir" in backends else ("nvidia", )
+
+
+def _supported_primitives(backend_name: str) -> frozenset[str]:
+    """Read and validate one backend's strict TLE primitive whitelist."""
     module = _backend_config_module(backend_name)
     configured = getattr(module, "TLE_SUPPORTED_PRIMITIVES", []) if module is not None else []
     if not isinstance(configured, list):
@@ -130,16 +138,31 @@ def get_supported_primitives() -> frozenset[str]:
     return frozenset(primitive_name(item) for item in configured)
 
 
+def get_supported_primitives() -> frozenset[str]:
+    """Return the TLE primitives usable in this build, across routable backends."""
+    return frozenset().union(*(_supported_primitives(name) for name in _resolve_backend_names()))
+
+
 # For pytest skip or gems implementation routing
 def is_tle_supported(primitive: str | Callable[..., Any]) -> bool:
-    return primitive_name(primitive) in get_supported_primitives()
+    name = primitive_name(primitive)
+    return name not in TLE_PRIMITIVES or name in get_supported_primitives()
 
 
 # For assertion in gems implementation
 def require_tle(primitive: str | Callable[..., Any]) -> None:
     if not is_tle_supported(primitive):
-        backend_name = FLAGTREE_BACKEND or "nvidia"
-        raise TLEUnsupportedPrimitiveError(f"backend {backend_name!r} does not support TLE primitive {primitive!r}")
+        backend_name = "/".join(_resolve_backend_names())
+        raise TLEUnsupportedPrimitiveError(f"backend {backend_name!r} does not support TLE primitive "
+                                           f"{primitive_name(primitive)!r}")
+
+
+# For the compiler guard, which must check the backend actually generating code
+# rather than every backend this build could route to.
+def _require_tle_for_backend(backend_name: str, primitive: str | Callable[..., Any]) -> None:
+    name = primitive_name(primitive)
+    if name in TLE_PRIMITIVES and name not in _supported_primitives(backend_name):
+        raise TLEUnsupportedPrimitiveError(f"backend {backend_name!r} does not support TLE primitive {name!r}")
 
 
 from . import language

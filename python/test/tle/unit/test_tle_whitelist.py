@@ -5,6 +5,7 @@ import pytest
 import triton.experimental.tle as tle
 import triton.language as tl
 from triton import _flagtree_backend
+from triton import backends as backend_registry
 from triton.compiler.code_generator import CodeGenerator
 from triton.language import load as tl_load
 
@@ -90,13 +91,33 @@ def test_invalid_backend_config_is_rejected(monkeypatch, configured):
     config = SimpleNamespace(TLE_SUPPORTED_PRIMITIVES=configured)
     monkeypatch.setattr(tle, "_backend_config_module", lambda _backend: config)
     with pytest.raises(TypeError, match="TLE_SUPPORTED_PRIMITIVES"):
-        tle.get_supported_primitives("invalid")
+        tle.get_supported_primitives()
 
 
 def test_unsupported_error_names_backend_and_primitive(monkeypatch):
     monkeypatch.setattr(tle, "_backend_config_module", lambda _backend: SimpleNamespace(TLE_SUPPORTED_PRIMITIVES=[]))
+    monkeypatch.setattr(_flagtree_backend, "FLAGTREE_BACKEND", "test")
     with pytest.raises(tle.TLEUnsupportedPrimitiveError, match=r"backend 'test'.*'gpu\.alloc'"):
-        tle.require_tle("test", tle.language.gpu.alloc)
+        tle.require_tle(tle.language.gpu.alloc)
+
+
+def test_tileir_build_unions_nvidia_and_tileir_whitelists(monkeypatch):
+    # A TileIR build leaves the marker empty, so NVIDIA-only kernels keep working
+    # while TileIR-only primitives stay available through per-kernel routing.
+    monkeypatch.setattr(_flagtree_backend, "FLAGTREE_BACKEND", "")
+    whitelists = {
+        "nvidia": SimpleNamespace(TLE_SUPPORTED_PRIMITIVES=["gpu.wgmma"]),
+        "tileir": SimpleNamespace(TLE_SUPPORTED_PRIMITIVES=["make_view"]),
+    }
+    monkeypatch.setattr(tle, "_backend_config_module", whitelists.get)
+
+    monkeypatch.setattr(backend_registry, "backends", {"nvidia": object()})
+    assert tle.get_supported_primitives() == frozenset({"gpu.wgmma"})
+    assert not tle.is_tle_supported("make_view")
+
+    monkeypatch.setattr(backend_registry, "backends", {"nvidia": object(), "tileir": object()})
+    assert tle.get_supported_primitives() == frozenset({"gpu.wgmma", "make_view"})
+    assert tle.is_tle_supported("make_view")
 
 
 @pytest.mark.parametrize("backend_name", ["hcu", "amd", "mthreads", "iluvatar"])
