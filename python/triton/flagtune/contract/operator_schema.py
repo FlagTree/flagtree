@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from triton.flagtune._dependencies import require_optional_dependency
+from triton.flagtune._version import EXPLICIT_CONFIGS_VERSION, validate_model_runtime
 from triton.flagtune.core.interfaces import ParameterField, ParameterSpace
 from triton.flagtune.contract.expressions import (
     SafeExpressionError,
@@ -505,8 +506,9 @@ def _parse_configs(raw_configs: Any, param_space: ParameterSpace, location: str)
     seen = set()
     for index, raw_config in enumerate(raw_configs):
         config = dict(_require_mapping(raw_config, f"{location}[{index}]"))
-        if list(config) != names:
-            raise FlagTuneConfigError(f"{location}[{index}] fields must exactly match params in declaration order")
+        if set(config) != set(names):
+            raise FlagTuneConfigError(f"{location}[{index}] fields must exactly match params: {names}")
+        config = {name: config[name] for name in names}
         for name, value in config.items():
             if value not in legal_values[name]:
                 raise FlagTuneConfigError(f"{location}[{index}].{name}={value!r} is outside params")
@@ -754,6 +756,7 @@ def variant_to_model_config(
     }
     if variant.configs_from_params:
         result["configs"] = [dict(config) for config in variant.param_space.explicit_configs]
+        result["flagtune_version_min"] = EXPLICIT_CONFIGS_VERSION
     return result
 
 
@@ -772,10 +775,14 @@ def parse_model_config(config: Mapping[str, Any]) -> VariantInfo:
             feature declarations, or the format version are invalid.
 
     Notes:
-        Compatibility fields are accepted here but enforced by the model manager,
-        which knows the installed FlagTune version.
+        Runtime requirements are checked before interpreting schema fields,
+        including when reading a child during platform-package validation.
     """
     root = _require_mapping(config, "model config")
+    try:
+        validate_model_runtime(root)
+    except ValueError as exc:
+        raise FlagTuneConfigError(str(exc)) from exc
     allowed = {
         "format_version",
         "model_version",
