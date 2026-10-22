@@ -22,6 +22,12 @@
 {% set prefix = "qkv_q" if loop.first else "qkv_k" %}
     if {{ head.compute_active }}:
         for {{ prefix }}_outer_index in tl.range(0, {{ head.outer_capacity }}):
+            # Per-token cache slot: chunk base plus this token's sequence position.
+            {{ prefix }}_cache_token = qkv_cache_position + ({{ head.cache_seq }})
+            {{ prefix }}_cache_block_offset = {{ prefix }}_cache_token % {{ call.block_size }}
+            {{ prefix }}_cache_physical_block = tl.load(
+                {{ call.block_table }} + {{ prefix }}_cache_token // {{ call.block_size }}
+            ).to(tl.int64)
             {{ prefix }}_element_offsets = tl.arange(0, {{ head.tile }})
             {{ prefix }}_mask = (
                 ({{ prefix }}_element_offsets < {{ head.reduction_capacity }})
@@ -126,6 +132,12 @@
             (qkv_v_offsets < {{ call.v.capacity }}) & ({{ call.v.active }})
         )
 {{ load_partial(call.v.partial_input, "qkv_v", "qkv_v_mask", "        ") }}
+        qkv_v_cache_token = qkv_cache_position + ({{ call.v.cache_seq }})
+        qkv_v_cache_block_offset = qkv_v_cache_token % {{ call.block_size }}
+        qkv_v_cache_physical_block = tl.load(
+            {{ call.block_table }} + qkv_v_cache_token // {{ call.block_size }},
+            mask=qkv_v_mask, other=0,
+        ).to(tl.int64)
         tl.store(
             {{ call.kv_cache }} + ({{ call.v.cache_offset }}),
             qkv_v_value,
