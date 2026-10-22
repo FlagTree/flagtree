@@ -1,6 +1,10 @@
 """isort:skip_file"""
 __version__ = '3.6.0'
 
+from .flagtree_spec import spec_path
+
+spec_path(__path__)
+
 # ---------------------------------------
 # Note: import order is significant here.
 

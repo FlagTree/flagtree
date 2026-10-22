@@ -1,6 +1,10 @@
 """isort:skip_file"""
 # Import order is significant here.
 
+from triton.flagtree_spec import spec_path
+
+spec_path(__path__)
+
 from . import math
 from . import extra
 from .standard import (
