@@ -441,13 +441,13 @@ void init_tle_dsa_ir(py::module &&m) {
                  /*lifetime=*/mlir::triton::tile::LifetimeAttr(),
                  /*comment=*/mlir::StringAttr());
            })
-      // tile.copy — shape extents are informational at this layer; the op
-      // itself takes only src/dst (+ optional engine/layout attrs).
+      // Carry the common logical extent as CommonIR SSA operands.
       .def("create_tile_copy",
            [](TritonOpBuilder &self, Value &src, Value &dst,
-              std::vector<Value> & /*shape*/, bool inter_no_alias) -> void {
+              std::vector<Value> &shape, bool inter_no_alias) -> void {
              auto op = self.create<mlir::triton::tile::CopyOp>(
-                 src, dst, /*engine=*/mlir::triton::tile::EngineAttr(),
+                 src, dst, shape,
+                 /*engine=*/mlir::triton::tile::EngineAttr(),
                  /*src_layout=*/mlir::triton::tile::LayoutAttr(),
                  /*dst_nz_layout=*/mlir::triton::tile::NZLayoutAttr(),
                  /*transpose=*/mlir::UnitAttr(),

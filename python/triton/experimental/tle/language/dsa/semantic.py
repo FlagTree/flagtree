@@ -179,10 +179,43 @@ def tile_alloc(etype: tl.dtype, shape: List[tl.constexpr], address_space: addres
     return buffer(handle, buffer_ty)
 
 
+def _copy_operand_shape(value):
+    ty = value.type
+    if isinstance(value, buffer):
+        return value.shape
+    if ty.is_ptr():
+        ty = ty.element_ty
+    return ty.shape if ty.is_block() else None
+
+
 def tile_copy(src, dst, shape: List[Union[tl.constexpr, int]], inter_no_alias: bool, builder: ir.builder):
-    """Copy data using tile.copy."""
-    shape = [scalar_constant(x, tl.int32, builder) for x in shape]
-    builder.create_tile_copy(src.handle, dst.handle, [s.handle for s in shape], inter_no_alias)
+    """Copy the common logical extent, retaining each operand's physical layout."""
+    shape = tl._unwrap_if_constexpr(shape)
+    if not isinstance(shape, (tuple, list, tl.tuple)) or not shape:
+        raise ValueError("copy shape must be a non-empty sequence of extents")
+    capacities = [_copy_operand_shape(src), _copy_operand_shape(dst)]
+    for capacity in capacities:
+        if capacity is not None and len(capacity) != len(shape):
+            raise ValueError("copy shape rank must match both operands")
+
+    extents = []
+    for axis, extent in enumerate(shape):
+        extent = tl._unwrap_if_constexpr(extent)
+        if isinstance(extent, int) and not isinstance(extent, bool):
+            if extent < 0 or extent > 2**31 - 1:
+                raise ValueError("copy extents must be non-negative signed int32 values")
+            for capacity in capacities:
+                if capacity is not None and extent > tl._unwrap_if_constexpr(capacity[axis]):
+                    raise ValueError(f"copy extent exceeds operand capacity at axis {axis}")
+            extents.append(tl.tensor(builder.get_int32(extent), tl.int32))
+        elif isinstance(extent, tl.tensor) and not extent.type.is_block() and extent.dtype == tl.int32:
+            extents.append(extent)
+        else:
+            raise TypeError("copy extents must be integers or scalar int32 tensors")
+    if any(isinstance(tl._unwrap_if_constexpr(extent), int) and tl._unwrap_if_constexpr(extent) == 0
+           for extent in shape):
+        return
+    builder.create_tile_copy(src.handle, dst.handle, [s.handle for s in extents], inter_no_alias)
 
 
 def tile_store_tensor(tensor: tl.tensor, dst: buffer, builder: ir.builder):

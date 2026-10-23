@@ -1,6 +1,7 @@
 #pragma once
 #include "ascend/include/AutoBlockify/Passes.h"
 #include "ascend/include/CommonIRToHIVM/Passes.h"
+#include "mlir-ext/Dialect/CommonIR/IR/CommonIRDialect.h"
 #include "ascend/include/DynamicCVPipeline/AddControlFlowCondition.h"
 #include "ascend/include/TritonToAnnotation/Passes.h"
 #include "ascend/include/TritonToHFusion/Passes.h"
@@ -168,6 +169,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+      mlir::triton::tile::CommonIRDialect,
       mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
       mlir::triton::gpu::TritonGPUDialect,
       mlir::triton::instrument::TritonInstrumentDialect,

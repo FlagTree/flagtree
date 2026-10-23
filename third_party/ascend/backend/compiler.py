@@ -91,11 +91,7 @@ def make_ttir(mod, metadata, opt):
     passes.ttir.add_reorder_broadcast(pm)
     ascend.passes.ttir.add_lane_vectorize(pm)
     passes.common.add_cse(pm)
-    # commonir: NOTE: LICM is intentionally omitted — it hoists tile.to_tensor above
-    # tile.copy in loops, breaking the read-after-write ordering required by
-    # Ascend's buffer semantics. This causes "operand does not dominate this use"
-    # errors in bishengir downstream.
-    # passes.common.add_licm(pm)
+    passes.common.add_licm(pm)
     passes.common.add_symbol_dce(pm)
     passes.ttir.add_loop_unroll(pm)
     pm.run(mod)
@@ -139,8 +135,8 @@ def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
             passes.common.add_cse(pm)
             passes.common.add_canonicalizer(pm)
 
-        # commonir: lower tile.* ops and inline unresolved !tile.buf signatures.
-        ascend.passes.ttir.add_commonir_to_hivm(pm)
+        # Lower buffers now; pointer copy views are resolved by TritonToLinalg.
+        ascend.passes.ttir.add_commonir_to_hivm(pm, True)
         passes.common.add_inliner(pm)
         passes.common.add_canonicalizer(pm)
 
