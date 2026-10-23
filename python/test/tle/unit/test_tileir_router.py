@@ -7,7 +7,6 @@ pytest.importorskip("triton.backends.tileir.router")
 from triton.backends.compiler import GPUTarget
 from triton.backends.tileir import router
 
-
 TILEIR_PRIMS = frozenset({
     "create_mem_token",
     "join_mem_tokens",
