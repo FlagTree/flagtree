@@ -2,7 +2,7 @@
 
 Activation:
     FLAGTREE_USE_TILEIR=1   — opt non-TLE kernels into the TileIR compile path.
-                              Kernels that only use TileIR-supported TLE
+                              Kernels that only use TileIR's ``tle_supported``
                               primitives also use TileIR; other TLE kernels fall
                               back to the nvidia backend.
     FLAGTREE_TILEIR_VERBOSE=1 — print routing decisions to stderr for debugging.
@@ -63,8 +63,8 @@ def kernel_tle_usage(jit_fn) -> TLEUsage:
     """Heuristic detection of TLE usage in a JIT'd function's source.
 
     ``TLEUsage.TILEIR_SUBSET`` means every detected TLE operation belongs to
-    the TileIR backend's declared TLE primitive set.
-    Any other TLE usage keeps the kernel on the native NVIDIA path.
+    TileIR's ``tle_supported`` whitelist. Any other TLE usage keeps the kernel
+    on the native NVIDIA path.
 
     Result is cached on the JITFunction instance via ``_flagtree_tle_usage``.
     """
@@ -123,6 +123,7 @@ def _scan_source_for_tle(src: str, global_ns=None) -> TLEUsage:
     tle_aliases = {"tle"}
     imported_supported = False
     imported_other = False
+    tileir_prims = _tileir_supported_tle_primitives()
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -143,7 +144,7 @@ def _scan_source_for_tle(src: str, global_ns=None) -> TLEUsage:
                 for n in node.names:
                     if n.name == "*":
                         imported_other = True
-                    elif n.name in _tileir_supported_tle_primitives():
+                    elif n.name in tileir_prims:
                         imported_supported = True
                     else:
                         imported_other = True
@@ -176,7 +177,7 @@ def _scan_source_for_tle(src: str, global_ns=None) -> TLEUsage:
         is_tle_other_module = kind == "tle_other_module"
         if is_tle_language:
             primitive = ".".join(attrs)
-            return "supported" if primitive in _tileir_supported_tle_primitives() else "other"
+            return "supported" if primitive in tileir_prims else "other"
         if is_tle_other_module:
             return "other"
         return None
@@ -195,6 +196,8 @@ def _scan_source_for_tle(src: str, global_ns=None) -> TLEUsage:
             elif kind == "other":
                 saw_other = True
 
+    # Mixed TileIR + NVIDIA TLE falls back to nvidia (OTHER). The nvidia
+    # codegen whitelist then rejects TileIR-only primitives.
     if saw_other:
         return TLEUsage.OTHER
     if saw_supported:

@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -117,17 +118,8 @@ def _backend_config_module(backend_name: str):
         return None
 
 
-def _resolve_backend_names() -> tuple[str, ...]:
-    from triton.backends import backends
-
-    backend_name = _flagtree_backend.FLAGTREE_BACKEND
-    if backend_name and backend_name != "tileir":
-        return (backend_name, )
-    return ("nvidia", "tileir") if "tileir" in backends else ("nvidia", )
-
-
 def _supported_primitives(backend_name: str) -> frozenset[str]:
-    """Read and validate one backend's strict TLE primitive whitelist."""
+    """Read and validate one backend's ``tle_supported.TLE_SUPPORTED_PRIMITIVES``."""
     module = _backend_config_module(backend_name)
     configured = getattr(module, "TLE_SUPPORTED_PRIMITIVES", []) if module is not None else []
     if not isinstance(configured, list):
@@ -138,8 +130,24 @@ def _supported_primitives(backend_name: str) -> frozenset[str]:
     return frozenset(primitive_name(item) for item in configured)
 
 
+def _resolve_backend_names() -> tuple[str, ...]:
+    """Backends whose ``tle_supported`` whitelists are visible to gems / pytest.
+
+    TileIR builds leave ``FLAGTREE_BACKEND`` empty. TileIR's whitelist is only
+    merged when ``FLAGTREE_USE_TILEIR=1``, matching the router opt-in.
+    """
+    from triton.backends import backends
+
+    backend_name = _flagtree_backend.FLAGTREE_BACKEND
+    if backend_name and backend_name != "tileir":
+        return (backend_name, )
+    if "tileir" in backends and os.environ.get("FLAGTREE_USE_TILEIR", "0") == "1":
+        return ("nvidia", "tileir")
+    return ("nvidia", )
+
+
 def get_supported_primitives() -> frozenset[str]:
-    """Return the TLE primitives usable in this build, across routable backends."""
+    """Union of ``tle_supported`` whitelists for the currently resolved backends."""
     return frozenset().union(*(_supported_primitives(name) for name in _resolve_backend_names()))
 
 

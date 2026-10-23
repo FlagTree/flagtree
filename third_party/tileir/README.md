@@ -91,9 +91,12 @@ result is:
 ```text
 non-`cuda` Triton target                      -> unchanged
 `cuda` target, Triton kernel uses no TLE      -> TileIR
-`cuda` target, supported top-level `tle` subset only -> TileIR
+`cuda` target, only TileIR tle_supported TLE  -> TileIR
 `cuda` target, other or unknown TLE usage     -> native NVIDIA
 ```
+
+The same env also controls whether `is_tle_supported` / `require_tle` merge
+TileIR's `backend/tle_supported.py` whitelist with NVIDIA's.
 
 For routing diagnostics:
 

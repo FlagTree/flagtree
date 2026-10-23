@@ -101,23 +101,27 @@ def test_unsupported_error_names_backend_and_primitive(monkeypatch):
         tle.require_tle(tle.language.gpu.alloc)
 
 
-def test_tileir_build_unions_nvidia_and_tileir_whitelists(monkeypatch):
-    # A TileIR build leaves the marker empty, so NVIDIA-only kernels keep working
-    # while TileIR-only primitives stay available through per-kernel routing.
+def test_tileir_build_gates_tileir_whitelist_on_env(monkeypatch):
+    # TileIR builds leave FLAGTREE_BACKEND empty. TileIR's tle_supported
+    # whitelist is only merged when FLAGTREE_USE_TILEIR=1 (same opt-in as routing).
     monkeypatch.setattr(_flagtree_backend, "FLAGTREE_BACKEND", "")
     whitelists = {
         "nvidia": SimpleNamespace(TLE_SUPPORTED_PRIMITIVES=["gpu.wgmma"]),
         "tileir": SimpleNamespace(TLE_SUPPORTED_PRIMITIVES=["make_view"]),
     }
     monkeypatch.setattr(tle, "_backend_config_module", whitelists.get)
+    monkeypatch.setattr(backend_registry, "backends", {"nvidia": object(), "tileir": object()})
 
-    monkeypatch.setattr(backend_registry, "backends", {"nvidia": object()})
+    monkeypatch.delenv("FLAGTREE_USE_TILEIR", raising=False)
     assert tle.get_supported_primitives() == frozenset({"gpu.wgmma"})
     assert not tle.is_tle_supported("make_view")
+    with pytest.raises(tle.TLEUnsupportedPrimitiveError, match=r"backend 'nvidia'.*'make_view'"):
+        tle.require_tle("make_view")
 
-    monkeypatch.setattr(backend_registry, "backends", {"nvidia": object(), "tileir": object()})
+    monkeypatch.setenv("FLAGTREE_USE_TILEIR", "1")
     assert tle.get_supported_primitives() == frozenset({"gpu.wgmma", "make_view"})
     assert tle.is_tle_supported("make_view")
+    assert tle.is_tle_supported("gpu.wgmma")
 
 
 @pytest.mark.parametrize("backend_name", ["hcu", "amd", "mthreads", "iluvatar"])
