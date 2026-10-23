@@ -5,6 +5,11 @@ import sys
 from dataclasses import dataclass
 from typing import Type, TypeVar, Union
 from types import ModuleType
+
+from triton.flagtree_spec import spec_path
+
+spec_path(__path__)
+
 from .driver import DriverBase
 from .compiler import BaseBackend
 
