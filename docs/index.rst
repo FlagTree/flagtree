@@ -16,6 +16,7 @@ Getting Started
    :hidden:
 
    getting-started/installation
+   getting-started/flagtune-model-compatibility
    getting-started/tutorials/index
 
 
