@@ -100,10 +100,13 @@ macro(flagtree_configure_options)
       list(APPEND TRITON_PLUGIN_NAMES "mctle")
       add_definitions(-D__MCTLE__)
     endif()
-    if(NOT FLAGTREE_COMMON_IR_ENABLED)     # [metax+CommonIR] keep TLE on for shared CommonIR frontend
+    # MetaX spec headers do not implement the generic TLE dialect. Drop
+    # __TLE__ for every MetaX build. Keep FLAGTREE_TLE on when CommonIR is
+    # enabled so third_party/tle still configures the slim DSL->tile.* plugin.
+    remove_definitions(-D__TLE__)
+    list(REMOVE_ITEM LLVM_TABLEGEN_FLAGS -D__TLE__)
+    if(NOT FLAGTREE_COMMON_IR_ENABLED)
       set(FLAGTREE_TLE OFF)
-      remove_definitions(-D__TLE__)
-      list(REMOVE_ITEM LLVM_TABLEGEN_FLAGS -D__TLE__)
     endif()
   elseif(FLAGTREE_BACKEND STREQUAL "sunrise")
     find_package(Python3 3.10 REQUIRED COMPONENTS Development.Module Interpreter)
