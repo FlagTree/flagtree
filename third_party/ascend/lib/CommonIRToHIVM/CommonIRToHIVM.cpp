@@ -50,6 +50,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -368,10 +369,102 @@ struct TileToTensorEliminate : OpRewritePattern<tile::ToTensorOp> {
 };
 
 // =============================================================================
-// Step 3: tile.copy → hivm.copy / memref.copy
-//   - tile.* source  → hivm.copy (on-chip buffer DMA)
-//   - !tt.ptr source → memref.copy (GM→local DMA; later passes lower it)
+// Step 3: tile.copy → memref.copy for explicit GM/UB extents;
+// legacy shape-less tile.copy keeps its existing HIVM/memref lowering.
 // =============================================================================
+static Value makeCopySubview(Value operand, ArrayRef<OpFoldResult> offsets,
+                             ArrayRef<OpFoldResult> sizes, Location loc,
+                             PatternRewriter &rewriter) {
+  SmallVector<OpFoldResult> steps(sizes.size(), rewriter.getIndexAttr(1));
+  auto type = cast<MemRefType>(memref::SubViewOp::inferResultType(
+      cast<MemRefType>(operand.getType()), offsets, sizes, steps));
+  return rewriter.create<memref::SubViewOp>(loc, type, operand, offsets, sizes,
+                                           steps);
+}
+
+// Explicit extents describe a common logical prefix; each subview retains
+// its operand's own offset and strides. Alignment and DMA padding safety are
+// the caller's responsibility, not guaranteed by this lowering.
+struct ExtentCopyToHIVM : OpRewritePattern<tile::CopyOp> {
+  using OpRewritePattern<tile::CopyOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tile::CopyOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getShape().empty())
+      return failure();
+    if (op.getEngineAttr() || op.getSrcLayoutAttr() ||
+        op.getDstNzLayoutAttr() || op.getTransposeAttr())
+      return failure();
+    auto srcTy = dyn_cast<MemRefType>(op.getSrc().getType());
+    auto dstTy = dyn_cast<MemRefType>(op.getDst().getType());
+    if (!srcTy || !dstTy || srcTy.getRank() != op.getShape().size() ||
+        dstTy.getRank() != op.getShape().size() ||
+        srcTy.getElementType() != dstTy.getElementType())
+      return failure();
+    auto getSpace = [&](MemRefType type) {
+      if (!type.getMemorySpace())
+        return hivm::AddressSpaceAttr::get(rewriter.getContext(),
+                                          hivm::AddressSpace::GM);
+      return dyn_cast<hivm::AddressSpaceAttr>(type.getMemorySpace());
+    };
+    auto srcSpace = getSpace(srcTy);
+    auto dstSpace = getSpace(dstTy);
+    if (!srcSpace || !dstSpace)
+      return failure();
+    auto src = srcSpace.getAddressSpace();
+    auto dst = dstSpace.getAddressSpace();
+    if (!((src == hivm::AddressSpace::GM && dst == hivm::AddressSpace::UB) ||
+          (src == hivm::AddressSpace::UB && dst == hivm::AddressSpace::GM) ||
+          (src == hivm::AddressSpace::UB && dst == hivm::AddressSpace::UB)))
+      return failure();
+
+    // Folding may expose invalid constants after the initial op verification.
+    // Validate every dimension before erasing an empty copy or creating views.
+    for (auto [axis, extent] : llvm::enumerate(op.getShape())) {
+      APInt constant;
+      if (!matchPattern(extent, m_ConstantInt(&constant)))
+        continue;
+      int64_t size = constant.getSExtValue();
+      if (size < 0 ||
+          (!srcTy.isDynamicDim(axis) && size > srcTy.getDimSize(axis)) ||
+          (!dstTy.isDynamicDim(axis) && size > dstTy.getDimSize(axis))) {
+        // Leave the copy for the final verifier to diagnose.
+        return rewriter.notifyMatchFailure(
+            op, "constant copy extent is negative or exceeds operand capacity");
+      }
+    }
+
+    Location loc = op.getLoc();
+    for (Value extent : op.getShape()) {
+      APInt constant;
+      if (matchPattern(extent, m_ConstantInt(&constant)) && constant.isZero()) {
+        rewriter.eraseOp(op);
+        return success();
+      }
+    }
+    SmallVector<OpFoldResult> sizes;
+    for (Value extent : op.getShape()) {
+      APInt constant;
+      if (matchPattern(extent, m_ConstantInt(&constant))) {
+        sizes.push_back(rewriter.getIndexAttr(constant.getSExtValue()));
+      } else {
+        sizes.push_back(rewriter.create<arith::IndexCastOp>(
+            loc, rewriter.getIndexType(), extent).getResult());
+      }
+    }
+    SmallVector<OpFoldResult> offsets(sizes.size(), rewriter.getIndexAttr(0));
+    Value srcMem = castDefaultMemrefToGM(op.getSrc(), loc, rewriter);
+    Value dstMem = castDefaultMemrefToGM(op.getDst(), loc, rewriter);
+    Value srcView = makeCopySubview(srcMem, offsets, sizes, loc, rewriter);
+    Value dstView = makeCopySubview(dstMem, offsets, sizes, loc, rewriter);
+    auto transfer = rewriter.create<memref::CopyOp>(loc, srcView, dstView);
+    if (auto attr = op->getAttr("inter_no_alias"))
+      transfer->setAttr("inter_no_alias", attr);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct TileCopyToHIVM : OpRewritePattern<tile::CopyOp> {
   using OpRewritePattern<tile::CopyOp>::OpRewritePattern;
 
@@ -379,6 +472,8 @@ struct TileCopyToHIVM : OpRewritePattern<tile::CopyOp> {
                                 PatternRewriter &rewriter) const final {
     Value src = op.getOperand(0);
     Value dst = op.getOperand(1);
+    if (!op.getShape().empty())
+      return failure();
 
     if (isTensorOfPointer(src.getType())) {
       lowerScatteredLoad(op, src, dst, rewriter);
@@ -786,6 +881,10 @@ struct FoldStagingCopyPattern : public OpRewritePattern<memref::CopyOp> {
 namespace {
 struct CommonIRToHIVMPass
     : public mlir::triton::impl::CommonIRToHIVMBase<CommonIRToHIVMPass> {
+  CommonIRToHIVMPass() = default;
+  explicit CommonIRToHIVMPass(bool deferCopy) {
+    deferBlockPointerCopy = deferCopy;
+  }
   void runOnOperation() override;
 };
 } // namespace
@@ -881,6 +980,44 @@ void CommonIRToHIVMPass::runOnOperation() {
     }
   });
 
+  APPLY_REWRITE_PATTERN(ExtentCopyToHIVM);
+  bool unsupportedCopy = false;
+  module.walk([&](tile::CopyOp op) {
+    if (op.getShape().empty())
+      return;
+    if (failed(op.verify())) {
+      unsupportedCopy = true;
+      return;
+    }
+    auto isPointerView = [](Type type) {
+      if (auto tensor = dyn_cast<RankedTensorType>(type))
+        return isa<triton::PointerType>(tensor.getElementType());
+      auto ptr = dyn_cast<triton::PointerType>(type);
+      return ptr && isa<RankedTensorType>(ptr.getPointeeType());
+    };
+    // The first pass only defers address conversion, not copy validation.
+    // TritonToLinalg must produce real memrefs before the final pass.
+    if (deferBlockPointerCopy && !op.getEngineAttr() &&
+        !op.getSrcLayoutAttr() && !op.getDstNzLayoutAttr() &&
+        !op.getTransposeAttr() &&
+        ((isPointerView(op.getSrc().getType()) &&
+          isa<MemRefType>(op.getDst().getType())) ||
+         (isa<MemRefType>(op.getSrc().getType()) &&
+          isPointerView(op.getDst().getType()))))
+      return;
+    if (op.getEngineAttr() || op.getSrcLayoutAttr() ||
+        op.getDstNzLayoutAttr() || op.getTransposeAttr())
+      op.emitError("extent copy with engine/layout/transpose attributes is not "
+                   "implemented");
+    else
+      op.emitError("extent copy currently requires real GM/UB memrefs with "
+                   "matching element types and rank; pointer tensor/descriptor "
+                   "and other memory-space slice lowering is not implemented");
+    unsupportedCopy = true;
+  });
+  if (unsupportedCopy)
+    return signalPassFailure();
+
   APPLY_REWRITE_PATTERN(LowerPtrTensorCastToMemref);
   APPLY_REWRITE_PATTERN(LowerMemrefCastToTensor);
   APPLY_REWRITE_PATTERN(FoldRoundtripCast);
@@ -894,6 +1031,6 @@ void CommonIRToHIVMPass::runOnOperation() {
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createCommonIRToHIVMPass() {
-  return std::make_unique<CommonIRToHIVMPass>();
+mlir::triton::createCommonIRToHIVMPass(bool deferBlockPointerCopy) {
+  return std::make_unique<CommonIRToHIVMPass>(deferBlockPointerCopy);
 }

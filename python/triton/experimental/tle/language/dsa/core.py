@@ -115,8 +115,6 @@ def copy(src, dst, shape, inter_no_alias=False, _semantic=None):
 
     :param inter_no_alias: If True, the copy is annotated as no aliasing between different iterations.
     """
-    assert len(shape) != 0, "Can't deduce copy extents from args"
-
     shape = _unwrap_if_constexpr(shape)
     inter_no_alias = _unwrap_if_constexpr(inter_no_alias)
     tle_semantic.copy(src, dst, shape, inter_no_alias, _semantic.builder)
@@ -291,7 +289,6 @@ def tile_alloc(shape: List[tl.constexpr], dtype: tl.dtype, mem_addr_space: addre
 @builtin
 def tile_copy(src, dst, shape, inter_no_alias=False, _semantic=None, _generator=None):
     """Copy data using CommonIR tile.copy op."""
-    assert len(shape) != 0, "Can't deduce copy extents from args"
     shape = _unwrap_if_constexpr(shape)
     inter_no_alias = _unwrap_if_constexpr(inter_no_alias)
     tle_semantic.tile_copy(src, dst, shape, inter_no_alias, _semantic.builder)

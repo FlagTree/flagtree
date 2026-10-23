@@ -41,6 +41,8 @@ target_link_libraries(triton-opt PRIVATE
   MLIRRegisterAllDialects
   MLIRRegisterAllPasses
   MLIRTransforms
+  MLIRFuncInlinerExtension
+  MLIRLLVMIRTransforms
 )
 
 mlir_check_all_link_libraries(triton-opt)

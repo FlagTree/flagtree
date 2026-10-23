@@ -1,11 +1,15 @@
 #include "./RegisterTritonDialects.h"
 #include "ascend/include/DynamicCVPipeline/AllocMultiCache/AddMultiBufferInnerScope.h"
 
+#include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
+#include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
   registerTritonDialects(registry);
+  mlir::LLVM::registerInlinerInterface(registry);
+  mlir::func::registerInlinerExtension(registry);
 
   // Register AddMultiBufferInnerScope pass
   mlir::triton::registerAddMultiBufferInnerScopePasses();

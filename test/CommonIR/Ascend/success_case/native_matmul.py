@@ -7,7 +7,7 @@ import triton.language as tl
 
 import triton.experimental.tle as tle  # noqa: F401  (registers tile/tle dialects)
 from triton.experimental.tle.language.dsa.ascend import L1, L0C  # noqa: F401
-from triton.experimental.tle.language.dsa import tile_alloc, tile_copy, tile_to_tensor  # noqa: F401
+from triton.experimental.tle.language.dsa import tile_alloc, tile_to_tensor, to_buffer  # noqa: F401
 
 # =============================================================================
 #  Compile-time configuration
@@ -32,7 +32,7 @@ def get_number_cores():
 
 
 # =============================================================================
-#  Simple matmul kernel: single loop with tile_copy + tl.dot
+#  Simple matmul kernel: single loop with tl.load + L1 staging + tl.dot
 #
 #  grid = (NUM_CORES,). Each core handles multiple (M_tile, N_tile) output
 #  blocks in round-robin fashion, iterating over K dimension.
@@ -75,10 +75,9 @@ def matmul_kernel(
         mat_c_acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
         # K-loop: load A/B tiles from GM to L1, then dot
         for k_idx in range(0, NUM_K_BLOCKS):
-            # Copy A tile
-            tile_copy(a_block_ptr, mat_a_l1, [BLOCK_M, BLOCK_K])
-            # Copy B tile
-            tile_copy(b_block_ptr, mat_b_l1, [BLOCK_K, BLOCK_N])
+            # Materialize full tiles into the existing L1 buffers.
+            to_buffer(tl.load(a_block_ptr), bind_buffer=mat_a_l1)
+            to_buffer(tl.load(b_block_ptr), bind_buffer=mat_b_l1)
 
             # Accumulate: C += A @ B
             mat_c_acc = tl.dot(tile_to_tensor(mat_a_l1, writable=False), tile_to_tensor(mat_b_l1, writable=False),
@@ -154,7 +153,7 @@ def dump_ttir(path=None, M=_DEFAULT_M, N=_DEFAULT_N, K=_DEFAULT_K, NUM_CORES=_DE
         "BLOCK_K": BLOCK_K,
     }
 
-    src = ASTSource(matmul_kernel.fn, signature, constants)
+    src = ASTSource(matmul_kernel, signature, constants)
     context = ir.context()
     ir.load_dialects(context)
     tle_ir.load_dialects(context)
@@ -299,7 +298,7 @@ def dump_linalg(path=None, M=_DEFAULT_M, N=_DEFAULT_N, K=_DEFAULT_K, NUM_CORES=_
 #  CLI entry point
 # =============================================================================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Matmul kernel (simple tile_copy + tl.dot)")
+    parser = argparse.ArgumentParser(description="Matmul kernel (tl.load + L1 staging + tl.dot)")
     parser.add_argument("--M", type=int, default=_DEFAULT_M)
     parser.add_argument("--N", type=int, default=_DEFAULT_N)
     parser.add_argument("--K", type=int, default=_DEFAULT_K)

@@ -35,10 +35,14 @@ class ModuleOp;
 namespace triton {
 
 /// Creates a pass to convert CommonIR dialect to HIVM dialect.
-std::unique_ptr<OperationPass<ModuleOp>> createCommonIRToHIVMPass();
+std::unique_ptr<OperationPass<ModuleOp>>
+createCommonIRToHIVMPass(bool deferBlockPointerCopy = false);
 
 /// Creates a pass to reduce sum strength for profitable add reductions.
 std::unique_ptr<OperationPass<ModuleOp>> createReduceSumStrengthPass();
+
+#define GEN_PASS_DECL_COMMONIRTOHIVM
+#include "ascend/include/CommonIRToHIVM/Passes.h.inc"
 
 #define GEN_PASS_REGISTRATION
 #include "ascend/include/CommonIRToHIVM/Passes.h.inc"

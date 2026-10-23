@@ -405,9 +405,9 @@ void init_triton_ascend_passes_ttir(py::module &&m) {
   });
 
 #ifdef __TLE_DSA__
-  m.def("add_commonir_to_hivm", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::createCommonIRToHIVMPass());
-  });
+  m.def("add_commonir_to_hivm", [](mlir::PassManager &pm, bool deferBlockPointerCopy) {
+    pm.addPass(mlir::triton::createCommonIRToHIVMPass(deferBlockPointerCopy));
+  }, py::arg("pm"), py::arg("defer_block_pointer_copy") = false);
 #endif
 
   m.def("add_triton_to_llvm", [](mlir::PassManager &pm) {

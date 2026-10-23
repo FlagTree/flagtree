@@ -31,6 +31,12 @@ include "mlir/Pass/PassBase.td"
 def CommonIRToHIVM : Pass<"commonir-to-hivm", "mlir::ModuleOp"> {
   let summary = "Convert CommonIR dialect to HIVM dialect";
   let constructor = "triton::createCommonIRToHIVMPass()";
+  let options = [
+    Option<"deferBlockPointerCopy", "defer-block-pointer-copy", "bool",
+           /*default*/"false",
+           "Defer extent copies of pointer tensors and block pointers until "
+           "TritonToLinalg produces memref views">
+  ];
   let dependentDialects = [
     "hivm::HIVMDialect",
     "triton::tile::CommonIRDialect",

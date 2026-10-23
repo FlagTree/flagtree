@@ -42,7 +42,7 @@ def bind_buffer():
 def copy_buffer(x):
     offsets = tl.arange(0, 32)
     buffer1 = tle.dsa.alloc(shape=[32], dtype=tl.float32, mem_addr_space=tle.dsa.ascend.UB)
-    tle.dsa.copy(tl.load(x + offsets), buffer1, [32])
+    tle.dsa.copy(x + offsets, buffer1, [32])
     tle.dsa.to_tensor(buffer1, writable=False)
 
 
@@ -125,7 +125,7 @@ def extract_element_tensor(x, out):
 def top_level_tile_dsl(x):
     offsets = tl.arange(0, 32)
     buf = tle.dsa.tile_alloc(shape=[32], dtype=tl.float32, mem_addr_space=tle.dsa.ascend.UB)
-    tle.dsa.tile_copy(tl.load(x + offsets), buf, [32])
+    tle.dsa.tile_copy(x + offsets, buf, [32])
     tle.dsa.tile_to_tensor(buf, writable=False)
     tle.dsa.tile_pipe_barrier(1)
 
@@ -135,7 +135,7 @@ def tle_scope_region(x):
     offsets = tl.arange(0, 32)
     with tle.scope(core_mode="cube"):
         buf = tle.dsa.alloc(shape=[32], dtype=tl.float32, mem_addr_space=tle.dsa.ascend.UB)
-        tle.dsa.copy(tl.load(x + offsets), buf, [32])
+        tle.dsa.copy(x + offsets, buf, [32])
         tle.dsa.to_tensor(buf, writable=False)
 
 
@@ -212,6 +212,8 @@ def test_copy_buffer_commonir():
     mlir = compile_kernel(copy_buffer, {"x": "*fp32"}, {})
     assert_public_dsa_uses_commonir(mlir)
     assert "tile.copy" in mlir
+    assert "tensor<32x!tt.ptr<f32>>" in mlir
+    assert "tt.load" not in mlir
     assert "!tile.buf" in mlir
     assert "tle.dsa_copy" not in mlir
 
@@ -276,6 +278,8 @@ def test_top_level_tile_dsl_exports():
     mlir = compile_kernel(top_level_tile_dsl, {"x": "*fp32"}, {})
     assert_public_dsa_uses_commonir(mlir)
     assert "tile.copy" in mlir
+    assert "tensor<32x!tt.ptr<f32>>" in mlir
+    assert "tt.load" not in mlir
     assert "tile.pipe_barrier" in mlir
     assert "tle.dsa_copy" not in mlir
 
@@ -284,6 +288,8 @@ def test_tle_scope_emits_scope_op():
     mlir = compile_kernel(tle_scope_region, {"x": "*fp32"}, {})
     assert_public_dsa_uses_commonir(mlir)
     assert "tile.copy" in mlir
+    assert "tensor<32x!tt.ptr<f32>>" in mlir
+    assert "tt.load" not in mlir
     assert "scope.scope" in mlir
     assert "tcore_type = #hivm.tcore_type<CUBE>" in mlir
 
