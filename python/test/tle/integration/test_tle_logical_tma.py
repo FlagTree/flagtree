@@ -4,11 +4,10 @@ import triton
 import triton.language as tl
 import triton.experimental.tle.language as tle
 
-from triton._flagtree_backend import get_active_backend_name
+from triton._flagtree_backend import FLAGTREE_BACKEND
 
 pytestmark = pytest.mark.skipif(
-    get_active_backend_name() != "nvidia" or not torch.cuda.is_available()
-    or torch.cuda.get_device_capability()[0] != 9,
+    FLAGTREE_BACKEND != "" or not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9,
     reason="logical TMA and WGMMA require NVIDIA Hopper",
 )
 
