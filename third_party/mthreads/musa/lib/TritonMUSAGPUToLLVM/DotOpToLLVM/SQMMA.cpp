@@ -15,6 +15,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include <string>
@@ -216,9 +219,27 @@ public:
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     Value elemBase = b.bitcast(base, elemPtrTy);
     Value elemPtr = b.gep(elemPtrTy, descriptorSpec.loadType, elemBase, offset);
+    Value descriptorInput = elemPtr;
+#ifdef __TLE__
+    // Match the descriptor argument ABI of the linked LLVM.
+    llvm::LLVMContext llvmContext;
+    auto intrinsicId =
+        llvm::Intrinsic::lookupIntrinsicID(descriptorSpec.intrinsicName);
+    auto *inputType =
+        llvm::Intrinsic::getType(llvmContext, intrinsicId)->getParamType(0);
+    if (!inputType->isPointerTy()) {
+      descriptorInput =
+          LLVM::LoadOp::create(rewriter, loc, descriptorSpec.loadType, elemPtr);
+      Type scalarType = descriptorSpec.loadType;
+      if (auto *integerType = llvm::dyn_cast<llvm::IntegerType>(inputType))
+        scalarType = rewriter.getIntegerType(integerType->getBitWidth());
+      if (descriptorInput.getType() != scalarType)
+        descriptorInput = b.bitcast(descriptorInput, scalarType);
+    }
+#endif // __TLE__
     auto desc = LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, descriptorSpec.intrinsicName, TypeRange{i32_ty},
-        ValueRange{elemPtr, descriptorSpec.leadingStrideBytes,
+        ValueRange{descriptorInput, descriptorSpec.leadingStrideBytes,
                    descriptorSpec.swizzleGranularity,
                    descriptorSpec.swizzleStride});
     return desc.getResult(0);
