@@ -188,9 +188,7 @@ def MUSA_ArriveBarrierNoRetOp : MUSA_Op<"arrive_barrier_noret", []> {
 }
 
 #ifdef __TLE__
-def MUSA_WarpArriveBarrierOp : MUSA_Op<"warp_arrive_barrier", [
-    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
-]> {
+def MUSA_WarpArriveBarrierOp : MUSA_Op<"warp_arrive_barrier", []> {
   let summary = "Perform a convergent warp arrival without returning phase";
   let arguments = (ins I32:$barId, I32:$phaseId);
   let assemblyFormat =

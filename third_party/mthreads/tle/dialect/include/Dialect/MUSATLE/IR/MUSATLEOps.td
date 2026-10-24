@@ -44,18 +44,14 @@ def MUSATLE_BarrierIndexOp : MUSATLE_Op<"barrier.index", [Pure]> {
   let hasVerifier = 1;
 }
 
-def MUSATLE_BarrierWaitOp : MUSATLE_Op<"barrier.wait", [
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
-]> {
+def MUSATLE_BarrierWaitOp : MUSATLE_Op<"barrier.wait"> {
   let summary = "wait on an mthreads hardware barrier id";
   let arguments = (ins I32:$bar_id, I32:$phase);
   let assemblyFormat = "$bar_id `,` $phase attr-dict";
   let hasVerifier = 1;
 }
 
-def MUSATLE_BarrierArriveOp : MUSATLE_Op<"barrier.arrive", [
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
-]> {
+def MUSATLE_BarrierArriveOp : MUSATLE_Op<"barrier.arrive"> {
   let summary = "arrive on an mthreads hardware barrier id";
   let arguments = (ins
     I32:$bar_id,

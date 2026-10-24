@@ -544,17 +544,6 @@ LogicalResult ArriveBarrierNoRetOp::verify() {
 }
 
 #ifdef __TLE__
-void WarpArriveBarrierOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), ttg::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), ttg::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       SideEffects::DefaultResource::get());
-}
-
 LogicalResult WarpArriveBarrierOp::verify() {
   if (failed(verifyAsyncBarrierId(getOperation(), getBarId(), "barId")))
     return failure();
@@ -571,19 +560,10 @@ LogicalResult WaitBarrierOp::verify() {
 void WaitBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-#ifdef __TLE__
-  effects.emplace_back(MemoryEffects::Read::get(), ttg::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), ttg::SharedMemory::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       SideEffects::DefaultResource::get());
-#else
   effects.emplace_back(MemoryEffects::Read::get(), &getBarIdMutable(),
                        ttg::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(),
                        SideEffects::DefaultResource::get());
-#endif // __TLE__
 }
 
 static LogicalResult verifyTMECopyShapeContract(Operation *op, ValueRange coord,
