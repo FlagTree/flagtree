@@ -275,6 +275,13 @@ void init_triton_musa_passes_ttgpuir(py::module m) {
 }
 
 void init_triton_mthreads(py::module &&m) {
+  m.def("supports_tle_sqmma_row_reduction_m_split", []() {
+#ifdef __TLE__
+    return true;
+#else
+    return false;
+#endif
+  });
 #ifdef __TLE__
   init_triton_musa_tle_ir(m.def_submodule("ir"));
 #endif // __TLE__
